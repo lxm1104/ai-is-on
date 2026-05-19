@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import {
   type TriggerRow,
+  getSetting,
   listContextUnits,
   tryInsertTrigger,
 } from '../db.js';
 import type { ContextUnit } from '../context/ContextUnit.js';
 import { getContextUnitById } from '../context/contextStore.js';
+import { isCaringPaused } from '../caring/caringSettings.js';
 
 /**
  * MVP3 §5.3: 只实现 2 类。
@@ -16,7 +18,10 @@ import { getContextUnitById } from '../context/contextStore.js';
  * 落库 + idempotency 由 `evaluateAndPersist` / scheduler 负责。
  */
 
-export type TriggerType = 'commitment_due' | 'meeting_prepare';
+export type TriggerType = 'commitment_due' | 'meeting_prepare' | 'check_in_due';
+
+const CHECK_IN_HOUR_LOCAL = 12; // 中午 12 点
+const CHECK_IN_COOLDOWN_MS = 12 * 3600_000;
 
 export type TriggerDraft = {
   triggerType: TriggerType;
@@ -163,9 +168,9 @@ export function evaluateAndPersistForUnit(unit: ContextUnit, now: number = Date.
  * that have a dueAt / startsAt in [now, now + lead_time] and evaluates each.
  */
 export function evaluateActiveUnitsForPullPath(now: number = Date.now()): string[] {
+  const ids: string[] = [];
   // 拉取最近写入且仍 active 的 unit，让 evaluator 重新看（含 commitment + calendar event）
   const candidates = listContextUnits({ limit: 200, status: 'active' });
-  const ids: string[] = [];
   for (const row of candidates) {
     const unit = getContextUnitById(row.id);
     if (!unit) continue;
@@ -175,5 +180,50 @@ export function evaluateActiveUnitsForPullPath(now: number = Date.now()): string
       if (id) ids.push(id);
     }
   }
+  // MVP4.1 check_in_due — 不依赖任何 unit，纯基于"中午 12 点 + 已有 personal context + last_checkin_at>12h ago"
+  const cd = evaluateCheckIn(now);
+  if (cd) {
+    const id = persistTrigger(cd);
+    if (id) ids.push(id);
+  }
   return ids;
+}
+
+/**
+ * MVP4.1: check_in_due。规则：
+ * - 当前是本地中午 12:00 之后（同一日）
+ * - settings.last_checkin_at 为空，或距 now > 12h
+ * - 用户没暂停情绪分析
+ * - 系统有至少 1 条 personal scope ContextUnit（避免在空 db 上触发）
+ *
+ * idempotency: due_at_bucket=YYYY-MM-DD，确保一天只触发一次。
+ * 没有具体 context_unit_id 时用占位 'system' 让 UNIQUE 索引正常工作（SQLite NULL 不视为相等）。
+ */
+export function evaluateCheckIn(now: number): TriggerDraft | null {
+  if (isCaringPaused()) return null;
+  const d = new Date(now);
+  if (d.getHours() < CHECK_IN_HOUR_LOCAL) return null;
+  const last = getSetting('last_checkin_at');
+  if (last) {
+    const lastMs = new Date(last).getTime();
+    if (Number.isFinite(lastMs) && now - lastMs < CHECK_IN_COOLDOWN_MS) return null;
+  }
+  // 至少要有点 personal context 可以聊
+  const personalRows = listContextUnits({ status: 'active', limit: 200 }).filter(
+    (r) => r.scope === 'personal'
+  );
+  if (personalRows.length === 0) return null;
+
+  const dayBucket = d.toISOString().slice(0, 10);
+  return {
+    triggerType: 'check_in_due',
+    contextUnitId: 'system',                        // 占位
+    dueAt: d.toISOString(),
+    dueAtBucket: dayBucket,
+    reasoning: `中午 12 点后，过去 12h 没 check-in，且有 ${personalRows.length} 条 personal context`,
+    payload: {
+      personalUnitCount: personalRows.length,
+      hourLocal: d.getHours(),
+    },
+  };
 }

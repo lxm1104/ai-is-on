@@ -48,6 +48,8 @@ export function selectAgentForTrigger(triggerType: string): string | null {
       return 'track_commitment';
     case 'meeting_prepare':
       return 'prepare_meeting';
+    case 'check_in_due':
+      return 'caring';
     default:
       return null;
   }

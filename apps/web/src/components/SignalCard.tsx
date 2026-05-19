@@ -20,6 +20,7 @@ function lineageLabel(card: SignalCardT): string {
     // proposal_type 我们没在 card 里，靠 title 猜
     if (card.title.startsWith('会前准备')) return '会前准备';
     if (card.title.includes('承诺')) return '承诺追踪';
+    if (card.title.startsWith('我看到了')) return '陪伴';
     return 'Agent';
   }
   if (card.sourceKind === 'manual') return '手动';
