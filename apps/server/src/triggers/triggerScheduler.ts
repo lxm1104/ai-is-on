@@ -4,17 +4,27 @@ import {
   evaluateActiveUnitsForPullPath,
 } from './triggerEvaluator.js';
 import { enqueueAgentRunForTrigger } from '../agents/AgentRunQueue.js';
+import { resolveUnitToSpaces } from '../spaces/contextSpaceService.js';
 
 const PULL_INTERVAL_MS = 60_000;
 
 let pullTimer: NodeJS.Timeout | null = null;
 
 export function startTriggerScheduler() {
-  // Push path: context upsert immediately evaluates the new/updated unit.
+  // Push path: context upsert immediately evaluates the new/updated unit
+  // and routes it into any matching Spaces.
   registerUpsertHook((unit) => {
     const ids = evaluateAndPersistForUnit(unit);
     for (const triggerId of ids) {
       enqueueAgentRunForTrigger(triggerId);
+    }
+    try {
+      resolveUnitToSpaces(unit);
+    } catch (err) {
+      console.warn(
+        '[spaces] resolveUnitToSpaces failed:',
+        err instanceof Error ? err.message : String(err)
+      );
     }
   });
 

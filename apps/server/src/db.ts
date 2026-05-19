@@ -233,6 +233,48 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+-- ============ MVP5 Team Context Sync ============
+
+CREATE TABLE IF NOT EXISTS context_spaces (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,                    -- 'project' | 'topic'  (relationship/personal_goal 留 MVP5.x)
+  name TEXT NOT NULL,
+  description TEXT,
+  owner_subject_id TEXT NOT NULL DEFAULT 'me',
+  status TEXT NOT NULL DEFAULT 'active', -- 'active' | 'paused' | 'archived'
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(type, name)
+);
+
+-- 把 entity / ContextUnit 关联到一个 Space
+CREATE TABLE IF NOT EXISTS context_space_links (
+  id TEXT PRIMARY KEY,
+  space_id TEXT NOT NULL,
+  target_type TEXT NOT NULL,             -- 'entity' | 'context_unit'
+  target_id TEXT NOT NULL,
+  link_type TEXT NOT NULL,               -- 'about' | 'follows' | 'owns' | ...
+  confidence REAL NOT NULL DEFAULT 0.7,
+  created_at TEXT NOT NULL,
+  UNIQUE(space_id, target_type, target_id)
+);
+CREATE INDEX IF NOT EXISTS idx_csl_space ON context_space_links(space_id);
+CREATE INDEX IF NOT EXISTS idx_csl_target ON context_space_links(target_type, target_id);
+
+CREATE TABLE IF NOT EXISTS decisions (
+  id TEXT PRIMARY KEY,
+  space_id TEXT,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  source_context_id TEXT,
+  decided_by TEXT,
+  decided_at TEXT,
+  confidence REAL NOT NULL DEFAULT 0.7,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_decisions_space ON decisions(space_id);
 `);
 
 // Forward-compat: add columns that may be missing in databases created by an earlier MVP0 boot.
@@ -932,4 +974,128 @@ export function setSetting(key: string, value: string): void {
     `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
   ).run(key, value, now);
+}
+
+// -------- context_spaces (MVP5) --------
+
+export type ContextSpaceRow = {
+  id: string;
+  type: string;                    // 'project' | 'topic'
+  name: string;
+  description: string | null;
+  owner_subject_id: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export function insertContextSpace(row: ContextSpaceRow) {
+  db.prepare(
+    `INSERT INTO context_spaces (id, type, name, description, owner_subject_id, status, created_at, updated_at)
+     VALUES (@id, @type, @name, @description, @owner_subject_id, @status, @created_at, @updated_at)`
+  ).run(row);
+}
+
+export function getContextSpace(id: string): ContextSpaceRow | null {
+  return (
+    (db.prepare(`SELECT * FROM context_spaces WHERE id = ?`).get(id) as
+      | ContextSpaceRow
+      | undefined) ?? null
+  );
+}
+
+export function getContextSpaceByTypeName(type: string, name: string): ContextSpaceRow | null {
+  return (
+    (db
+      .prepare(`SELECT * FROM context_spaces WHERE type = ? AND name = ?`)
+      .get(type, name) as ContextSpaceRow | undefined) ?? null
+  );
+}
+
+export function listContextSpaces(opts: { status?: string; limit?: number } = {}): ContextSpaceRow[] {
+  const limit = opts.limit ?? 50;
+  const where = opts.status ? `WHERE status = '${opts.status.replace(/'/g, "''")}'` : '';
+  return db
+    .prepare(`SELECT * FROM context_spaces ${where} ORDER BY updated_at DESC LIMIT ?`)
+    .all(limit) as ContextSpaceRow[];
+}
+
+export function updateContextSpace(row: ContextSpaceRow) {
+  db.prepare(
+    `UPDATE context_spaces SET type=@type, name=@name, description=@description,
+       owner_subject_id=@owner_subject_id, status=@status, updated_at=@updated_at
+     WHERE id=@id`
+  ).run(row);
+}
+
+// -------- context_space_links --------
+
+export type ContextSpaceLinkRow = {
+  id: string;
+  space_id: string;
+  target_type: string;             // 'entity' | 'context_unit'
+  target_id: string;
+  link_type: string;
+  confidence: number;
+  created_at: string;
+};
+
+export function tryInsertContextSpaceLink(row: ContextSpaceLinkRow): boolean {
+  try {
+    db.prepare(
+      `INSERT INTO context_space_links (id, space_id, target_type, target_id, link_type, confidence, created_at)
+       VALUES (@id, @space_id, @target_type, @target_id, @link_type, @confidence, @created_at)`
+    ).run(row);
+    return true;
+  } catch (err) {
+    if (err instanceof Error && /UNIQUE/i.test(err.message)) return false;
+    throw err;
+  }
+}
+
+export function listSpaceLinks(spaceId: string): ContextSpaceLinkRow[] {
+  return db
+    .prepare(`SELECT * FROM context_space_links WHERE space_id = ? ORDER BY created_at DESC`)
+    .all(spaceId) as ContextSpaceLinkRow[];
+}
+
+export function listSpacesForTarget(
+  targetType: string,
+  targetId: string
+): ContextSpaceLinkRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM context_space_links WHERE target_type = ? AND target_id = ?`
+    )
+    .all(targetType, targetId) as ContextSpaceLinkRow[];
+}
+
+// -------- decisions --------
+
+export type DecisionRow = {
+  id: string;
+  space_id: string | null;
+  title: string;
+  content: string;
+  source_context_id: string | null;
+  decided_by: string | null;
+  decided_at: string | null;
+  confidence: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export function insertDecision(row: DecisionRow) {
+  db.prepare(
+    `INSERT INTO decisions (id, space_id, title, content, source_context_id, decided_by, decided_at,
+      confidence, created_at, updated_at)
+     VALUES (@id, @space_id, @title, @content, @source_context_id, @decided_by, @decided_at,
+       @confidence, @created_at, @updated_at)`
+  ).run(row);
+}
+
+export function listDecisionsBySpace(spaceId: string, limit = 50): DecisionRow[] {
+  return db
+    .prepare(`SELECT * FROM decisions WHERE space_id = ? ORDER BY decided_at DESC LIMIT ?`)
+    .all(spaceId, limit) as DecisionRow[];
 }

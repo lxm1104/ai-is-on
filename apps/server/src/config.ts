@@ -44,6 +44,12 @@ export const config = {
   collectorEnabled: envBool('COLLECTOR_ENABLED', true),
   calendarIntervalMs: envInt('CALENDAR_COLLECTOR_INTERVAL_MS', 300_000),
   imIntervalMs: envInt('IM_COLLECTOR_INTERVAL_MS', 180_000),
+  // MVP5 drive collector — Lark docs/Wiki edited recently. Default 10 min;
+  // page-size capped at 20 by API. First scan looks back driveFirstScanDays.
+  driveEnabled: envBool('DRIVE_COLLECTOR_ENABLED', true),
+  driveIntervalMs: envInt('DRIVE_COLLECTOR_INTERVAL_MS', 600_000),
+  driveFirstScanDays: envInt('DRIVE_FIRST_SCAN_DAYS', 7),
+  drivePageSize: envInt('DRIVE_PAGE_SIZE', 20),
   // First-run lookback window (没有 last_scan 时往回看多少小时)
   imFirstScanHours: envInt('IM_FIRST_SCAN_HOURS', 2),
   // 单 chat 在一轮里新消息超过此阈值时，聚合成 1 条 "群 X 有 N 条新消息" 信号，避免 triage 爆量

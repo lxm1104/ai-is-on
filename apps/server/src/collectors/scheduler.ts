@@ -9,6 +9,7 @@ import {
 import { broadcast } from '../ws.js';
 import { calendarCollector } from './calendarCollector.js';
 import { imCollector } from './imCollector.js';
+import { driveCollector } from './driveCollector.js';
 import { enqueueEvents } from '../triage/triageQueue.js';
 import type { Collector } from './types.js';
 import { insertMinimalEventContextUnit } from '../context/contextStore.js';
@@ -47,6 +48,9 @@ export function startCollectorScheduler() {
   }
   scheduled.push({ collector: calendarCollector, running: false });
   scheduled.push({ collector: imCollector, running: false });
+  if (config.driveEnabled) {
+    scheduled.push({ collector: driveCollector, running: false });
+  }
 
   for (const s of scheduled) {
     // Kick off a first run after a short delay so server is fully up.
