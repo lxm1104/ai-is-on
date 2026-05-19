@@ -42,7 +42,7 @@ export function evaluateUnit(unit: ContextUnit, now: number): TriggerDraft[] {
     const cd = checkCommitmentDue(unit, now);
     if (cd) drafts.push(cd);
   }
-  if (unit.kind === 'event' && unit.origin.kind === 'event') {
+  if (unit.kind === 'event') {
     const mp = checkMeetingPrepare(unit, now);
     if (mp) drafts.push(mp);
   }

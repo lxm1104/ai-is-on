@@ -8,13 +8,21 @@ export type OneShotResult = {
 };
 
 /**
- * Spawn a one-shot Claude Code subprocess for background triage.
+ * Spawn a one-shot Claude Code subprocess.
  * Per §5.6: a fresh process per round, no shared session with the chat runtime,
  * tools only Bash, output-format json (single JSON object on turn done).
  */
-export function runTriageOnce(userMessage: string): Promise<OneShotResult> {
+export type OneShotOptions = {
+  systemPrompt: string;
+  timeoutMs?: number;
+  tools?: string;
+};
+
+export function runOneShot(
+  userMessage: string,
+  opts: OneShotOptions
+): Promise<OneShotResult> {
   return new Promise((resolve, reject) => {
-    // §5.6: 一次性子进程读 stdin 纯文本 prompt，--output-format json 一次性吐结果对象
     const args: string[] = [
       config.claudeCli,
       '-p',
@@ -22,11 +30,11 @@ export function runTriageOnce(userMessage: string): Promise<OneShotResult> {
       'json',
       '--dangerously-skip-permissions',
       '--tools',
-      'Bash',
+      opts.tools ?? 'Bash',
       '--allowedTools',
       config.claudeAllowedTools,
       '--append-system-prompt',
-      TRIAGE_SYSTEM_PROMPT,
+      opts.systemPrompt,
     ];
     if (config.claudeUseBare) args.splice(1, 0, '--bare');
 
@@ -47,14 +55,15 @@ export function runTriageOnce(userMessage: string): Promise<OneShotResult> {
       stderr += c;
     });
 
+    const timeoutMs = opts.timeoutMs ?? config.triageTimeoutMs;
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
       reject(
         new Error(
-          `triage 超时 (${config.triageTimeoutMs}ms). stderr tail=${stderr.slice(-500)}`
+          `one-shot 超时 (${timeoutMs}ms). stderr tail=${stderr.slice(-500)}`
         )
       );
-    }, config.triageTimeoutMs);
+    }, timeoutMs);
 
     child.on('error', (err) => {
       clearTimeout(timer);
@@ -93,7 +102,7 @@ export function runTriageOnce(userMessage: string): Promise<OneShotResult> {
           typeof parsedObj.num_turns === 'number' ? (parsedObj.num_turns as number) : 'n/a';
         reject(
           new Error(
-            `triage failed (exit=${code}, subtype=${subtype}, is_error=${isError}, num_turns=${numTurns})\n` +
+            `one-shot failed (exit=${code}, subtype=${subtype}, is_error=${isError}, num_turns=${numTurns})\n` +
               `--- Claude result text ---\n${resultText || '(empty)'}\n` +
               `--- stderr ---\n${stderr || '(empty)'}\n` +
               `--- full stdout ---\n${stdout.slice(0, 4000)}`
@@ -105,12 +114,20 @@ export function runTriageOnce(userMessage: string): Promise<OneShotResult> {
       // stdout 不是 JSON：要么 CLI 本身崩了，要么权限/参数错误
       reject(
         new Error(
-          `triage 子进程 exit=${code}, stdout 非 JSON\n--- stderr ---\n${stderr || '(empty)'}\n--- stdout (head) ---\n${stdout.slice(0, 2000)}`
+          `one-shot 子进程 exit=${code}, stdout 非 JSON\n--- stderr ---\n${stderr || '(empty)'}\n--- stdout (head) ---\n${stdout.slice(0, 2000)}`
         )
       );
     });
 
     // plain-text stdin
     child.stdin.end(userMessage);
+  });
+}
+
+/** Back-compat: existing triage callers. */
+export function runTriageOnce(userMessage: string): Promise<OneShotResult> {
+  return runOneShot(userMessage, {
+    systemPrompt: TRIAGE_SYSTEM_PROMPT,
+    timeoutMs: config.triageTimeoutMs,
   });
 }
