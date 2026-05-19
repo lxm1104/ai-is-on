@@ -43,11 +43,13 @@ export type CardAction = {
 
 export type CardStatus = 'new' | 'acknowledged' | 'snoozed' | 'dismissed' | 'done';
 
+export type CardSourceKind = 'triage' | 'agent_run' | 'manual';
+
 export type SignalCard = {
   id: string;
   triageId?: string;
   priority: 'P0' | 'P1' | 'P2' | 'P3';
-  source: 'calendar' | 'im' | 'mail' | 'drive' | 'manual';
+  source: 'calendar' | 'im' | 'mail' | 'drive' | 'manual' | 'agent';
   title: string;
   summary: string;
   reason: string;
@@ -57,6 +59,8 @@ export type SignalCard = {
   actions: CardAction[];
   rawEventId?: string;
   sourceUrl?: string;
+  sourceKind?: CardSourceKind;
+  sourceRefId?: string;
   createdAt: string;
   updatedAt: string;
 };

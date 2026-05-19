@@ -189,10 +189,11 @@ CREATE TABLE IF NOT EXISTS triggers (
 );
 CREATE INDEX IF NOT EXISTS idx_triggers_status ON triggers(status);
 CREATE INDEX IF NOT EXISTS idx_triggers_due_at ON triggers(due_at);
--- idempotency: 同一 (type, context_unit, bucket) 不重复创建 pending trigger
+-- idempotency: 同一 (type, context_unit, bucket) 整个生命周期只触发一次。
+-- 不区分 pending/done/failed —— pull worker 每 60s 跑一次，如果只挡 pending，
+-- 已 done 的 commitment 会被反复重新触发，刷屏卡片。
 CREATE UNIQUE INDEX IF NOT EXISTS idx_triggers_idempotency
-  ON triggers(trigger_type, context_unit_id, due_at_bucket)
-  WHERE status = 'pending';
+  ON triggers(trigger_type, context_unit_id, due_at_bucket);
 
 CREATE TABLE IF NOT EXISTS agent_runs (
   id TEXT PRIMARY KEY,
@@ -241,6 +242,42 @@ ensureColumn('cards', 'source_kind', "TEXT NOT NULL DEFAULT 'triage'");
 ensureColumn('cards', 'source_ref_id', 'TEXT');
 // MVP2: events 加 context_extracted_at（与 processed_at 解耦）
 ensureColumn('events', 'context_extracted_at', 'TEXT');
+
+// MVP3 迁移：旧的 idempotency 索引是 partial (WHERE status='pending')，
+// 导致 pull worker 每 60s 对同一 commitment 重复触发新 trigger，
+// 累计后会刷一屏卡片。改为全状态 UNIQUE。
+function ensureIdempotencyIndex() {
+  const row = db
+    .prepare(
+      `SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_triggers_idempotency'`
+    )
+    .get() as { sql?: string } | undefined;
+  const sql = row?.sql ?? '';
+  if (sql.includes('WHERE')) {
+    db.exec(`DROP INDEX IF EXISTS idx_triggers_idempotency`);
+    // 清掉重复的非 pending 行，否则 UNIQUE 建不上
+    db.exec(`
+      DELETE FROM triggers WHERE id IN (
+        SELECT t1.id FROM triggers t1
+        JOIN (
+          SELECT trigger_type, context_unit_id, due_at_bucket, MIN(created_at) AS keep_at
+          FROM triggers
+          GROUP BY trigger_type, context_unit_id, due_at_bucket
+          HAVING COUNT(*) > 1
+        ) dup
+        ON t1.trigger_type = dup.trigger_type
+        AND t1.context_unit_id = dup.context_unit_id
+        AND t1.due_at_bucket = dup.due_at_bucket
+        AND t1.created_at > dup.keep_at
+      )
+    `);
+    db.exec(
+      `CREATE UNIQUE INDEX idx_triggers_idempotency ON triggers(trigger_type, context_unit_id, due_at_bucket)`
+    );
+    console.log('[db] migrated idx_triggers_idempotency to full-status UNIQUE');
+  }
+}
+ensureIdempotencyIndex();
 
 export type RuntimeMessageRow = {
   id: string;

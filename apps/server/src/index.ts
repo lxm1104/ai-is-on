@@ -12,6 +12,8 @@ import { cardsRouter } from './routes/cards.js';
 import { collectorsRouter } from './routes/collectors.js';
 import { debugRouter } from './routes/debug.js';
 import { contextRouter } from './routes/context.js';
+import { triggersRouter } from './routes/triggers.js';
+import { agentRunsRouter } from './routes/agentRuns.js';
 import { startCollectorScheduler, stopCollectorScheduler } from './collectors/scheduler.js';
 import { startTriggerScheduler, stopTriggerScheduler } from './triggers/triggerScheduler.js';
 import { bootstrapAgents } from './agents/index.js';
@@ -31,6 +33,8 @@ app.use('/api', cardsRouter);
 app.use('/api', collectorsRouter);
 app.use('/api', debugRouter);
 app.use('/api', contextRouter);
+app.use('/api', triggersRouter);
+app.use('/api', agentRunsRouter);
 
 const server = http.createServer(app);
 attachWebSocket(server);

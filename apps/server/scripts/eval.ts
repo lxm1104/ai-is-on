@@ -1,13 +1,12 @@
 /**
- * MVP2 离线评测脚本。
+ * 离线评测脚本。
  *
  * 用法：
- *   npx tsx apps/server/scripts/eval.ts mvp2
+ *   npx tsx apps/server/scripts/eval.ts mvp2 [--use-cached]
+ *   npx tsx apps/server/scripts/eval.ts mvp3
  *
- * 跑真实 Claude CLI（走 backgroundRuntime.runTriageOnce），结果与
- * test/fixtures/<mvpX>/expected.json 对比，输出召回/准确/噪声 三项指标。
- *
- * 不写 DB，纯 prompt→parse→比对。
+ * mvp2: 跑真实 Claude CLI，对 raw_signals + expected.json 评测召回/噪声等。
+ * mvp3: 纯函数式 evaluator 规则边界测试，不调 LLM。
  */
 
 import fs from 'node:fs';
@@ -16,6 +15,8 @@ import { fileURLToPath } from 'node:url';
 import { buildTriageUserMessage } from '../src/triage/triagePrompt.js';
 import { runTriageOnce } from '../src/triage/backgroundRuntime.js';
 import { parseTriageResult, type TriageItem } from '../src/triage/parseTriage.js';
+import { evaluateUnit } from '../src/triggers/triggerEvaluator.js';
+import type { ContextUnit } from '../src/context/ContextUnit.js';
 
 const PRIORITY_RANK: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
 
@@ -62,9 +63,13 @@ type ScoreLine = {
 
 async function main() {
   const arg = process.argv[2] ?? '';
+  if (arg === 'mvp3') {
+    runMvp3Eval();
+    return;
+  }
   const useCached = process.argv.includes('--use-cached');
   if (arg !== 'mvp2') {
-    console.error('usage: npx tsx apps/server/scripts/eval.ts mvp2 [--use-cached]');
+    console.error('usage: npx tsx apps/server/scripts/eval.ts mvp2 [--use-cached] | mvp3');
     process.exit(2);
   }
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -293,3 +298,132 @@ function pct(num: number, denom: number): string {
 }
 
 main();
+
+// ============================== MVP3 ==============================
+
+type Mvp3Case = {
+  id: string;
+  label: string;
+  unit: ContextUnit;
+  now: string;                                  // ISO time for evaluator
+  expectedTriggerTypes: string[];               // unordered set
+};
+
+function buildMvp3Cases(): Mvp3Case[] {
+  // Use a fixed wall-clock so the test is deterministic across runs.
+  const NOW_ISO = '2026-05-19T10:00:00.000Z';
+  const now = new Date(NOW_ISO).getTime();
+  const dueIn = (minutes: number) =>
+    new Date(now + minutes * 60_000).toISOString();
+
+  const baseUnit = (over: Partial<ContextUnit>): ContextUnit => ({
+    id: 'u-' + (over.id ?? randomLow()),
+    subjectId: 'me',
+    scope: 'work',
+    origin: { kind: 'manual', refId: 'fix' },
+    kind: 'event',
+    title: '',
+    content: '',
+    entities: [],
+    relations: [],
+    actionability: 'record',
+    confidence: 0.8,
+    version: 1,
+    status: 'active',
+    createdAt: NOW_ISO,
+    updatedAt: NOW_ISO,
+    ...over,
+  });
+
+  return [
+    {
+      id: 'mvp3-c-due-soon',
+      label: 'commitment dueAt 2h later → commitment_due',
+      unit: baseUnit({
+        kind: 'commitment',
+        title: '今晚 12 点前提 PR',
+        time: { dueAt: dueIn(120) },
+      }),
+      now: NOW_ISO,
+      expectedTriggerTypes: ['commitment_due'],
+    },
+    {
+      id: 'mvp3-c-overdue',
+      label: 'commitment dueAt 6h ago → commitment_due (overdue)',
+      unit: baseUnit({
+        kind: 'commitment',
+        title: '昨天答应给小李的反馈',
+        time: { dueAt: dueIn(-360) },
+      }),
+      now: NOW_ISO,
+      expectedTriggerTypes: ['commitment_due'],
+    },
+    {
+      id: 'mvp3-c-out-of-window',
+      label: 'commitment dueAt 5 days later → no trigger (outside 24h)',
+      unit: baseUnit({
+        kind: 'commitment',
+        title: '下周完成的小事',
+        time: { dueAt: dueIn(5 * 24 * 60) },
+      }),
+      now: NOW_ISO,
+      expectedTriggerTypes: [],
+    },
+    {
+      id: 'mvp3-m-keyword-in-window',
+      label: 'event "MVP2 设计评审" starts in 45 min → meeting_prepare',
+      unit: baseUnit({
+        kind: 'event',
+        title: 'MVP2 设计评审',
+        time: { startsAt: dueIn(45) },
+      }),
+      now: NOW_ISO,
+      expectedTriggerTypes: ['meeting_prepare'],
+    },
+    {
+      id: 'mvp3-m-no-keyword',
+      label: 'event "随便聊聊" starts in 45 min → no trigger (no keyword)',
+      unit: baseUnit({
+        kind: 'event',
+        title: '随便聊聊',
+        time: { startsAt: dueIn(45) },
+      }),
+      now: NOW_ISO,
+      expectedTriggerTypes: [],
+    },
+    {
+      id: 'mvp3-m-too-early',
+      label: 'event "评审" starts in 2h → no trigger (outside 30-60min window)',
+      unit: baseUnit({
+        kind: 'event',
+        title: '产品评审',
+        time: { startsAt: dueIn(120) },
+      }),
+      now: NOW_ISO,
+      expectedTriggerTypes: [],
+    },
+  ];
+}
+
+function runMvp3Eval() {
+  const cases = buildMvp3Cases();
+  console.log('================= MVP3 EVALUATOR EVAL =================');
+  let pass = 0;
+  for (const c of cases) {
+    const drafts = evaluateUnit(c.unit, new Date(c.now).getTime());
+    const got = drafts.map((d) => d.triggerType).sort();
+    const expected = [...c.expectedTriggerTypes].sort();
+    const ok =
+      got.length === expected.length && got.every((t, i) => t === expected[i]);
+    console.log(
+      `${ok ? '✓' : '✗'} [${c.id}] ${c.label}\n    expected=[${expected.join(',')}] got=[${got.join(',')}]`
+    );
+    if (ok) pass++;
+  }
+  console.log(`\nresult: ${pass}/${cases.length} pass (${((pass / cases.length) * 100).toFixed(1)}%)`);
+  process.exit(pass === cases.length ? 0 : 1);
+}
+
+function randomLow(): string {
+  return Math.random().toString(36).slice(2, 8);
+}

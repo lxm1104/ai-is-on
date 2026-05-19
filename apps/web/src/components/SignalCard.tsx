@@ -8,7 +8,23 @@ const SOURCE_LABEL: Record<SignalCardT['source'], string> = {
   mail: '邮件',
   drive: '文档',
   manual: '手动',
+  agent: 'Agent',
 };
+
+/**
+ * 卡片来源描述：MVP3 起卡片可能来自 triage（信息流判断）或 agent_run
+ * （承诺追踪 / 会前准备）。
+ */
+function lineageLabel(card: SignalCardT): string {
+  if (card.sourceKind === 'agent_run') {
+    // proposal_type 我们没在 card 里，靠 title 猜
+    if (card.title.startsWith('会前准备')) return '会前准备';
+    if (card.title.includes('承诺')) return '承诺追踪';
+    return 'Agent';
+  }
+  if (card.sourceKind === 'manual') return '手动';
+  return '信息流';
+}
 
 function fmtTime(iso: string) {
   try {
@@ -101,6 +117,9 @@ export function SignalCardView(props: {
       <header className="card__head">
         <span className={`badge badge--${card.priority.toLowerCase()}`}>{card.priority}</span>
         <span className="card__source">{SOURCE_LABEL[card.source]}</span>
+        <span className={`card__lineage card__lineage--${card.sourceKind ?? 'triage'}`}>
+          {lineageLabel(card)}
+        </span>
         <span className="card__time">{fmtTime(card.createdAt)}</span>
         {card.status !== 'new' && (
           <span className={`status-pill status-pill--${card.status}`}>

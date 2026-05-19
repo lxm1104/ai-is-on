@@ -846,3 +846,19 @@ body { background: var(--bg); color: var(--text); }
   white-space: nowrap;
   cursor: help;
 }
+
+/* MVP3 card lineage chip */
+.card__lineage {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  letter-spacing: 0.3px;
+}
+.card__lineage--agent_run {
+  border-color: #c084fc66;
+  color: #c084fc;
+  background: rgba(192,132,252,0.08);
+}
