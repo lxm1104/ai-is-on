@@ -172,6 +172,58 @@ CREATE TABLE IF NOT EXISTS context_feedback (
   comment TEXT,
   created_at TEXT NOT NULL
 );
+
+-- ============ MVP3 Triggered Agent Loop ============
+
+CREATE TABLE IF NOT EXISTS triggers (
+  id TEXT PRIMARY KEY,
+  trigger_type TEXT NOT NULL,
+  context_unit_id TEXT,
+  payload_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  due_at TEXT,
+  due_at_bucket TEXT,                  -- 用于 idempotency：e.g. dueAt 取整到小时
+  reasoning TEXT,                      -- 为什么触发，供 UI 展示
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_triggers_status ON triggers(status);
+CREATE INDEX IF NOT EXISTS idx_triggers_due_at ON triggers(due_at);
+-- idempotency: 同一 (type, context_unit, bucket) 不重复创建 pending trigger
+CREATE UNIQUE INDEX IF NOT EXISTS idx_triggers_idempotency
+  ON triggers(trigger_type, context_unit_id, due_at_bucket)
+  WHERE status = 'pending';
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id TEXT PRIMARY KEY,
+  trigger_id TEXT,
+  agent_type TEXT NOT NULL,
+  input_json TEXT NOT NULL,
+  output_json TEXT,
+  status TEXT NOT NULL DEFAULT 'queued',
+  error TEXT,
+  started_at TEXT,
+  completed_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_trigger ON agent_runs(trigger_id);
+
+CREATE TABLE IF NOT EXISTS action_proposals (
+  id TEXT PRIMARY KEY,
+  agent_run_id TEXT,
+  proposal_type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  reversible INTEGER NOT NULL DEFAULT 1,
+  impact_scope TEXT NOT NULL DEFAULT 'self',
+  requires_approval INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'pending',
+  payload_json TEXT,                   -- 可选附加字段，e.g. priority/source/entities
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_action_proposals_agent_run ON action_proposals(agent_run_id);
 `);
 
 // Forward-compat: add columns that may be missing in databases created by an earlier MVP0 boot.
@@ -307,6 +359,8 @@ export type CardRow = {
   actions_json: string;
   raw_event_id: string | null;
   source_url: string | null;
+  source_kind: string;                  // 'triage' | 'agent_run' | 'manual'
+  source_ref_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -315,9 +369,9 @@ export function insertCard(row: CardRow) {
   db.prepare(
     `INSERT INTO cards
      (id, triage_id, priority, source, title, summary, reason, suggested_action, draft_reply, status,
-      actions_json, raw_event_id, source_url, created_at, updated_at)
+      actions_json, raw_event_id, source_url, source_kind, source_ref_id, created_at, updated_at)
      VALUES (@id, @triage_id, @priority, @source, @title, @summary, @reason, @suggested_action, @draft_reply, @status,
-             @actions_json, @raw_event_id, @source_url, @created_at, @updated_at)`
+             @actions_json, @raw_event_id, @source_url, @source_kind, @source_ref_id, @created_at, @updated_at)`
   ).run(row);
 }
 
@@ -658,4 +712,162 @@ export function listContextFeedback(limit = 100): ContextFeedbackRow[] {
   return db
     .prepare(`SELECT * FROM context_feedback ORDER BY created_at DESC LIMIT ?`)
     .all(limit) as ContextFeedbackRow[];
+}
+
+// -------- triggers --------
+
+export type TriggerRow = {
+  id: string;
+  trigger_type: string;
+  context_unit_id: string | null;
+  payload_json: string;
+  status: string;
+  due_at: string | null;
+  due_at_bucket: string | null;
+  reasoning: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/** Insert; if idempotency clash (same type/unit/bucket pending), returns null. */
+export function tryInsertTrigger(row: TriggerRow): boolean {
+  try {
+    db.prepare(
+      `INSERT INTO triggers
+       (id, trigger_type, context_unit_id, payload_json, status, due_at, due_at_bucket, reasoning, created_at, updated_at)
+       VALUES (@id, @trigger_type, @context_unit_id, @payload_json, @status, @due_at, @due_at_bucket, @reasoning, @created_at, @updated_at)`
+    ).run(row);
+    return true;
+  } catch (err) {
+    if (err instanceof Error && /UNIQUE/i.test(err.message)) return false;
+    throw err;
+  }
+}
+
+export function getTrigger(id: string): TriggerRow | null {
+  return (
+    (db.prepare(`SELECT * FROM triggers WHERE id = ?`).get(id) as TriggerRow | undefined) ?? null
+  );
+}
+
+export function updateTriggerStatus(id: string, status: string, updatedAt: string) {
+  db.prepare(`UPDATE triggers SET status = ?, updated_at = ? WHERE id = ?`).run(
+    status,
+    updatedAt,
+    id
+  );
+}
+
+export function listTriggers(opts: { status?: string; limit?: number } = {}): TriggerRow[] {
+  const limit = opts.limit ?? 100;
+  const where: string[] = [];
+  const params: Record<string, unknown> = { limit };
+  if (opts.status) {
+    where.push('status = @status');
+    params.status = opts.status;
+  }
+  const sql = `SELECT * FROM triggers${where.length ? ' WHERE ' + where.join(' AND ') : ''}
+               ORDER BY due_at IS NULL, due_at ASC, created_at DESC LIMIT @limit`;
+  return db.prepare(sql).all(params) as TriggerRow[];
+}
+
+export function listDueTriggers(now: string): TriggerRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM triggers
+       WHERE status = 'pending' AND (due_at IS NULL OR due_at <= ?)
+       ORDER BY due_at IS NULL, due_at ASC`
+    )
+    .all(now) as TriggerRow[];
+}
+
+// -------- agent_runs --------
+
+export type AgentRunRow = {
+  id: string;
+  trigger_id: string | null;
+  agent_type: string;
+  input_json: string;
+  output_json: string | null;
+  status: string;
+  error: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+};
+
+export function insertAgentRun(row: AgentRunRow) {
+  db.prepare(
+    `INSERT INTO agent_runs
+     (id, trigger_id, agent_type, input_json, output_json, status, error, started_at, completed_at, created_at)
+     VALUES (@id, @trigger_id, @agent_type, @input_json, @output_json, @status, @error, @started_at, @completed_at, @created_at)`
+  ).run(row);
+}
+
+export function updateAgentRun(
+  id: string,
+  patch: Partial<Pick<AgentRunRow, 'status' | 'output_json' | 'error' | 'started_at' | 'completed_at'>>
+) {
+  const sets: string[] = [];
+  const params: Record<string, unknown> = { id };
+  for (const [k, v] of Object.entries(patch)) {
+    sets.push(`${k} = @${k}`);
+    params[k] = v;
+  }
+  if (sets.length === 0) return;
+  db.prepare(`UPDATE agent_runs SET ${sets.join(', ')} WHERE id = @id`).run(params);
+}
+
+export function getAgentRun(id: string): AgentRunRow | null {
+  return (
+    (db.prepare(`SELECT * FROM agent_runs WHERE id = ?`).get(id) as AgentRunRow | undefined) ??
+    null
+  );
+}
+
+export function listAgentRuns(limit = 100): AgentRunRow[] {
+  return db
+    .prepare(`SELECT * FROM agent_runs ORDER BY created_at DESC LIMIT ?`)
+    .all(limit) as AgentRunRow[];
+}
+
+// -------- action_proposals --------
+
+export type ActionProposalRow = {
+  id: string;
+  agent_run_id: string | null;
+  proposal_type: string;
+  title: string;
+  body: string;
+  reversible: number;
+  impact_scope: string;
+  requires_approval: number;
+  status: string;
+  payload_json: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export function insertActionProposal(row: ActionProposalRow) {
+  db.prepare(
+    `INSERT INTO action_proposals
+     (id, agent_run_id, proposal_type, title, body, reversible, impact_scope, requires_approval,
+      status, payload_json, created_at, updated_at)
+     VALUES (@id, @agent_run_id, @proposal_type, @title, @body, @reversible, @impact_scope, @requires_approval,
+             @status, @payload_json, @created_at, @updated_at)`
+  ).run(row);
+}
+
+export function getActionProposal(id: string): ActionProposalRow | null {
+  return (
+    (db
+      .prepare(`SELECT * FROM action_proposals WHERE id = ?`)
+      .get(id) as ActionProposalRow | undefined) ?? null
+  );
+}
+
+export function listActionProposals(limit = 100): ActionProposalRow[] {
+  return db
+    .prepare(`SELECT * FROM action_proposals ORDER BY created_at DESC LIMIT ?`)
+    .all(limit) as ActionProposalRow[];
 }

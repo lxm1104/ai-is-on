@@ -46,6 +46,13 @@ export type UpsertResult = {
   wasUpdate: boolean;
 };
 
+// MVP3: lazy import to avoid circular require (triggerEvaluator → contextStore.getContextUnitById)
+type PushHook = (unit: ContextUnit) => void;
+let pushHook: PushHook | null = null;
+export function registerUpsertHook(hook: PushHook) {
+  pushHook = hook;
+}
+
 function rowToUnit(row: ContextUnitRow, entities: ContextEntityRef[] = []): ContextUnit {
   return {
     id: row.id,
@@ -171,7 +178,12 @@ export function upsertContextUnit(input: UpsertContextUnitInput): UpsertResult {
         confidence: ref.confidence ?? 0.7,
       });
     }
-    return { unit: rowToUnit(updated, entityRefs.map((e) => e.ref)), wasUpdate: true };
+    const result: UpsertResult = {
+      unit: rowToUnit(updated, entityRefs.map((e) => e.ref)),
+      wasUpdate: true,
+    };
+    invokeHook(result.unit);
+    return result;
   }
 
   const id = randomUUID();
@@ -206,7 +218,24 @@ export function upsertContextUnit(input: UpsertContextUnitInput): UpsertResult {
       confidence: ref.confidence ?? 0.7,
     });
   }
-  return { unit: rowToUnit(row, entityRefs.map((e) => e.ref)), wasUpdate: false };
+  const result: UpsertResult = {
+    unit: rowToUnit(row, entityRefs.map((e) => e.ref)),
+    wasUpdate: false,
+  };
+  invokeHook(result.unit);
+  return result;
+}
+
+function invokeHook(unit: ContextUnit) {
+  if (!pushHook) return;
+  try {
+    pushHook(unit);
+  } catch (err) {
+    console.warn(
+      '[context] upsert hook failed:',
+      err instanceof Error ? err.message : String(err)
+    );
+  }
 }
 
 export function getContextUnitById(id: string): ContextUnit | null {

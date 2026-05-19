@@ -13,6 +13,7 @@ import { collectorsRouter } from './routes/collectors.js';
 import { debugRouter } from './routes/debug.js';
 import { contextRouter } from './routes/context.js';
 import { startCollectorScheduler, stopCollectorScheduler } from './collectors/scheduler.js';
+import { startTriggerScheduler, stopTriggerScheduler } from './triggers/triggerScheduler.js';
 
 const app = express();
 app.use(cors({ origin: config.webOrigin, credentials: true }));
@@ -42,12 +43,16 @@ server.listen(config.port, '127.0.0.1', () => {
     .then(() => console.log('[server] claude runtime started'))
     .catch((err) => console.error('[server] failed to start claude runtime:', err));
   startCollectorScheduler();
+  startTriggerScheduler();
 });
 
 const shutdown = async (signal: string) => {
   console.log(`[server] received ${signal}, shutting down`);
   try {
     stopCollectorScheduler();
+  } catch {}
+  try {
+    stopTriggerScheduler();
   } catch {}
   try {
     await claudeRuntime.stop();

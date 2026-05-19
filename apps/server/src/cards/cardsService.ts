@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  type ActionProposalRow,
   type CardRow,
   type EventRow,
   getCard,
@@ -38,6 +39,8 @@ function rowToCard(row: CardRow): SignalCard {
     actions,
     rawEventId: row.raw_event_id ?? undefined,
     sourceUrl: row.source_url ?? undefined,
+    sourceKind: (row.source_kind as SignalCard['sourceKind']) ?? 'triage',
+    sourceRefId: row.source_ref_id ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -83,11 +86,59 @@ export function createCardsFromTriage(ev: EventRow, item: TriageItem, triageId: 
     actions_json: JSON.stringify(actions),
     raw_event_id: ev.id,
     source_url: ev.url,
+    source_kind: 'triage',
+    source_ref_id: triageId,
     created_at: now,
     updated_at: now,
   };
   insertCard(row);
   broadcast({ type: 'card_created', card: rowToCard(row) });
+}
+
+export type ProposalCardInput = {
+  proposal: ActionProposalRow;
+  agentType: string;
+  priority: 'P0' | 'P1' | 'P2' | 'P3';
+  source: string;                     // 'agent' | 'calendar' | 'im' | ...
+  reason: string;                     // 为什么生成这张卡
+  suggestedAction?: string;
+  draftReply?: string;
+  rawEventId?: string;
+  sourceUrl?: string;
+  actions?: CardAction[];             // 默认走 defaultActionsForSource
+};
+
+/**
+ * Project an ActionProposal into a SignalCard. source_kind='agent_run',
+ * source_ref_id is the proposal id, so we can trace back through audit logs.
+ */
+export function createCardFromProposal(input: ProposalCardInput): SignalCard {
+  const now = new Date().toISOString();
+  const id = randomUUID();
+  const actions = input.actions?.length ? input.actions : defaultActionsForSource(input.source);
+  const row: CardRow = {
+    id,
+    triage_id: null,
+    priority: input.priority,
+    source: input.source,
+    title: input.proposal.title,
+    summary: input.proposal.body.slice(0, 120),
+    reason: input.reason,
+    suggested_action: input.suggestedAction ?? null,
+    draft_reply: input.draftReply ?? null,
+    status: 'new',
+    actions_json: JSON.stringify(actions),
+    raw_event_id: input.rawEventId ?? null,
+    source_url: input.sourceUrl ?? null,
+    source_kind: 'agent_run',
+    source_ref_id: input.proposal.id,
+    created_at: now,
+    updated_at: now,
+  };
+  insertCard(row);
+  const card = rowToCard(row);
+  broadcast({ type: 'card_created', card });
+  return card;
 }
 
 export function listCards(): SignalCard[] {
