@@ -1,4 +1,11 @@
-import type { ChatMessage, CollectorStatus, SignalCard } from '../types';
+import type {
+  ChatMessage,
+  CollectorStatus,
+  ContextEntity,
+  ContextRelation,
+  ContextUnit,
+  SignalCard,
+} from '../types';
 
 export async function fetchMessages(): Promise<ChatMessage[]> {
   const r = await fetch('/api/messages');
@@ -70,6 +77,56 @@ export type RunOnceResult = {
   newEvents: number;
   error?: string;
 };
+
+export type ContextUnitFilter = {
+  limit?: number;
+  kind?: string;
+  origin?: string;
+  actionability?: string;
+};
+
+export async function fetchContextUnits(filter: ContextUnitFilter = {}): Promise<ContextUnit[]> {
+  const qs = new URLSearchParams();
+  if (filter.limit) qs.set('limit', String(filter.limit));
+  if (filter.kind) qs.set('kind', filter.kind);
+  if (filter.origin) qs.set('origin', filter.origin);
+  if (filter.actionability) qs.set('actionability', filter.actionability);
+  const r = await fetch(`/api/context/units${qs.toString() ? `?${qs}` : ''}`);
+  if (!r.ok) throw new Error(`context/units ${r.status}`);
+  const j = await r.json();
+  return (j.items ?? []) as ContextUnit[];
+}
+
+export async function fetchContextEntities(): Promise<ContextEntity[]> {
+  const r = await fetch('/api/context/entities');
+  if (!r.ok) throw new Error(`context/entities ${r.status}`);
+  const j = await r.json();
+  return (j.items ?? []) as ContextEntity[];
+}
+
+export async function fetchContextRelations(): Promise<ContextRelation[]> {
+  const r = await fetch('/api/context/relations');
+  if (!r.ok) throw new Error(`context/relations ${r.status}`);
+  const j = await r.json();
+  return (j.items ?? []) as ContextRelation[];
+}
+
+export async function postContextFeedback(input: {
+  contextUnitId?: string;
+  cardId?: string;
+  reason: string;
+  comment?: string;
+}): Promise<void> {
+  const r = await fetch('/api/context/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    throw new Error(j.error || `context feedback ${r.status}`);
+  }
+}
 
 export async function runCollectorsOnce(name?: string): Promise<RunOnceResult[]> {
   const r = await fetch('/api/collectors/run-once', {

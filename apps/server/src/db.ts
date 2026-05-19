@@ -83,6 +83,95 @@ CREATE TABLE IF NOT EXISTS collector_state (
   last_success_at TEXT,
   last_error TEXT
 );
+
+-- ============ MVP2 Context Continuity ============
+
+CREATE TABLE IF NOT EXISTS context_units (
+  id TEXT PRIMARY KEY,
+  subject_id TEXT NOT NULL DEFAULT 'me',
+  scope TEXT NOT NULL,
+
+  origin_kind TEXT NOT NULL,
+  origin_ref_id TEXT NOT NULL,
+
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  meaning TEXT,
+  emotion_json TEXT,
+  time_json TEXT,
+  actionability TEXT NOT NULL DEFAULT 'record',
+  confidence REAL NOT NULL DEFAULT 0.7,
+
+  merge_key TEXT,
+  version INTEGER NOT NULL DEFAULT 1,
+  supersedes_json TEXT,
+
+  expires_at TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_context_units_merge_key ON context_units(merge_key);
+CREATE INDEX IF NOT EXISTS idx_context_units_kind_status ON context_units(kind, status);
+CREATE INDEX IF NOT EXISTS idx_context_units_expires_at ON context_units(expires_at);
+CREATE INDEX IF NOT EXISTS idx_context_units_origin ON context_units(origin_kind, origin_ref_id);
+
+CREATE TABLE IF NOT EXISTS context_entities (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  name TEXT NOT NULL,
+  aliases_json TEXT,
+  source TEXT,
+  confidence REAL NOT NULL DEFAULT 0.7,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(type, name)
+);
+
+CREATE TABLE IF NOT EXISTS context_unit_entities (
+  context_unit_id TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'about',
+  confidence REAL NOT NULL DEFAULT 0.7,
+  PRIMARY KEY (context_unit_id, entity_id, role)
+);
+CREATE INDEX IF NOT EXISTS idx_cue_unit ON context_unit_entities(context_unit_id);
+CREATE INDEX IF NOT EXISTS idx_cue_entity ON context_unit_entities(entity_id);
+
+CREATE TABLE IF NOT EXISTS context_relations (
+  id TEXT PRIMARY KEY,
+  from_entity_id TEXT NOT NULL,
+  to_entity_id TEXT NOT NULL,
+  relation_type TEXT NOT NULL,
+  context_unit_id TEXT,
+  confidence REAL NOT NULL DEFAULT 0.7,
+  valid_from TEXT,
+  valid_until TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS context_links (
+  id TEXT PRIMARY KEY,
+  from_context_id TEXT NOT NULL,
+  to_context_id TEXT NOT NULL,
+  link_type TEXT NOT NULL,
+  confidence REAL NOT NULL DEFAULT 0.7,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_context_links_from ON context_links(from_context_id);
+CREATE INDEX IF NOT EXISTS idx_context_links_to ON context_links(to_context_id);
+
+CREATE TABLE IF NOT EXISTS context_feedback (
+  id TEXT PRIMARY KEY,
+  context_unit_id TEXT,
+  card_id TEXT,
+  reason TEXT NOT NULL,
+  comment TEXT,
+  created_at TEXT NOT NULL
+);
 `);
 
 // Forward-compat: add columns that may be missing in databases created by an earlier MVP0 boot.
@@ -95,6 +184,11 @@ function ensureColumn(table: string, column: string, ddl: string) {
 ensureColumn('cards', 'actions_json', "TEXT NOT NULL DEFAULT '[]'");
 ensureColumn('cards', 'raw_event_id', 'TEXT');
 ensureColumn('cards', 'source_url', 'TEXT');
+// MVP2: cards 多来源（triage / agent_run / manual），保留 triage_id 兼容
+ensureColumn('cards', 'source_kind', "TEXT NOT NULL DEFAULT 'triage'");
+ensureColumn('cards', 'source_ref_id', 'TEXT');
+// MVP2: events 加 context_extracted_at（与 processed_at 解耦）
+ensureColumn('events', 'context_extracted_at', 'TEXT');
 
 export type RuntimeMessageRow = {
   id: string;
@@ -300,4 +394,253 @@ export function getCollectorState(name: string): CollectorStateRow | null {
       | CollectorStateRow
       | undefined) ?? null
   );
+}
+
+export function markEventContextExtracted(id: string, at: string) {
+  db.prepare(`UPDATE events SET context_extracted_at = ? WHERE id = ?`).run(at, id);
+}
+
+// -------- context_units --------
+
+export type ContextUnitRow = {
+  id: string;
+  subject_id: string;
+  scope: string;
+  origin_kind: string;
+  origin_ref_id: string;
+  kind: string;
+  title: string;
+  content: string;
+  meaning: string | null;
+  emotion_json: string | null;
+  time_json: string | null;
+  actionability: string;
+  confidence: number;
+  merge_key: string | null;
+  version: number;
+  supersedes_json: string | null;
+  expires_at: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export function insertContextUnit(row: ContextUnitRow) {
+  db.prepare(
+    `INSERT INTO context_units
+     (id, subject_id, scope, origin_kind, origin_ref_id, kind, title, content,
+      meaning, emotion_json, time_json, actionability, confidence,
+      merge_key, version, supersedes_json, expires_at, status, created_at, updated_at)
+     VALUES (@id, @subject_id, @scope, @origin_kind, @origin_ref_id, @kind, @title, @content,
+             @meaning, @emotion_json, @time_json, @actionability, @confidence,
+             @merge_key, @version, @supersedes_json, @expires_at, @status, @created_at, @updated_at)`
+  ).run(row);
+}
+
+export function updateContextUnit(row: ContextUnitRow) {
+  db.prepare(
+    `UPDATE context_units SET
+       subject_id=@subject_id, scope=@scope, origin_kind=@origin_kind, origin_ref_id=@origin_ref_id,
+       kind=@kind, title=@title, content=@content, meaning=@meaning,
+       emotion_json=@emotion_json, time_json=@time_json, actionability=@actionability,
+       confidence=@confidence, merge_key=@merge_key, version=@version,
+       supersedes_json=@supersedes_json, expires_at=@expires_at, status=@status, updated_at=@updated_at
+     WHERE id=@id`
+  ).run(row);
+}
+
+export function getContextUnit(id: string): ContextUnitRow | null {
+  return (
+    (db.prepare(`SELECT * FROM context_units WHERE id = ?`).get(id) as
+      | ContextUnitRow
+      | undefined) ?? null
+  );
+}
+
+export function getActiveContextUnitByMergeKey(mergeKey: string): ContextUnitRow | null {
+  return (
+    (db
+      .prepare(
+        `SELECT * FROM context_units WHERE merge_key = ? AND status = 'active' ORDER BY updated_at DESC LIMIT 1`
+      )
+      .get(mergeKey) as ContextUnitRow | undefined) ?? null
+  );
+}
+
+export function listContextUnits(opts: {
+  limit?: number;
+  kind?: string;
+  originKind?: string;
+  actionability?: string;
+  status?: string;
+  includeExpired?: boolean;
+} = {}): ContextUnitRow[] {
+  const limit = opts.limit ?? 100;
+  const where: string[] = [];
+  const params: Record<string, unknown> = { limit };
+  if (opts.kind) {
+    where.push('kind = @kind');
+    params.kind = opts.kind;
+  }
+  if (opts.originKind) {
+    where.push('origin_kind = @origin_kind');
+    params.origin_kind = opts.originKind;
+  }
+  if (opts.actionability) {
+    where.push('actionability = @actionability');
+    params.actionability = opts.actionability;
+  }
+  if (opts.status) {
+    where.push('status = @status');
+    params.status = opts.status;
+  } else {
+    where.push("status = 'active'");
+  }
+  if (!opts.includeExpired) {
+    where.push('(expires_at IS NULL OR expires_at > @now)');
+    params.now = new Date().toISOString();
+  }
+  const sql = `SELECT * FROM context_units${where.length ? ' WHERE ' + where.join(' AND ') : ''}
+               ORDER BY updated_at DESC LIMIT @limit`;
+  return db.prepare(sql).all(params) as ContextUnitRow[];
+}
+
+// -------- context_entities --------
+
+export type ContextEntityRow = {
+  id: string;
+  type: string;
+  name: string;
+  aliases_json: string | null;
+  source: string | null;
+  confidence: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export function insertContextEntity(row: ContextEntityRow) {
+  db.prepare(
+    `INSERT INTO context_entities
+     (id, type, name, aliases_json, source, confidence, created_at, updated_at)
+     VALUES (@id, @type, @name, @aliases_json, @source, @confidence, @created_at, @updated_at)`
+  ).run(row);
+}
+
+export function getContextEntityByTypeName(type: string, name: string): ContextEntityRow | null {
+  return (
+    (db
+      .prepare(`SELECT * FROM context_entities WHERE type = ? AND name = ?`)
+      .get(type, name) as ContextEntityRow | undefined) ?? null
+  );
+}
+
+export function listContextEntities(limit = 200): ContextEntityRow[] {
+  return db
+    .prepare(`SELECT * FROM context_entities ORDER BY updated_at DESC LIMIT ?`)
+    .all(limit) as ContextEntityRow[];
+}
+
+// -------- context_unit_entities --------
+
+export type ContextUnitEntityRow = {
+  context_unit_id: string;
+  entity_id: string;
+  role: string;
+  confidence: number;
+};
+
+export function linkUnitEntity(row: ContextUnitEntityRow) {
+  db.prepare(
+    `INSERT OR REPLACE INTO context_unit_entities
+     (context_unit_id, entity_id, role, confidence)
+     VALUES (@context_unit_id, @entity_id, @role, @confidence)`
+  ).run(row);
+}
+
+export function listEntitiesForUnit(contextUnitId: string): ContextUnitEntityRow[] {
+  return db
+    .prepare(`SELECT * FROM context_unit_entities WHERE context_unit_id = ?`)
+    .all(contextUnitId) as ContextUnitEntityRow[];
+}
+
+// -------- context_relations --------
+
+export type ContextRelationRow = {
+  id: string;
+  from_entity_id: string;
+  to_entity_id: string;
+  relation_type: string;
+  context_unit_id: string | null;
+  confidence: number;
+  valid_from: string | null;
+  valid_until: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export function insertContextRelation(row: ContextRelationRow) {
+  db.prepare(
+    `INSERT INTO context_relations
+     (id, from_entity_id, to_entity_id, relation_type, context_unit_id, confidence,
+      valid_from, valid_until, created_at, updated_at)
+     VALUES (@id, @from_entity_id, @to_entity_id, @relation_type, @context_unit_id, @confidence,
+             @valid_from, @valid_until, @created_at, @updated_at)`
+  ).run(row);
+}
+
+export function listContextRelations(limit = 200): ContextRelationRow[] {
+  return db
+    .prepare(`SELECT * FROM context_relations ORDER BY updated_at DESC LIMIT ?`)
+    .all(limit) as ContextRelationRow[];
+}
+
+// -------- context_links --------
+
+export type ContextLinkRow = {
+  id: string;
+  from_context_id: string;
+  to_context_id: string;
+  link_type: string;
+  confidence: number;
+  created_at: string;
+};
+
+export function insertContextLink(row: ContextLinkRow) {
+  db.prepare(
+    `INSERT INTO context_links (id, from_context_id, to_context_id, link_type, confidence, created_at)
+     VALUES (@id, @from_context_id, @to_context_id, @link_type, @confidence, @created_at)`
+  ).run(row);
+}
+
+export function listContextLinksFor(contextUnitId: string): ContextLinkRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM context_links WHERE from_context_id = ? OR to_context_id = ?
+       ORDER BY created_at DESC`
+    )
+    .all(contextUnitId, contextUnitId) as ContextLinkRow[];
+}
+
+// -------- context_feedback --------
+
+export type ContextFeedbackRow = {
+  id: string;
+  context_unit_id: string | null;
+  card_id: string | null;
+  reason: string;
+  comment: string | null;
+  created_at: string;
+};
+
+export function insertContextFeedback(row: ContextFeedbackRow) {
+  db.prepare(
+    `INSERT INTO context_feedback (id, context_unit_id, card_id, reason, comment, created_at)
+     VALUES (@id, @context_unit_id, @card_id, @reason, @comment, @created_at)`
+  ).run(row);
+}
+
+export function listContextFeedback(limit = 100): ContextFeedbackRow[] {
+  return db
+    .prepare(`SELECT * FROM context_feedback ORDER BY created_at DESC LIMIT ?`)
+    .all(limit) as ContextFeedbackRow[];
 }

@@ -3,6 +3,7 @@ import { StatusBar } from './components/StatusBar';
 import { MessageList } from './components/MessageList';
 import { Composer } from './components/Composer';
 import { CardList } from './components/CardList';
+import { ContextPanel } from './components/ContextPanel';
 import {
   fetchCards,
   fetchCollectors,
@@ -187,6 +188,7 @@ export function App() {
             onRunOnce={onRunOnce}
             collectorsHint={collectorsHint}
           />
+          <ContextPanel />
         </aside>
         <section className="pane pane--chat">
           <MessageList messages={messages} thinking={thinking} />

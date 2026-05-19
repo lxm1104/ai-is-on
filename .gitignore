@@ -9,3 +9,4 @@ data/*.sqlite-shm
 .env
 .DS_Store
 tmp/
+.claude/

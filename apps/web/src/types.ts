@@ -69,6 +69,49 @@ export type CollectorStatus = {
   nextRunAt?: string;
 };
 
+// MVP2 Context
+export type ContextUnit = {
+  id: string;
+  subjectId: string;
+  scope: 'personal' | 'work' | 'team';
+  origin: { kind: string; refId: string };
+  kind: string;
+  title: string;
+  content: string;
+  entities: Array<{ type: string; name: string; role?: string; confidence?: number }>;
+  time?: { occurredAt?: string; dueAt?: string; startsAt?: string; endsAt?: string };
+  emotion?: { valence?: string; labels?: string[]; intensity?: number };
+  meaning?: string;
+  actionability: 'none' | 'record' | 'notify' | 'ask' | 'act';
+  confidence: number;
+  mergeKey?: string;
+  version: number;
+  status: 'active' | 'archived' | 'superseded';
+  expiresAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ContextEntity = {
+  id: string;
+  type: string;
+  name: string;
+  confidence: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ContextRelation = {
+  id: string;
+  from_entity_id: string;
+  to_entity_id: string;
+  relation_type: string;
+  context_unit_id: string | null;
+  confidence: number;
+  created_at: string;
+  updated_at: string;
+};
+
 export type ServerEvent =
   | { type: 'runtime_status'; status: RuntimeStatus }
   | { type: 'message_added'; message: ChatMessage }

@@ -11,6 +11,24 @@ import { calendarCollector } from './calendarCollector.js';
 import { imCollector } from './imCollector.js';
 import { enqueueEvents } from '../triage/triageQueue.js';
 import type { Collector } from './types.js';
+import { insertMinimalEventContextUnit } from '../context/contextStore.js';
+import { markEventContextExtracted } from '../db.js';
+import type { ContextScope } from '../context/ContextUnit.js';
+
+function scopeForSource(source: string): ContextScope {
+  // §4.6 默认规则：work / personal / team
+  switch (source) {
+    case 'calendar':
+    case 'im':
+    case 'mail':
+    case 'drive':
+      return 'work';
+    case 'manual':
+      return 'personal';
+    default:
+      return 'work';
+  }
+}
 
 type ScheduledCollector = {
   collector: Collector;
@@ -94,7 +112,29 @@ async function tick(s: ScheduledCollector): Promise<{ collected: number; newEven
         processed_at: null,
         created_at: now.toISOString(),
       };
-      if (tryInsertEvent(row)) newRows.push(row);
+      if (tryInsertEvent(row)) {
+        newRows.push(row);
+        // MVP2.0: 同步直写一条最小 ContextUnit（kind=event，无 LLM）。
+        // 失败不阻塞主链路。
+        try {
+          insertMinimalEventContextUnit({
+            eventId: row.id,
+            scope: scopeForSource(row.source),
+            title: row.title ?? row.text.slice(0, 30),
+            content: row.text,
+            occurredAt: row.occurred_at,
+            source: row.source,
+            actor: row.actor ?? undefined,
+            actorRole: 'actor',
+          });
+          markEventContextExtracted(row.id, now.toISOString());
+        } catch (err) {
+          console.warn(
+            `[context] failed to insert minimal ContextUnit for event ${row.id}:`,
+            err instanceof Error ? err.message : String(err)
+          );
+        }
+      }
     }
 
     upsertCollectorState({

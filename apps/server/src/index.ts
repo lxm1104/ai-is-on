@@ -11,6 +11,7 @@ import { speechRouter } from './routes/speech.js';
 import { cardsRouter } from './routes/cards.js';
 import { collectorsRouter } from './routes/collectors.js';
 import { debugRouter } from './routes/debug.js';
+import { contextRouter } from './routes/context.js';
 import { startCollectorScheduler, stopCollectorScheduler } from './collectors/scheduler.js';
 
 const app = express();
@@ -27,6 +28,7 @@ app.use('/api', speechRouter);
 app.use('/api', cardsRouter);
 app.use('/api', collectorsRouter);
 app.use('/api', debugRouter);
+app.use('/api', contextRouter);
 
 const server = http.createServer(app);
 attachWebSocket(server);
