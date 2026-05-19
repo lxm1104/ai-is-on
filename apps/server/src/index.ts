@@ -14,6 +14,7 @@ import { debugRouter } from './routes/debug.js';
 import { contextRouter } from './routes/context.js';
 import { startCollectorScheduler, stopCollectorScheduler } from './collectors/scheduler.js';
 import { startTriggerScheduler, stopTriggerScheduler } from './triggers/triggerScheduler.js';
+import { bootstrapAgents } from './agents/index.js';
 
 const app = express();
 app.use(cors({ origin: config.webOrigin, credentials: true }));
@@ -42,6 +43,7 @@ server.listen(config.port, '127.0.0.1', () => {
     .start()
     .then(() => console.log('[server] claude runtime started'))
     .catch((err) => console.error('[server] failed to start claude runtime:', err));
+  bootstrapAgents();
   startCollectorScheduler();
   startTriggerScheduler();
 });
