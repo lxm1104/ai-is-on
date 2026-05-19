@@ -50,6 +50,8 @@ export function selectAgentForTrigger(triggerType: string): string | null {
       return 'prepare_meeting';
     case 'check_in_due':
       return 'caring';
+    case 'context_divergence':
+      return 'sync_draft';
     default:
       return null;
   }

@@ -5,6 +5,7 @@ import { registerAgent } from './agentRegistry.js';
 import { trackCommitmentHandler } from './commitmentAgent.js';
 import { prepareMeetingHandler } from './prepareMeetingAgent.js';
 import { caringHandler } from './caringAgent.js';
+import { syncDraftHandler } from './syncDraftAgent.js';
 
 let bootstrapped = false;
 
@@ -14,5 +15,8 @@ export function bootstrapAgents() {
   registerAgent('track_commitment', trackCommitmentHandler);
   registerAgent('prepare_meeting', prepareMeetingHandler);
   registerAgent('caring', caringHandler);
-  console.log('[agents] registered: track_commitment, prepare_meeting, caring');
+  registerAgent('sync_draft', syncDraftHandler);
+  console.log(
+    '[agents] registered: track_commitment, prepare_meeting, caring, sync_draft'
+  );
 }

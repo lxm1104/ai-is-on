@@ -8,6 +8,7 @@ import {
 import type { ContextUnit } from '../context/ContextUnit.js';
 import { getContextUnitById } from '../context/contextStore.js';
 import { isCaringPaused } from '../caring/caringSettings.js';
+import { detectAllDivergences } from '../spaces/divergenceDetector.js';
 
 /**
  * MVP3 §5.3: 只实现 2 类。
@@ -18,7 +19,11 @@ import { isCaringPaused } from '../caring/caringSettings.js';
  * 落库 + idempotency 由 `evaluateAndPersist` / scheduler 负责。
  */
 
-export type TriggerType = 'commitment_due' | 'meeting_prepare' | 'check_in_due';
+export type TriggerType =
+  | 'commitment_due'
+  | 'meeting_prepare'
+  | 'check_in_due'
+  | 'context_divergence';
 
 const CHECK_IN_HOUR_LOCAL = 12; // 中午 12 点
 const CHECK_IN_COOLDOWN_MS = 12 * 3600_000;
@@ -185,6 +190,32 @@ export function evaluateActiveUnitsForPullPath(now: number = Date.now()): string
   if (cd) {
     const id = persistTrigger(cd);
     if (id) ids.push(id);
+  }
+  // MVP5.1 context_divergence — 扫所有 Space，给每条 divergence finding 写一个 trigger
+  try {
+    const findings = detectAllDivergences(now);
+    for (const f of findings) {
+      const draft: TriggerDraft = {
+        triggerType: 'context_divergence',
+        contextUnitId: f.contextUnitId,
+        dueAt: undefined,
+        dueAtBucket: `${f.kind}-${new Date(now).toISOString().slice(0, 10)}`,
+        reasoning: f.reasoning,
+        payload: {
+          divergenceKind: f.kind,
+          spaceId: f.spaceId,
+          spaceName: f.spaceName,
+          ...f.payload,
+        },
+      };
+      const id = persistTrigger(draft);
+      if (id) ids.push(id);
+    }
+  } catch (err) {
+    console.warn(
+      '[triggers] divergence scan failed:',
+      err instanceof Error ? err.message : String(err)
+    );
   }
   return ids;
 }

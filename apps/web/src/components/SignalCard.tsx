@@ -21,6 +21,7 @@ function lineageLabel(card: SignalCardT): string {
     if (card.title.startsWith('会前准备')) return '会前准备';
     if (card.title.includes('承诺')) return '承诺追踪';
     if (card.title.startsWith('我看到了')) return '陪伴';
+    if (card.title.startsWith('同步草稿')) return '同步草稿';
     return 'Agent';
   }
   if (card.sourceKind === 'manual') return '手动';
