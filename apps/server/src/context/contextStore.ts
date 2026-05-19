@@ -6,6 +6,7 @@ import {
   type ContextUnitEntityRow,
   type ContextUnitRow,
   getActiveContextUnitByMergeKey,
+  getActiveContextUnitByOrigin,
   getContextEntityByTypeName,
   getContextUnit,
   insertContextEntity,
@@ -254,6 +255,11 @@ export function linkContextUnits(
 
 export function listLinksFor(unitId: string) {
   return listContextLinksFor(unitId);
+}
+
+export function findEventContextUnitId(eventId: string): string | null {
+  const row = getActiveContextUnitByOrigin('event', eventId);
+  return row?.id ?? null;
 }
 
 export function addContextFeedback(input: {

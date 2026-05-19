@@ -10,3 +10,4 @@ data/*.sqlite-shm
 .DS_Store
 tmp/
 .claude/
+apps/server/test/fixtures/*/last_run.raw.txt

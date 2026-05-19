@@ -457,6 +457,21 @@ export function getContextUnit(id: string): ContextUnitRow | null {
   );
 }
 
+export function getActiveContextUnitByOrigin(
+  originKind: string,
+  originRefId: string
+): ContextUnitRow | null {
+  return (
+    (db
+      .prepare(
+        `SELECT * FROM context_units
+         WHERE origin_kind = ? AND origin_ref_id = ? AND status = 'active'
+         ORDER BY updated_at DESC LIMIT 1`
+      )
+      .get(originKind, originRefId) as ContextUnitRow | undefined) ?? null
+  );
+}
+
 export function getActiveContextUnitByMergeKey(mergeKey: string): ContextUnitRow | null {
   return (
     (db

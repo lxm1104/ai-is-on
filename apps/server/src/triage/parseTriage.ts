@@ -1,4 +1,6 @@
+import { jsonrepair } from 'jsonrepair';
 import type { CardAction } from '../claude/protocol.js';
+import type { ContextUnitDraft } from '../context/ContextUnit.js';
 
 export type TriageItem = {
   sourceEventId: string;
@@ -12,30 +14,62 @@ export type TriageItem = {
   confidence: number;
   shouldCreateCard: boolean;
   cardActions: CardAction[];
+  // MVP2.1: LLM 提取出的 context（最多 3 条，由 coerce 截断）
+  contextUpdates: ContextUnitDraft[];
 };
 
 export type TriageResult = { items: TriageItem[] };
 
-function extractJson(s: string): unknown {
-  // First try whole-string parse
+const MAX_CONTEXT_UPDATES_PER_ITEM = 3;
+
+const ALLOWED_KINDS = new Set([
+  'event',
+  'state',
+  'goal',
+  'intent',
+  'commitment',
+  'relationship',
+  'memory',
+  'emotion',
+  'constraint',
+  'uncertainty',
+  'action_result',
+  'self_narrative',
+  'routine',
+  'decision',
+  'preference',
+]);
+
+const ALLOWED_ACTIONABILITY = new Set(['none', 'record', 'notify', 'ask', 'act']);
+
+function tryParse(s: string): unknown | null {
   try {
     return JSON.parse(s);
   } catch {}
+  // jsonrepair handles common LLM JSON glitches: unescaped quotes inside strings,
+  // trailing commas, single-quoted keys, etc.
+  try {
+    return JSON.parse(jsonrepair(s));
+  } catch {}
+  return null;
+}
+
+function extractJson(s: string): unknown {
+  const whole = tryParse(s);
+  if (whole !== null) return whole;
   // Strip ```json fences
   const fenced = s.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   if (fenced?.[1]) {
-    try {
-      return JSON.parse(fenced[1]);
-    } catch {}
+    const inside = tryParse(fenced[1]);
+    if (inside !== null) return inside;
   }
   // First "{" to last "}"
   const first = s.indexOf('{');
   const last = s.lastIndexOf('}');
   if (first >= 0 && last > first) {
     const slice = s.slice(first, last + 1);
-    try {
-      return JSON.parse(slice);
-    } catch {}
+    const sliced = tryParse(slice);
+    if (sliced !== null) return sliced;
   }
   throw new Error(`triage 输出不是合法 JSON: ${s.slice(0, 200)}`);
 }
@@ -91,7 +125,103 @@ function coerceItem(raw: unknown): TriageItem | null {
     confidence: typeof o.confidence === 'number' ? o.confidence : 0.5,
     shouldCreateCard: o.shouldCreateCard !== false,
     cardActions,
+    contextUpdates: coerceContextUpdates(o.contextUpdates),
   };
+}
+
+function coerceContextUpdates(raw: unknown): ContextUnitDraft[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ContextUnitDraft[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const o = item as Record<string, unknown>;
+    const kind = typeof o.kind === 'string' ? o.kind : '';
+    if (!ALLOWED_KINDS.has(kind)) continue;
+    const title = typeof o.title === 'string' ? o.title.trim() : '';
+    const content = typeof o.content === 'string' ? o.content.trim() : '';
+    if (!title) continue;
+
+    const entities = coerceEntities(o.entities);
+    const time = coerceTime(o.time);
+    const emotion = coerceEmotion(o.emotion);
+    const actionabilityRaw = typeof o.actionability === 'string' ? o.actionability : 'record';
+    const actionability = (ALLOWED_ACTIONABILITY.has(actionabilityRaw)
+      ? actionabilityRaw
+      : 'record') as ContextUnitDraft['actionability'];
+
+    out.push({
+      kind: kind as ContextUnitDraft['kind'],
+      title,
+      content: content || title,
+      entities,
+      time,
+      emotion: emotion ?? undefined,
+      meaning: typeof o.meaning === 'string' && o.meaning.trim() ? o.meaning : undefined,
+      actionability,
+      confidence:
+        typeof o.confidence === 'number' && o.confidence >= 0 && o.confidence <= 1
+          ? o.confidence
+          : 0.7,
+      mergeHint:
+        typeof o.mergeHint === 'string' && o.mergeHint.trim()
+          ? o.mergeHint.trim()
+          : undefined,
+    });
+    if (out.length >= MAX_CONTEXT_UPDATES_PER_ITEM) break;
+  }
+  return out;
+}
+
+function coerceEntities(raw: unknown): NonNullable<ContextUnitDraft['entities']> {
+  if (!Array.isArray(raw)) return [];
+  const out: NonNullable<ContextUnitDraft['entities']> = [];
+  for (const e of raw) {
+    if (!e || typeof e !== 'object') continue;
+    const o = e as Record<string, unknown>;
+    const type = typeof o.type === 'string' ? o.type.trim() : '';
+    const name = typeof o.name === 'string' ? o.name.trim() : '';
+    if (!type || !name) continue;
+    out.push({
+      type,
+      name,
+      role: typeof o.role === 'string' && o.role.trim() ? o.role : undefined,
+      confidence: typeof o.confidence === 'number' ? o.confidence : undefined,
+    });
+  }
+  return out;
+}
+
+function coerceTime(raw: unknown): ContextUnitDraft['time'] {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const pick = (k: string) =>
+    typeof o[k] === 'string' && (o[k] as string).trim() ? (o[k] as string) : undefined;
+  const time = {
+    occurredAt: pick('occurredAt'),
+    startsAt: pick('startsAt'),
+    endsAt: pick('endsAt'),
+    dueAt: pick('dueAt'),
+    expiresAt: pick('expiresAt'),
+  };
+  return Object.values(time).some((v) => v !== undefined) ? time : undefined;
+}
+
+const ALLOWED_VALENCE = new Set(['positive', 'neutral', 'negative', 'mixed']);
+
+function coerceEmotion(raw: unknown): ContextUnitDraft['emotion'] | null {
+  if (raw === null) return null;
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const valenceRaw = typeof o.valence === 'string' ? o.valence : undefined;
+  const valence = valenceRaw && ALLOWED_VALENCE.has(valenceRaw)
+    ? (valenceRaw as 'positive' | 'neutral' | 'negative' | 'mixed')
+    : undefined;
+  const labels = Array.isArray(o.labels)
+    ? (o.labels.filter((x) => typeof x === 'string') as string[])
+    : undefined;
+  const intensity = typeof o.intensity === 'number' ? o.intensity : undefined;
+  if (!valence && (!labels || labels.length === 0) && intensity === undefined) return undefined;
+  return { valence, labels, intensity };
 }
 
 export function parseTriageResult(text: string): TriageResult {

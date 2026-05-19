@@ -1,0 +1,104 @@
+{
+  "signals": [
+    {
+      "id": "fix-mvp2-01",
+      "source": "im",
+      "kind": "p2p",
+      "occurredAt": "2026-05-19T10:50:00.000Z",
+      "title": "单聊 oc_91889aee03167cf02b3a41a536e43724",
+      "text": "会话：单聊 oc_91889aee03167cf02b3a41a536e43724\n发送者：cli_a0d9fec6ffb8d00e（app）\n时间：2026-05-19 18:50\n内容：<card>\n签到时间到，你可以签到了\n\n\n**说明**\n你可以扫描二维码进行签到，若无法签到，请及时联系企业管理员\n\n\n**会议室**\nShenzhen Bay I&T Center B(深圳湾创新科技中心B座)-F38-DiscussionRoom 09🎦[短时会议室] (4)\n\n\n**日程主题**\n[(无主题)](https://applink.larkoffice.com/client/calendar/event/detail?calendarId=7592431828239453128&key=12cccd95-c169-4e1a-a06d-d9972ee75d10&originalTime=0&startTime=1779188400&mode=sidebar)\n5月19日（周二） 下午7:00 (GMT+8)\n\n\n</card>",
+      "actor": "cli_a0d9fec6ffb8d00e",
+      "url": "https://applink.feishu.cn/client/chat/open?openChatId=oc_91889aee03167cf02b3a41a536e43724&position=236"
+    },
+    {
+      "id": "fix-mvp2-02",
+      "source": "calendar",
+      "kind": "event",
+      "occurredAt": "2026-05-19T21:00:00+08:00",
+      "title": "ASR 埋点上报聊一下",
+      "text": "标题：ASR 埋点上报聊一下\n时间：2026-05-19T21:00:00+08:00 - 2026-05-19T21:30:00+08:00\n组织者：宓珂璟",
+      "actor": "宓珂璟",
+      "url": "https://applink.larkoffice.com/client/calendar/event/detail?calendarId=7592431828239453128&key=217967b8-4836-467d-a99e-462e6819a042&originalTime=0&startTime=1779195600"
+    },
+    {
+      "id": "fix-mvp2-03",
+      "source": "im",
+      "kind": "group_message",
+      "occurredAt": "2026-05-19T10:09:00.000Z",
+      "title": "语音输入 - 需求沟通群",
+      "text": "会话：语音输入 - 需求沟通群\n发送者：宓珂璟（user）\n时间：2026-05-19 18:09\n内容：@曾继仪 @李淑莹 @钱崇雪 晚上8点有空么，聊下新场景的埋点，可能会有变动",
+      "actor": "宓珂璟",
+      "url": "https://applink.feishu.cn/client/thread/open?open_chat_id=oc_761b2857b45c8dbcaebecfa8c8206304&open_thread_id=omt_1969be0dc34e1c8e&openchatid=oc_761b2857b45c8dbcaebecfa8c8206304&openthreadid=omt_1969be0dc34e1c8e&thread_position=-1"
+    },
+    {
+      "id": "fix-mvp2-04",
+      "source": "calendar",
+      "kind": "event",
+      "occurredAt": "2026-05-20T11:45:00+08:00",
+      "title": "Workflow Agent 双日会",
+      "text": "标题：Workflow Agent 双日会\n时间：2026-05-20T11:45:00+08:00 - 2026-05-20T12:00:00+08:00\n组织者：杨薛莎\n描述：Workflow agent 需求 & 反馈跟进",
+      "actor": "杨薛莎",
+      "url": "https://applink.larkoffice.com/client/calendar/event/detail?calendarId=7592431828239453128&key=ae9e3ab4-f3bc-4792-9409-e6b8868e3236&originalTime=0&startTime=1779248700"
+    },
+    {
+      "id": "fix-mvp2-05",
+      "source": "im",
+      "kind": "group_message",
+      "occurredAt": "2026-05-19T09:27:00.000Z",
+      "title": "Inspiration",
+      "text": "会话：Inspiration\n发送者：常博良（user）\n时间：2026-05-19 17:27\n内容：[https://claude.com/code-with-claude/london#livestream](https://claude.com/code-with-claude/london#livestream) \nAnthropic 技术沙龙直播 （YouTube链接：[https://www.youtube.com/watch?v=AgQ4cwL5eOM](https://www.youtube.com/watch?v=AgQ4cwL5eOM)）",
+      "actor": "常博良",
+      "url": "https://applink.feishu.cn/client/thread/open?open_chat_id=oc_73f8c53d3d4678053636f020aab635a9&open_thread_id=omt_1969a42c5d4d1c8b&openchatid=oc_73f8c53d3d4678053636f020aab635a9&openthreadid=omt_1969a42c5d4d1c8b&thread_position=-1"
+    },
+    {
+      "id": "fix-mvp2-06",
+      "source": "im",
+      "kind": "p2p_burst",
+      "occurredAt": "2026-05-19T09:49:00.000Z",
+      "title": "单聊 · 丘晓骁 · 新增 22 条",
+      "text": "会话：单聊 · 丘晓骁\n自 2026-05-19T17:04:49+08:00 以来新增 22 条消息\n---\n- [2026-05-19 17:40] 丘晓骁: 豆包\n- [2026-05-19 17:40] 丘晓骁: [Image: img_v3_0211r_f628f3cc-d8f0-49f2-875b-64bda34eceeg]\n- [2026-05-19 17:41] 丘晓骁: [Image: img_v3_0211r_ed1d56ae-20e0-4f61-8867-96e47587fc2g]\n- [2026-05-19 17:41] 丘晓骁: 我们的 AI 侧边栏 ——没有反馈\n- [2026-05-19 17:49] 丘晓骁: [Image: img_v3_0211r_11d9ad9e-8dca-44b8-b39e-fd245ae14e6g] 侧边栏还有个逻辑：点了新对话后，如果没有发送新内容，这里会置灰，我们需要 follow 吗",
+      "actor": "丘晓骁",
+      "url": "https://applink.feishu.cn/client/chat/open?openChatId=oc_bb12271b47ec167f87f0497f4b70d938&position=826"
+    },
+    {
+      "id": "fix-mvp2-07",
+      "source": "calendar",
+      "kind": "event",
+      "occurredAt": "2026-05-20T19:30:00+08:00",
+      "title": "chatbot agent 建设双日会",
+      "text": "标题：chatbot agent 建设双日会\n时间：2026-05-20T19:30:00+08:00 - 2026-05-20T20:00:00+08:00\n组织者：杨薛莎\n描述：本日程由 AI 辅助创建，请确认相关信息",
+      "actor": "杨薛莎",
+      "url": "https://applink.larkoffice.com/client/calendar/event/detail?calendarId=7592431828239453128&key=4864152d-8f0c-4dfe-a6fb-23e50370cd15&originalTime=0&startTime=1779276600"
+    },
+    {
+      "id": "fix-mvp2-08",
+      "source": "im",
+      "kind": "p2p_burst",
+      "occurredAt": "2026-05-19T09:49:00.000Z",
+      "title": "单聊 · 杨薛莎 · 新增 3 条",
+      "text": "会话：单聊 · 杨薛莎\n自 2026-05-19T17:04:49+08:00 以来新增 3 条消息\n---\n- [2026-05-19 17:47] 杨薛莎: im 还是 dm？\n- [2026-05-19 17:49] 杨薛莎: 他在搞 从空创建\n- [2026-05-19 17:49] 杨薛莎: 行吧 6.1 班车",
+      "actor": "杨薛莎",
+      "url": "https://applink.feishu.cn/client/chat/open?openChatId=oc_9d7ecb6abafb89f1607a3e69bef2fcea&position=1433"
+    },
+    {
+      "id": "fix-mvp2-09",
+      "source": "calendar",
+      "kind": "event",
+      "occurredAt": "2026-05-20T20:00:00+08:00",
+      "title": "WaytoAGI晚8点共学",
+      "text": "标题：WaytoAGI晚8点共学\n时间：2026-05-20T20:00:00+08:00 - 2026-05-20T22:00:00+08:00\n组织者：🌈AJ",
+      "actor": "🌈AJ",
+      "url": "https://applink.larkoffice.com/client/calendar/event/detail?calendarId=7592431828239453128&key=4786ddeb-6d68-4607-a23e-d2c81cd9cfb4&originalTime=1779278400&startTime=1779278400"
+    },
+    {
+      "id": "fix-mvp2-10",
+      "source": "im",
+      "kind": "group_burst",
+      "occurredAt": "2026-05-19T10:56:00.000Z",
+      "title": "aily 新版自定义智能体交流群 · 新增 9 条",
+      "text": "会话：aily 新版自定义智能体交流群\n自 2026-05-19T17:04:49+08:00 以来新增 9 条消息\n---\n- [2026-05-19 18:06] ou_fe2d6cdb15df22375fcf904fb2e70ea3: 智能伙伴不能以我的身份发消息： ❌ 发送失败 无法以你的身份发送消息给xx。飞书开放平台的权限限制，bot 应用没有被授权使用\"代发消息\"（send_as_user）功能。 解决方案： 需要管理员在飞书开放平台为这个应用开通 im:mess…\n- [2026-05-19 18:45] ou_c2a254ec493101e8aaa4241dadef86fa: 自定义 智能体 ，资料放在哪？行为规范放在哪？来保证私聊 群聊 保持一致\n- [2026-05-19 18:47] ou_c2a254ec493101e8aaa4241dadef86fa: 我 把资料 私聊 时候 都发给自定义智能体了，行为规范也确定了。私聊比较正常，群聊时 就不正常了，咋解决？\n- [2026-05-19 18:54] ou_e0f1227e1569dd1ba8b0212457f26b93: [Image: img_v3_0211q_5b00164c-461b-44c8-ab66-44d834c0269g] 自定义智能体关联的知识空间里面因为pdf页数过多，智能体会避开从引用pdf回答问题，但是我的目的就是查询合同pdf中的条款…\n- [2026-05-19 18:56] ou_e0f1227e1569dd1ba8b0212457f26b93: [Image: img_v3_0211r_62c98009-63a5-43f1-976c-127ebd2e587g] 请问老师们，如何把智能体固定置顶在可用人员的飞书aily导航界面？仅开发人员吗？",
+      "actor": null,
+      "url": "https://applink.feishu.cn/client/thread/open?open_chat_id=oc_ac389c37fd433f8c434f085367a7a662&open_thread_id=omt_1969c92e7cd4dc85&openchatid=oc_ac389c37fd433f8c434f085367a7a662&openthreadid=omt_1969c92e7cd4dc85&thread_position=-1"
+    }
+  ]
+}

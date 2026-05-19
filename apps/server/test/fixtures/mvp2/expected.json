@@ -1,0 +1,110 @@
+{
+  "_meta": {
+    "version": "mvp2-1.0",
+    "note": "Each item describes the minimum expected behaviour for the corresponding fixture signal. Reviewer (user) should adjust matchers if their intuition differs. eval.ts scores recall/precision/noise off this file.",
+    "_priorities_ordered": ["P0", "P1", "P2", "P3"]
+  },
+  "items": [
+    {
+      "sourceEventId": "fix-mvp2-01",
+      "label": "应用签到 ack 消息 — 噪声",
+      "expectedRelevant": false,
+      "expectedShouldCreateCard": false,
+      "expectedPriorityAtMost": "P3",
+      "expectedContextUpdates": []
+    },
+    {
+      "sourceEventId": "fix-mvp2-02",
+      "label": "ASR 埋点上报聊一下 — 当日小会议",
+      "expectedRelevant": true,
+      "expectedShouldCreateCard": true,
+      "expectedPriorityAtMost": "P1",
+      "expectedContextUpdates": [
+        {
+          "kindIn": ["event", "intent", "state"],
+          "requiredEntityNamesAny": ["宓珂璟", "ASR"]
+        }
+      ]
+    },
+    {
+      "sourceEventId": "fix-mvp2-03",
+      "label": "@多人约晚上8点聊新场景埋点 — 应识别 commitment / intent",
+      "expectedRelevant": true,
+      "expectedShouldCreateCard": true,
+      "expectedPriorityAtMost": "P1",
+      "expectedContextUpdates": [
+        {
+          "kindIn": ["commitment", "intent"],
+          "mergeHintRegex": "(晚上8点|新场景|埋点|聊)",
+          "requiredEntityNamesAny": ["宓珂璟", "曾继仪", "李淑莹", "钱崇雪"]
+        }
+      ]
+    },
+    {
+      "sourceEventId": "fix-mvp2-04",
+      "label": "Workflow Agent 双日会 — 明天会议（事实事件 collector 已写 kind=event，contextUpdates 可选）",
+      "expectedRelevant": true,
+      "expectedShouldCreateCard": true,
+      "expectedPriorityAtMost": "P2",
+      "expectedContextUpdates": []
+    },
+    {
+      "sourceEventId": "fix-mvp2-05",
+      "label": "Anthropic 沙龙直播分享链接 — 低优先级或忽略",
+      "expectedRelevant": false,
+      "expectedShouldCreateCard": false,
+      "expectedPriorityAtMost": "P3",
+      "expectedContextUpdates": []
+    },
+    {
+      "sourceEventId": "fix-mvp2-06",
+      "label": "单聊 · 丘晓骁 · 新增 22 条 — 同事大量消息，可能包含承诺/需求",
+      "expectedRelevant": true,
+      "expectedShouldCreateCard": true,
+      "expectedPriorityAtMost": "P1",
+      "expectedContextUpdates": [
+        {
+          "kindIn": ["commitment", "intent", "state", "uncertainty"],
+          "requiredEntityNamesAny": ["丘晓骁"]
+        }
+      ]
+    },
+    {
+      "sourceEventId": "fix-mvp2-07",
+      "label": "chatbot agent 建设双日会 — 明晚（同 04，事实事件已有 kind=event）",
+      "expectedRelevant": true,
+      "expectedShouldCreateCard": true,
+      "expectedPriorityAtMost": "P2",
+      "expectedContextUpdates": []
+    },
+    {
+      "sourceEventId": "fix-mvp2-08",
+      "label": "单聊 · 杨薛莎 · 新增 3 条 — 重要同事消息",
+      "expectedRelevant": true,
+      "expectedShouldCreateCard": true,
+      "expectedPriorityAtMost": "P1",
+      "expectedContextUpdates": [
+        {
+          "kindIn": ["commitment", "intent", "state", "constraint", "decision"],
+          "requiredEntityNamesAny": ["杨薛莎"]
+        }
+      ]
+    },
+    {
+      "sourceEventId": "fix-mvp2-09",
+      "label": "WaytoAGI 晚8点共学 — 行业活动",
+      "expectedRelevant": true,
+      "expectedShouldCreateCard": false,
+      "expectedPriorityAtMost": "P2",
+      "expectedContextUpdates": []
+    },
+    {
+      "sourceEventId": "fix-mvp2-10",
+      "label": "aily 新版交流群 · 新增 9 条 — 群里热闹但与用户工作弱相关",
+      "expectedRelevant": false,
+      "expectedShouldCreateCard": false,
+      "expectedPriorityAtMost": "P3",
+      "expectedContextUpdates": []
+    }
+  ]
+}

@@ -3,6 +3,7 @@ import {
   type EventRow,
   insertTriageResult,
   listActiveUserRules,
+  markEventContextExtracted,
   markEventProcessed,
 } from '../db.js';
 import { randomUUID } from 'node:crypto';
@@ -10,6 +11,26 @@ import { buildTriageUserMessage } from './triagePrompt.js';
 import { runTriageOnce } from './backgroundRuntime.js';
 import { parseTriageResult, type TriageItem } from './parseTriage.js';
 import { createCardsFromTriage } from '../cards/cardsService.js';
+import {
+  findEventContextUnitId,
+  linkContextUnits,
+  upsertContextUnit,
+} from '../context/contextStore.js';
+import type { ContextScope } from '../context/ContextUnit.js';
+
+function scopeForEvent(ev: EventRow): ContextScope {
+  switch (ev.source) {
+    case 'calendar':
+    case 'im':
+    case 'mail':
+    case 'drive':
+      return 'work';
+    case 'manual':
+      return 'personal';
+    default:
+      return 'work';
+  }
+}
 
 type QueueItem = { events: EventRow[] };
 
@@ -143,4 +164,41 @@ function persistOne(ev: EventRow, item: TriageItem) {
   if (item.relevant && item.shouldCreateCard) {
     createCardsFromTriage(ev, item, triageId);
   }
+
+  // MVP2.1: 把 LLM 提取的 contextUpdates 落进 context_units，并用 context_links{updates}
+  // 关联到 collector 提前写的那条 kind=event ContextUnit，便于"为什么相关"溯源。
+  try {
+    persistContextUpdates(ev, item);
+  } catch (err) {
+    console.warn(
+      `[context] persist contextUpdates failed for event ${ev.id}:`,
+      err instanceof Error ? err.message : String(err)
+    );
+  }
+}
+
+function persistContextUpdates(ev: EventRow, item: TriageItem) {
+  if (!item.contextUpdates || item.contextUpdates.length === 0) return;
+  const scope = scopeForEvent(ev);
+  const eventCtxId = findEventContextUnitId(ev.id);
+  for (const draft of item.contextUpdates) {
+    const { unit } = upsertContextUnit({
+      ...draft,
+      scope,
+      origin: { kind: 'event', refId: ev.id },
+    });
+    if (eventCtxId && eventCtxId !== unit.id) {
+      try {
+        linkContextUnits(eventCtxId, unit.id, 'updates', 0.8);
+      } catch (err) {
+        // 同一对 link 重复创建：忽略，不阻塞
+        console.warn(
+          `[context] link create failed (event→unit):`,
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
+  }
+  // MVP2.1: triage 已经为这条 event 完成了 context 富化
+  markEventContextExtracted(ev.id, new Date().toISOString());
 }
