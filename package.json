@@ -1,0 +1,14 @@
+{
+  "name": "ai-is-on",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,magenta \"npm:dev:server\" \"npm:dev:web\"",
+    "dev:server": "npm --prefix apps/server run dev",
+    "dev:web": "npm --prefix apps/web run dev",
+    "install:all": "npm install && npm --prefix apps/server install && npm --prefix apps/web install"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
+  }
+}
