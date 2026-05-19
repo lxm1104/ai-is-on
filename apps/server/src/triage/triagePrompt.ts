@@ -82,6 +82,7 @@ export function buildTriageUserMessage(opts: {
     url?: string | null;
   }>;
   userRules: Array<{ description: string }>;
+  caringPaused?: boolean;
 }): string {
   const signalsJson = JSON.stringify({ items: opts.signals }, null, 2);
   const rulesJson = JSON.stringify(
@@ -89,7 +90,7 @@ export function buildTriageUserMessage(opts: {
     null,
     2
   );
-  return [
+  const lines = [
     '请按 system prompt 中的规则处理下面这批新增信号。',
     '',
     '用户规则：',
@@ -103,5 +104,16 @@ export function buildTriageUserMessage(opts: {
     '</signals>',
     '',
     '记得：contextUpdates 数量不限但要有证据，没有就给 []。只输出 JSON 对象，不要 Markdown。',
-  ].join('\n');
+  ];
+  if (opts.caringPaused) {
+    // MVP4 §6.5 硬开关：用户暂停了情绪分析
+    lines.splice(
+      1,
+      0,
+      '',
+      '【重要】用户已暂停情绪分析。本轮 contextUpdates 中**禁止**输出 kind=emotion 或 kind=self_narrative，即使文本里有明显情绪线索也跳过。其它 kind 不受影响。',
+      ''
+    );
+  }
+  return lines.join('\n');
 }

@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { createVoiceRecorder, isRecorderSupported, type VoiceInputState } from '../lib/speech';
-import { transcribeAudio } from '../lib/api';
+import { sendManualEvent, transcribeAudio } from '../lib/api';
+
+type ComposerScope = 'work' | 'life' | 'free';
+
+const SCOPE_OPTIONS: Array<{ id: ComposerScope; label: string; hint: string }> = [
+  { id: 'work', label: '工作', hint: '当作工作记下；AI 同时回应' },
+  { id: 'life', label: '生活', hint: '当作生活/个人记下；AI 同时回应' },
+  { id: 'free', label: '随便说说', hint: '只跟 AI 聊聊，不沉淀' },
+];
 
 const QUICK_PROMPTS = [
   '今天有什么必须处理？',
@@ -16,6 +24,7 @@ export function Composer(props: {
   const [text, setText] = useState('');
   const [voiceState, setVoiceState] = useState<VoiceInputState>('idle');
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [scope, setScope] = useState<ComposerScope>('work');
   const recorderRef = useRef(createVoiceRecorder(60));
   const taRef = useRef<HTMLTextAreaElement>(null);
   const supported = isRecorderSupported();
@@ -71,7 +80,16 @@ export function Composer(props: {
   function submit() {
     const t = text.trim();
     if (!t) return;
+    // Send to chat runtime first so AI responds immediately
     props.onSend(t);
+    // If scope is work/life, also sink as a manual event so the signal flows
+    // through triage → contextStore and becomes persistent context.
+    if (scope === 'work' || scope === 'life') {
+      const eventScope = scope === 'life' ? 'personal' : 'work';
+      void sendManualEvent({ text: t, scope: eventScope }).catch((err) => {
+        console.warn('manual-event failed:', err);
+      });
+    }
     setText('');
   }
 
@@ -100,8 +118,25 @@ export function Composer(props: {
             ? `语音失败：${voiceError}`
             : null;
 
+  const scopeMeta = SCOPE_OPTIONS.find((s) => s.id === scope)!;
+
   return (
     <div className="composer">
+      <div className="composer__scope">
+        {SCOPE_OPTIONS.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            className={`composer__scope-btn ${scope === s.id ? 'is-on' : ''}`}
+            onClick={() => setScope(s.id)}
+            title={s.hint}
+            disabled={props.disabled}
+          >
+            {s.label}
+          </button>
+        ))}
+        <span className="composer__scope-hint">{scopeMeta.hint}</span>
+      </div>
       <div className="composer__quick">
         {QUICK_PROMPTS.map((p) => (
           <button

@@ -1,6 +1,7 @@
 import { jsonrepair } from 'jsonrepair';
 import type { CardAction } from '../claude/protocol.js';
 import type { ContextUnitDraft } from '../context/ContextUnit.js';
+import { isCaringPaused } from '../caring/caringSettings.js';
 
 export type TriageItem = {
   sourceEventId: string;
@@ -132,12 +133,15 @@ function coerceItem(raw: unknown): TriageItem | null {
 
 function coerceContextUpdates(raw: unknown): ContextUnitDraft[] {
   if (!Array.isArray(raw)) return [];
+  const paused = isCaringPaused();
   const out: ContextUnitDraft[] = [];
   for (const item of raw) {
     if (!item || typeof item !== 'object') continue;
     const o = item as Record<string, unknown>;
     const kind = typeof o.kind === 'string' ? o.kind : '';
     if (!ALLOWED_KINDS.has(kind)) continue;
+    // MVP4 §6.5: paused 时即使 LLM 输出了 emotion / self_narrative 也丢弃
+    if (paused && (kind === 'emotion' || kind === 'self_narrative')) continue;
     const title = typeof o.title === 'string' ? o.title.trim() : '';
     const content = typeof o.content === 'string' ? o.content.trim() : '';
     if (!title) continue;

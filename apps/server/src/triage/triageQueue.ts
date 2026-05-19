@@ -17,6 +17,7 @@ import {
   upsertContextUnit,
 } from '../context/contextStore.js';
 import type { ContextScope } from '../context/ContextUnit.js';
+import { isCaringPaused } from '../caring/caringSettings.js';
 
 function scopeForEvent(ev: EventRow): ContextScope {
   switch (ev.source) {
@@ -94,6 +95,7 @@ function shouldRetry(err: unknown): boolean {
 
 async function processBatch(events: EventRow[]) {
   const rules = listActiveUserRules();
+  const caringPaused = isCaringPaused();
   const user = buildTriageUserMessage({
     signals: events.map((e) => ({
       id: e.id,
@@ -106,6 +108,7 @@ async function processBatch(events: EventRow[]) {
       url: e.url,
     })),
     userRules: rules.map((r) => ({ description: r.description })),
+    caringPaused,
   });
 
   let text: string;

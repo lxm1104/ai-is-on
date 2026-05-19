@@ -14,6 +14,8 @@ import { debugRouter } from './routes/debug.js';
 import { contextRouter } from './routes/context.js';
 import { triggersRouter } from './routes/triggers.js';
 import { agentRunsRouter } from './routes/agentRuns.js';
+import { caringRouter } from './routes/caring.js';
+import { manualEventRouter } from './routes/manualEvent.js';
 import { startCollectorScheduler, stopCollectorScheduler } from './collectors/scheduler.js';
 import { startTriggerScheduler, stopTriggerScheduler } from './triggers/triggerScheduler.js';
 import { bootstrapAgents } from './agents/index.js';
@@ -35,6 +37,8 @@ app.use('/api', debugRouter);
 app.use('/api', contextRouter);
 app.use('/api', triggersRouter);
 app.use('/api', agentRunsRouter);
+app.use('/api', caringRouter);
+app.use('/api', manualEventRouter);
 
 const server = http.createServer(app);
 attachWebSocket(server);

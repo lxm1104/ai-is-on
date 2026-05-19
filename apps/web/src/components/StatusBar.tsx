@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { CollectorStatus, RuntimeStatus } from '../types';
-import { fetchActiveContext, type ActiveContextSnapshot } from '../lib/api';
+import {
+  fetchActiveContext,
+  fetchCaringPaused,
+  postCaringPaused,
+  type ActiveContextSnapshot,
+} from '../lib/api';
 
 const LABEL: Record<RuntimeStatus, string> = {
   idle: '空闲',
@@ -52,12 +57,32 @@ function useActiveContextSummary(intervalMs: number = 10_000) {
   return snap;
 }
 
+function useCaringPaused() {
+  const [paused, setPaused] = useState<boolean | null>(null);
+  useEffect(() => {
+    void fetchCaringPaused()
+      .then(setPaused)
+      .catch(() => setPaused(null));
+  }, []);
+  async function toggle() {
+    const next = !(paused ?? false);
+    try {
+      const result = await postCaringPaused(next);
+      setPaused(result);
+    } catch (err) {
+      console.warn('toggle caring failed:', err);
+    }
+  }
+  return { paused, toggle };
+}
+
 export function StatusBar(props: {
   status: RuntimeStatus;
   collectors: CollectorStatus[];
   onRestart: () => void;
 }) {
   const active = useActiveContextSummary();
+  const caring = useCaringPaused();
 
   return (
     <header className="status-bar">
@@ -90,6 +115,20 @@ export function StatusBar(props: {
         </span>
       )}
       <div className="status-bar__right">
+        {caring.paused !== null && (
+          <button
+            type="button"
+            className={`status-bar__caring ${caring.paused ? 'is-paused' : ''}`}
+            onClick={() => void caring.toggle()}
+            title={
+              caring.paused
+                ? '已暂停情绪分析：不会提取 emotion / self_narrative，已有的也不进 active context'
+                : '点击暂停情绪分析'
+            }
+          >
+            {caring.paused ? '🚫 情绪暂停' : '💗 情绪'}
+          </button>
+        )}
         <span className="status-bar__dot" style={{ background: DOT_COLOR[props.status] }} />
         <span className="status-bar__status">Claude {LABEL[props.status]}</span>
         <button className="btn btn--ghost" onClick={props.onRestart} title="重启 Claude Runtime">

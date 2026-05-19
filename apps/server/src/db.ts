@@ -225,6 +225,14 @@ CREATE TABLE IF NOT EXISTS action_proposals (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_action_proposals_agent_run ON action_proposals(agent_run_id);
+
+-- ============ MVP4 Personal Life + Caring ============
+
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `);
 
 // Forward-compat: add columns that may be missing in databases created by an earlier MVP0 boot.
@@ -907,4 +915,21 @@ export function listActionProposals(limit = 100): ActionProposalRow[] {
   return db
     .prepare(`SELECT * FROM action_proposals ORDER BY created_at DESC LIMIT ?`)
     .all(limit) as ActionProposalRow[];
+}
+
+// -------- settings (MVP4 key/value) --------
+
+export function getSetting(key: string): string | null {
+  const row = db.prepare(`SELECT value FROM settings WHERE key = ?`).get(key) as
+    | { value: string }
+    | undefined;
+  return row?.value ?? null;
+}
+
+export function setSetting(key: string, value: string): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+  ).run(key, value, now);
 }

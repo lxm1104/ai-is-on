@@ -1,5 +1,6 @@
 import { listActiveContextUnits } from './contextStore.js';
 import type { ContextUnit, ContextUnitKind } from './ContextUnit.js';
+import { isCaringPaused } from '../caring/caringSettings.js';
 
 /**
  * 评分 + 裁剪生成"当前活跃 context 切片"，用于注入 user message 前。
@@ -41,7 +42,13 @@ const ACTIONABILITY_WEIGHT: Record<string, number> = {
 
 export function buildActiveContext(opts: ActiveContextOptions = {}): ActiveContextSnapshot {
   const budget = opts.budgetTokens ?? DEFAULT_BUDGET;
-  const candidates = listActiveContextUnits({ limit: opts.limit ?? DEFAULT_LIMIT });
+  let candidates = listActiveContextUnits({ limit: opts.limit ?? DEFAULT_LIMIT });
+  // MVP4 §6.5: paused 时把已有的 emotion / self_narrative 全部排除注入
+  if (isCaringPaused()) {
+    candidates = candidates.filter(
+      (u) => u.kind !== 'emotion' && u.kind !== 'self_narrative'
+    );
+  }
   const now = Date.now();
   const scored: ActiveContextItem[] = candidates.map((u) => ({
     ...u,

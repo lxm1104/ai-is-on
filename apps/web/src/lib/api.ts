@@ -26,6 +26,45 @@ export async function sendChat(text: string): Promise<void> {
   }
 }
 
+export type ManualEventScope = 'personal' | 'work';
+
+export async function sendManualEvent(input: {
+  text: string;
+  scope: ManualEventScope;
+  title?: string;
+}): Promise<void> {
+  const r = await fetch('/api/manual-event', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    throw new Error(j.error || `manual-event ${r.status}`);
+  }
+}
+
+export async function fetchCaringPaused(): Promise<boolean> {
+  const r = await fetch('/api/caring/pause');
+  if (!r.ok) throw new Error(`caring/pause ${r.status}`);
+  const j = await r.json();
+  return !!j.paused;
+}
+
+export async function postCaringPaused(paused: boolean): Promise<boolean> {
+  const r = await fetch('/api/caring/pause', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paused }),
+  });
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    throw new Error(j.error || `caring/pause POST ${r.status}`);
+  }
+  const j = await r.json();
+  return !!j.paused;
+}
+
 export async function restartRuntime(): Promise<void> {
   const r = await fetch('/api/runtime/restart', { method: 'POST' });
   if (!r.ok) throw new Error(`restart ${r.status}`);

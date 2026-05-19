@@ -862,3 +862,50 @@ body { background: var(--bg); color: var(--text); }
   color: #c084fc;
   background: rgba(192,132,252,0.08);
 }
+
+/* MVP4 composer scope toggle */
+.composer__scope {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 4px 8px 0;
+  font-size: 12px;
+}
+.composer__scope-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.composer__scope-btn:hover { color: var(--text); }
+.composer__scope-btn.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(99,102,241,0.06);
+}
+.composer__scope-hint {
+  font-size: 11px;
+  opacity: 0.55;
+  margin-left: auto;
+}
+
+/* MVP4 caring pause toggle in status bar */
+.status-bar__caring {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(249,168,212,0.06);
+  color: #f9a8d4;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.status-bar__caring:hover { border-color: #f9a8d4; }
+.status-bar__caring.is-paused {
+  color: var(--muted);
+  background: rgba(255,255,255,0.04);
+  border-color: var(--muted);
+}
