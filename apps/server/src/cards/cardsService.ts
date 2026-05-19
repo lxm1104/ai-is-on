@@ -138,7 +138,9 @@ export async function applyCardAction(
     const prompt = action.prompt?.trim() || buildDefaultPrompt(row, action.kind);
     recordUserMessage(prompt);
     try {
-      await claudeRuntime.sendUserMessage(prompt);
+      // MVP2.2: 卡片动作的内部 prompt 已经把卡片自身 context 嵌进去了，
+      // 不再额外 prepend active_context summary，避免重复并节省 token。
+      await claudeRuntime.sendUserMessage(prompt, { skipContext: true });
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }

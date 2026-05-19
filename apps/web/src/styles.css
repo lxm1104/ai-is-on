@@ -780,3 +780,69 @@ body { background: var(--bg); color: var(--text); }
   font-size: 12px;
 }
 .ctx-rel__arrow { color: var(--muted); font-size: 11px; }
+
+/* MVP2.2 card context projection */
+.card__ctx {
+  margin-top: 8px;
+  border-top: 1px dashed var(--border);
+  padding-top: 6px;
+}
+.card__ctx-toggle {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 0;
+}
+.card__ctx-toggle:hover { color: var(--text); }
+.card__ctx-body { margin-top: 6px; font-size: 12px; }
+.card__ctx-empty { color: var(--muted); font-style: italic; }
+.card__ctx-err { color: var(--err); font-size: 12px; }
+.card__ctx-list {
+  list-style: none;
+  margin: 4px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.card__ctx-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 6px;
+  background: rgba(255,255,255,0.03);
+  border-radius: 6px;
+}
+.card__ctx-title { flex: 1; font-size: 12px; }
+.card__ctx-due { font-size: 11px; opacity: 0.6; }
+.card__ctx-feedback {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 6px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.card__ctx-feedback:hover { color: var(--warn); }
+.card__ctx-fb-options {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.card__ctx-fb-chip { font-size: 11px; padding: 2px 8px; }
+.card__ctx-fb-done { color: var(--accent); font-size: 11px; }
+
+.status-bar__active-ctx {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(147,197,253,0.06);
+  white-space: nowrap;
+  cursor: help;
+}

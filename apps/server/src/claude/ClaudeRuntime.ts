@@ -3,6 +3,13 @@ import { EventEmitter } from 'node:events';
 import { config } from '../config.js';
 import { SYSTEM_PROMPT } from './prompts.js';
 import type { RuntimeEvent, RuntimeStatus } from './protocol.js';
+import { buildActiveContext } from '../context/activeContext.js';
+
+export type SendUserMessageOptions = {
+  /** If true, do NOT prepend active context summary to the message. Used for
+   *  card-action triggered internal prompts that already carry context. */
+  skipContext?: boolean;
+};
 
 export class ClaudeRuntime extends EventEmitter {
   private child: ChildProcessWithoutNullStreams | null = null;
@@ -94,14 +101,32 @@ export class ClaudeRuntime extends EventEmitter {
     await this.start();
   }
 
-  async sendUserMessage(text: string): Promise<void> {
+  async sendUserMessage(text: string, opts: SendUserMessageOptions = {}): Promise<void> {
     if (!this.child) await this.start();
     if (!this.child) throw new Error('claude runtime not running');
+
+    // MVP2.2: prepend active context summary as part of user message
+    // (not system prompt) so the UI can be transparent about what AI is bringing in.
+    let content = text;
+    if (!opts.skipContext) {
+      try {
+        const snap = buildActiveContext();
+        if (snap.summary) {
+          content = `${snap.summary}\n\n${text}`;
+        }
+      } catch (err) {
+        console.warn(
+          '[claude] buildActiveContext failed, sending without context:',
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
+
     const payload = {
       type: 'user',
       message: {
         role: 'user',
-        content: text,
+        content,
       },
       parent_tool_use_id: null,
     };

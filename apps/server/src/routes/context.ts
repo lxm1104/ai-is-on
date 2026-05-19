@@ -8,6 +8,7 @@ import {
   listAllRelations,
   listLinksFor,
 } from '../context/contextStore.js';
+import { buildActiveContext } from '../context/activeContext.js';
 
 export const contextRouter = Router();
 
@@ -38,6 +39,16 @@ contextRouter.get('/context/entities', (_req, res) => {
 contextRouter.get('/context/relations', (_req, res) => {
   const items = listAllRelations(500);
   res.json({ items });
+});
+
+contextRouter.get('/context/active', (req, res) => {
+  const budget = clampInt(req.query.budget, 1500, 100, 8000);
+  const snap = buildActiveContext({ budgetTokens: budget });
+  res.json({
+    items: snap.items,
+    summary: snap.summary,
+    tokenEstimate: snap.tokenEstimate,
+  });
 });
 
 contextRouter.get('/context/feedback', (_req, res) => {

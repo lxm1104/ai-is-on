@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import type { CardAction, SignalCard as SignalCardT } from '../types';
+import type { CardAction, ContextUnit, SignalCard as SignalCardT } from '../types';
+import { fetchCardContext, postContextFeedback } from '../lib/api';
 
 const SOURCE_LABEL: Record<SignalCardT['source'], string> = {
   calendar: '日历',
@@ -20,6 +21,13 @@ function fmtTime(iso: string) {
 
 const REOPEN_ACTION: CardAction = { id: '__reopen', label: '标记未读', kind: 'ack' };
 
+const FEEDBACK_REASONS: Array<{ id: string; label: string }> = [
+  { id: 'wrong_entity', label: '人/项目认错了' },
+  { id: 'wrong_priority', label: '优先级不对' },
+  { id: 'wrong_meaning', label: '意思理解错了' },
+  { id: 'other', label: '其他' },
+];
+
 export function SignalCardView(props: {
   card: SignalCardT;
   onAction: (cardId: string, actionId: string) => Promise<void>;
@@ -27,6 +35,38 @@ export function SignalCardView(props: {
   const { card } = props;
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [ctxOpen, setCtxOpen] = useState(false);
+  const [ctxUnits, setCtxUnits] = useState<ContextUnit[] | null>(null);
+  const [ctxErr, setCtxErr] = useState<string | null>(null);
+  const [fbOpen, setFbOpen] = useState(false);
+  const [fbSent, setFbSent] = useState<string | null>(null);
+
+  async function ensureCtxLoaded() {
+    if (ctxUnits !== null) return;
+    try {
+      const p = await fetchCardContext(card.id);
+      setCtxUnits(p.relatedUnits);
+    } catch (e) {
+      setCtxErr(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function toggleCtx() {
+    const next = !ctxOpen;
+    setCtxOpen(next);
+    if (next) await ensureCtxLoaded();
+  }
+
+  async function sendFeedback(reason: string) {
+    setFbSent(null);
+    try {
+      await postContextFeedback({ cardId: card.id, reason });
+      setFbSent(reason);
+      setTimeout(() => setFbOpen(false), 800);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }
 
   async function run(actionId: string, kind: string) {
     if (kind === 'open_source' && card.sourceUrl) {
@@ -93,6 +133,66 @@ export function SignalCardView(props: {
           打开原文 ↗
         </a>
       )}
+      <div className="card__ctx">
+        <button
+          type="button"
+          className="card__ctx-toggle"
+          onClick={() => void toggleCtx()}
+          aria-expanded={ctxOpen}
+        >
+          {ctxOpen ? '▾' : '▸'} 为什么相关
+          {ctxUnits !== null && ctxUnits.length > 0 ? ` · ${ctxUnits.length}` : ''}
+        </button>
+        {ctxOpen && (
+          <div className="card__ctx-body">
+            {ctxErr && <div className="card__ctx-err">{ctxErr}</div>}
+            {ctxUnits === null && !ctxErr && <div className="card__ctx-empty">加载中…</div>}
+            {ctxUnits !== null && ctxUnits.length === 0 && !ctxErr && (
+              <div className="card__ctx-empty">
+                这条卡片暂未关联到额外 context（事件本身已记录）。
+              </div>
+            )}
+            {ctxUnits && ctxUnits.length > 0 && (
+              <ul className="card__ctx-list">
+                {ctxUnits.map((u) => (
+                  <li key={u.id} className="card__ctx-item">
+                    <span className={`ctx-kind ctx-kind--${u.kind}`}>{u.kind}</span>
+                    <span className="card__ctx-title">{u.title}</span>
+                    {u.time?.dueAt && (
+                      <span className="card__ctx-due">due {fmtDate(u.time.dueAt)}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <button
+              type="button"
+              className="card__ctx-feedback"
+              onClick={() => setFbOpen((v) => !v)}
+            >
+              {fbOpen ? '收起' : '理解错了？'}
+            </button>
+            {fbOpen && (
+              <div className="card__ctx-fb-options">
+                {fbSent ? (
+                  <span className="card__ctx-fb-done">已记下，谢谢。</span>
+                ) : (
+                  FEEDBACK_REASONS.map((r) => (
+                    <button
+                      key={r.id}
+                      type="button"
+                      className="btn btn--ghost card__ctx-fb-chip"
+                      onClick={() => void sendFeedback(r.id)}
+                    >
+                      {r.label}
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
       <footer className="card__actions">
         {visibleActions.map((a) => (
           <button
@@ -108,6 +208,21 @@ export function SignalCardView(props: {
       {err && <div className="card__err">{err}</div>}
     </article>
   );
+}
+
+function fmtDate(iso: string) {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+  } catch {
+    return iso;
+  }
 }
 
 function statusLabel(s: SignalCardT['status']) {

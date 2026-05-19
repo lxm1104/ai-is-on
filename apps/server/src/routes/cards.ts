@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { applyCardAction, listCards } from '../cards/cardsService.js';
+import { projectCardContext } from '../cards/contextProjection.js';
 
 export const cardsRouter = Router();
 
@@ -20,4 +21,9 @@ cardsRouter.post('/cards/:id/action', async (req, res) => {
     return;
   }
   res.json({ card: result.card });
+});
+
+cardsRouter.get('/cards/:id/context', (req, res) => {
+  const proj = projectCardContext(req.params.id);
+  res.json(proj);
 });

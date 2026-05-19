@@ -111,6 +111,40 @@ export async function fetchContextRelations(): Promise<ContextRelation[]> {
   return (j.items ?? []) as ContextRelation[];
 }
 
+export type ActiveContextSnapshot = {
+  items: ContextUnit[];
+  summary: string;
+  tokenEstimate: number;
+};
+
+export async function fetchActiveContext(budget = 1500): Promise<ActiveContextSnapshot> {
+  const r = await fetch(`/api/context/active?budget=${budget}`);
+  if (!r.ok) throw new Error(`context/active ${r.status}`);
+  const j = await r.json();
+  return {
+    items: (j.items ?? []) as ContextUnit[],
+    summary: j.summary ?? '',
+    tokenEstimate: j.tokenEstimate ?? 0,
+  };
+}
+
+export type CardContextProjection = {
+  cardId: string;
+  eventContextUnitId: string | null;
+  relatedUnits: ContextUnit[];
+};
+
+export async function fetchCardContext(cardId: string): Promise<CardContextProjection> {
+  const r = await fetch(`/api/cards/${encodeURIComponent(cardId)}/context`);
+  if (!r.ok) throw new Error(`cards/${cardId}/context ${r.status}`);
+  const j = await r.json();
+  return {
+    cardId: j.cardId,
+    eventContextUnitId: j.eventContextUnitId,
+    relatedUnits: (j.relatedUnits ?? []) as ContextUnit[],
+  };
+}
+
 export async function postContextFeedback(input: {
   contextUnitId?: string;
   cardId?: string;

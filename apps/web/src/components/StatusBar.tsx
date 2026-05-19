@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react';
 import type { CollectorStatus, RuntimeStatus } from '../types';
+import { fetchActiveContext, type ActiveContextSnapshot } from '../lib/api';
 
 const LABEL: Record<RuntimeStatus, string> = {
   idle: '空闲',
@@ -27,11 +29,36 @@ function fmtCountdown(nextIso?: string): string {
   return `${Math.round(s / 60)}min 后扫描`;
 }
 
+function useActiveContextSummary(intervalMs: number = 10_000) {
+  const [snap, setSnap] = useState<ActiveContextSnapshot | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function tick() {
+      try {
+        const s = await fetchActiveContext();
+        if (!cancelled) setSnap(s);
+      } catch {
+        // 不暴露顶部错误，静默失败
+      }
+    }
+    void tick();
+    const id = setInterval(tick, intervalMs);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [intervalMs]);
+  return snap;
+}
+
 export function StatusBar(props: {
   status: RuntimeStatus;
   collectors: CollectorStatus[];
   onRestart: () => void;
 }) {
+  const active = useActiveContextSummary();
+
   return (
     <header className="status-bar">
       <div className="status-bar__title">
@@ -54,6 +81,14 @@ export function StatusBar(props: {
           );
         })}
       </div>
+      {active && (
+        <span
+          className="status-bar__active-ctx"
+          title={active.summary || '当前无 active context'}
+        >
+          🧠 active context: {active.items.length} items · ~{active.tokenEstimate} tokens
+        </span>
+      )}
       <div className="status-bar__right">
         <span className="status-bar__dot" style={{ background: DOT_COLOR[props.status] }} />
         <span className="status-bar__status">Claude {LABEL[props.status]}</span>
