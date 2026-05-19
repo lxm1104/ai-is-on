@@ -20,8 +20,6 @@ export type TriageItem = {
 
 export type TriageResult = { items: TriageItem[] };
 
-const MAX_CONTEXT_UPDATES_PER_ITEM = 3;
-
 // LLM 提取的 contextUpdate kind 白名单。
 // 注意：'event' 不在内 —— collector 已经为每条 raw event 写过一条 kind=event
 // ContextUnit，再让 LLM 输出 event 类会让 mergeKey 跨 entity 命中、错误关联。
@@ -170,7 +168,6 @@ function coerceContextUpdates(raw: unknown): ContextUnitDraft[] {
           ? o.mergeHint.trim()
           : undefined,
     });
-    if (out.length >= MAX_CONTEXT_UPDATES_PER_ITEM) break;
   }
   return out;
 }

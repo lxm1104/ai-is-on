@@ -17,7 +17,7 @@ B. 提取 context（contextUpdates）：把这条信号里值得长期记忆的�
 - 输出必须是单个合法 JSON 对象，不要 Markdown、不要 JSON 之外的内容。
 
 contextUpdates 提取规则：
-1. 每条 signal 最多 3 条 contextUpdates，宁可少不要乱。
+1. 数量不设上限，但每条都要有真实证据，宁可少不要乱（凑数会污染 context）。
 2. 事实事件本身不需要单独给 contextUpdate；系统已经为每条 raw event 写过一条 kind=event。只有当信号里出现新的目标、承诺、状态等"高于事件本身"的语义时才提取。
 3. kind 取值：goal / intent / commitment / state / relationship / constraint / emotion / memory / uncertainty / action_result。
 4. 承诺类（commitment）：谁答应了什么、什么时候。必须有 mergeHint，dueAt 如果文本里说了就给。
@@ -102,6 +102,6 @@ export function buildTriageUserMessage(opts: {
     signalsJson,
     '</signals>',
     '',
-    '记得：每条 signal 最多 3 条 contextUpdates，没有就给 []。只输出 JSON 对象，不要 Markdown。',
+    '记得：contextUpdates 数量不限但要有证据，没有就给 []。只输出 JSON 对象，不要 Markdown。',
   ].join('\n');
 }
