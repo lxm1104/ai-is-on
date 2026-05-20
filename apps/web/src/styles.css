@@ -909,3 +909,101 @@ body { background: var(--bg); color: var(--text); }
   background: rgba(255,255,255,0.04);
   border-color: var(--muted);
 }
+
+/* MVP5 Spaces panel */
+.sp-panel .ctx-panel__toggle span:first-child { font-weight: 600; }
+.sp-panel__createbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.sp-panel__createbar select,
+.sp-panel__createbar input {
+  font-size: 12px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+.sp-panel__createbar input { flex: 1; }
+.sp-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sp-list__item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 13px;
+}
+.sp-list__item:hover { border-color: var(--accent); }
+.sp-list__item.is-on { border-color: var(--accent); background: rgba(99,102,241,0.08); }
+.sp-type {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.sp-type--project { color: #6ee7b7; border-color: #6ee7b744; }
+.sp-type--topic { color: #93c5fd; border-color: #93c5fd44; }
+.sp-name { font-weight: 600; }
+
+.sp-detail {
+  margin-top: 8px;
+  border-top: 1px dashed var(--border);
+  padding-top: 8px;
+}
+.sp-detail__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.sp-detail__meta { font-size: 11px; opacity: 0.6; }
+.sp-detail__desc {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.sp-group { margin-top: 8px; }
+.sp-group__title {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+.sp-group__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.sp-group__item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.03);
+  font-size: 12px;
+}
+.sp-group__name { flex: 1; }
+.sp-group__due { font-size: 11px; opacity: 0.6; }
+.sp-group__more { font-size: 11px; opacity: 0.5; padding-left: 6px; }

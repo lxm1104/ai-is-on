@@ -4,6 +4,7 @@ import { MessageList } from './components/MessageList';
 import { Composer } from './components/Composer';
 import { CardList } from './components/CardList';
 import { ContextPanel } from './components/ContextPanel';
+import { SpacesPanel } from './components/SpacesPanel';
 import {
   fetchCards,
   fetchCollectors,
@@ -188,6 +189,7 @@ export function App() {
             onRunOnce={onRunOnce}
             collectorsHint={collectorsHint}
           />
+          <SpacesPanel />
           <ContextPanel />
         </aside>
         <section className="pane pane--chat">

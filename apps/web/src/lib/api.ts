@@ -184,6 +184,70 @@ export async function fetchCardContext(cardId: string): Promise<CardContextProje
   };
 }
 
+export type ContextSpace = {
+  id: string;
+  type: 'project' | 'topic';
+  name: string;
+  description: string | null;
+  owner_subject_id: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ContextSpaceDetail = {
+  space: ContextSpace;
+  entityLinks: Array<{
+    target_id: string;
+    target_type: string;
+    link_type: string;
+  }>;
+  commitments: ContextUnit[];
+  goals: ContextUnit[];
+  decisions: unknown[];
+  risks: ContextUnit[];
+  state: ContextUnit[];
+  recentEvents: ContextUnit[];
+  allUnitCount: number;
+};
+
+export async function fetchContextSpaces(): Promise<ContextSpace[]> {
+  const r = await fetch('/api/context-spaces');
+  if (!r.ok) throw new Error(`context-spaces ${r.status}`);
+  const j = await r.json();
+  return (j.items ?? []) as ContextSpace[];
+}
+
+export async function fetchContextSpaceDetail(id: string): Promise<ContextSpaceDetail> {
+  const r = await fetch(`/api/context-spaces/${encodeURIComponent(id)}`);
+  if (!r.ok) throw new Error(`context-spaces/${id} ${r.status}`);
+  return (await r.json()) as ContextSpaceDetail;
+}
+
+export async function createContextSpace(input: {
+  name: string;
+  type: 'project' | 'topic';
+  description?: string;
+}): Promise<ContextSpace> {
+  const r = await fetch('/api/context-spaces', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    throw new Error(j.error || `context-spaces POST ${r.status}`);
+  }
+  const j = await r.json();
+  return j.space as ContextSpace;
+}
+
+export async function reconcileContextSpaces(): Promise<{ scanned: number; linked: number }> {
+  const r = await fetch('/api/context-spaces/reconcile', { method: 'POST' });
+  if (!r.ok) throw new Error(`reconcile ${r.status}`);
+  return (await r.json()) as { scanned: number; linked: number };
+}
+
 export async function postContextFeedback(input: {
   contextUnitId?: string;
   cardId?: string;
