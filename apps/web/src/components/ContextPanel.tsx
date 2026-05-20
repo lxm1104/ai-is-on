@@ -153,6 +153,43 @@ export function ContextPanel() {
   );
 }
 
+function UnitItem({ unit: u }: { unit: ContextUnit }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <li className="ctx-unit">
+      <div className="ctx-unit__head">
+        <span className={`ctx-kind ctx-kind--${u.kind}`}>{u.kind}</span>
+        <span className="ctx-unit__title">{u.title}</span>
+        <span className="ctx-unit__meta">
+          v{u.version} · conf {u.confidence.toFixed(2)} · {u.actionability}
+        </span>
+      </div>
+      <div
+        className={`ctx-unit__content ${expanded ? 'is-expanded' : ''}`}
+        onClick={() => setExpanded((v) => !v)}
+        title={expanded ? '点击收起' : '点击展开'}
+      >
+        {u.content}
+      </div>
+      {u.entities.length > 0 && (
+        <div className="ctx-unit__entities">
+          {u.entities.map((e, i) => (
+            <span key={i} className="ctx-ent-chip">
+              {e.type}:{e.name}{e.role ? ` (${e.role})` : ''}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="ctx-unit__foot">
+        <span>scope: {u.scope}</span>
+        <span>origin: {u.origin.kind}</span>
+        {u.time?.dueAt && <span>due: {u.time.dueAt}</span>}
+        <span>updated: {new Date(u.updatedAt).toLocaleString()}</span>
+      </div>
+    </li>
+  );
+}
+
 function UnitsList({ units }: { units: ContextUnit[] }) {
   if (units.length === 0) {
     return <div className="ctx-panel__empty">还没有 context unit。让 collector 跑一轮。</div>;
@@ -160,31 +197,7 @@ function UnitsList({ units }: { units: ContextUnit[] }) {
   return (
     <ul className="ctx-units">
       {units.map((u) => (
-        <li key={u.id} className="ctx-unit">
-          <div className="ctx-unit__head">
-            <span className={`ctx-kind ctx-kind--${u.kind}`}>{u.kind}</span>
-            <span className="ctx-unit__title">{u.title}</span>
-            <span className="ctx-unit__meta">
-              v{u.version} · conf {u.confidence.toFixed(2)} · {u.actionability}
-            </span>
-          </div>
-          <div className="ctx-unit__content">{u.content}</div>
-          {u.entities.length > 0 && (
-            <div className="ctx-unit__entities">
-              {u.entities.map((e, i) => (
-                <span key={i} className="ctx-ent-chip">
-                  {e.type}:{e.name}{e.role ? ` (${e.role})` : ''}
-                </span>
-              ))}
-            </div>
-          )}
-          <div className="ctx-unit__foot">
-            <span>scope: {u.scope}</span>
-            <span>origin: {u.origin.kind}</span>
-            {u.time?.dueAt && <span>due: {u.time.dueAt}</span>}
-            <span>updated: {new Date(u.updatedAt).toLocaleString()}</span>
-          </div>
-        </li>
+        <UnitItem key={u.id} unit={u} />
       ))}
     </ul>
   );

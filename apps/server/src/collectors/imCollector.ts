@@ -78,6 +78,29 @@ function shortHash(input: string): string {
   return crypto.createHash('sha256').update(input).digest('hex').slice(0, 32);
 }
 
+/**
+ * For a p2p chat, derive a readable label. Drops raw chat ids
+ * (oc_xxx) which carry no meaning to the user.
+ * Strategy: first non-empty sender.name → use it. Otherwise mark by
+ * sender type — app/bot ids start with 'cli_', user ids with 'ou_'.
+ */
+function derivePeerChatName(msgs: ImMessage[], chatId: string): string {
+  const firstNamed = msgs.find((m) => m.sender?.name && m.sender.name.trim());
+  if (firstNamed?.sender?.name) return `单聊 · ${firstNamed.sender.name}`;
+
+  const firstChatName = msgs.find((m) => m.chat_name && m.chat_name.trim());
+  if (firstChatName?.chat_name) return `单聊 · ${firstChatName.chat_name}`;
+
+  // No name anywhere — infer from sender_type / id prefix
+  const firstSender = msgs[0]?.sender;
+  if (firstSender?.sender_type === 'app' || firstSender?.id?.startsWith('cli_')) {
+    return '单聊 · (应用消息)';
+  }
+  // Fallback: at least don't expose the raw open_chat_id in the UI.
+  const tail = chatId.slice(-6);
+  return `单聊 · 未命名会话 #${tail}`;
+}
+
 function summarizeOne(msg: ImMessage, chatName: string): string {
   const lines: string[] = [];
   if (chatName) lines.push(`会话：${chatName}`);
@@ -283,7 +306,11 @@ export const imCollector: Collector = {
     });
 
     for (const { chat, msgs } of perChat) {
-      const chatName = chat.name ?? chat.chat_id ?? '未知群';
+      const chatName = chat.name?.trim()
+        ? chat.name
+        : chat.chat_id
+          ? `未命名群 #${chat.chat_id.slice(-6)}`
+          : '未知群';
       if (msgs.length >= config.imAggregateThreshold) {
         // aggregated signal: one per chat per window
         const lastMsgId = msgs[msgs.length - 1]?.message_id ?? '';
@@ -333,10 +360,7 @@ export const imCollector: Collector = {
     }
     for (const [chatId, msgs] of p2pByChat) {
       msgs.sort((a, b) => (a.create_time ?? '').localeCompare(b.create_time ?? ''));
-      const chatName =
-        msgs[0]?.sender?.name
-          ? `单聊 · ${msgs[0].sender?.name}`
-          : msgs[0]?.chat_name ?? `单聊 ${chatId}`;
+      const chatName = derivePeerChatName(msgs, chatId);
       if (msgs.length >= config.imAggregateThreshold) {
         const lastMsgId = msgs[msgs.length - 1]?.message_id ?? '';
         signals.push({

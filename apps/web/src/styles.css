@@ -730,9 +730,23 @@ body { background: var(--bg); color: var(--text); }
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 5em;
+  max-height: 6em;
   overflow: hidden;
+  position: relative;
+  cursor: pointer;
 }
+.ctx-unit__content::after {
+  content: '';
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 1.5em;
+  background: linear-gradient(to bottom, transparent, var(--panel-2));
+  pointer-events: none;
+}
+.ctx-unit__content.is-expanded {
+  max-height: none;
+}
+.ctx-unit__content.is-expanded::after { display: none; }
 .ctx-unit__entities {
   margin-top: 4px;
   display: flex;
