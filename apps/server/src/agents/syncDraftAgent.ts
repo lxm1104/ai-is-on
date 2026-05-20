@@ -118,9 +118,9 @@ export const syncDraftHandler: AgentHandler = async ({ trigger }) => {
   });
 
   return {
-    summary: `sync_draft: target=${target}, ${parsed.draft.length} chars`,
+    summary: `sync_draft: target=${target}, ${parsed.draft.length} chars${card ? '' : ' [boundary-blocked]'}`,
     proposalIds: [proposalId],
-    cardIds: [card.id],
+    cardIds: card ? [card.id] : [],
     data: parsed,
   };
 };

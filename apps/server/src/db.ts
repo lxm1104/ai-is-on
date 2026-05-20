@@ -275,6 +275,38 @@ CREATE TABLE IF NOT EXISTS decisions (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_decisions_space ON decisions(space_id);
+
+-- ============ MVP6 Boundary Learning + Limited Autonomy ============
+
+CREATE TABLE IF NOT EXISTS boundary_rules (
+  id TEXT PRIMARY KEY,
+  scope TEXT NOT NULL DEFAULT 'work',          -- 'personal' | 'work' | 'team'
+  condition_json TEXT NOT NULL,                -- structured BoundaryCondition (see §8.2)
+  allowed_action TEXT NOT NULL,                -- 'record' | 'notify' | 'draft' | 'execute_reversible'
+  requires_approval INTEGER NOT NULL DEFAULT 1,
+  confidence REAL NOT NULL DEFAULT 0.7,
+  learned_from_card_id TEXT,
+  source TEXT NOT NULL,                        -- 'user_rule_migration' | 'card_action' | 'manual'
+  migrated INTEGER NOT NULL DEFAULT 0,         -- true → unstructured, awaiting human review
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_boundary_rules_active ON boundary_rules(active);
+CREATE INDEX IF NOT EXISTS idx_boundary_rules_source ON boundary_rules(source);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id TEXT PRIMARY KEY,
+  agent_run_id TEXT,
+  card_id TEXT,
+  rule_id TEXT,
+  action TEXT NOT NULL,                        -- 'card_blocked' | 'card_softened' | 'rule_learned' | 'auto_resolved' | ...
+  reason TEXT NOT NULL,
+  payload_json TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_rule ON audit_logs(rule_id);
 `);
 
 // Forward-compat: add columns that may be missing in databases created by an earlier MVP0 boot.
@@ -1098,4 +1130,83 @@ export function listDecisionsBySpace(spaceId: string, limit = 50): DecisionRow[]
   return db
     .prepare(`SELECT * FROM decisions WHERE space_id = ? ORDER BY decided_at DESC LIMIT ?`)
     .all(spaceId, limit) as DecisionRow[];
+}
+
+// -------- boundary_rules (MVP6) --------
+
+export type BoundaryRuleRow = {
+  id: string;
+  scope: string;
+  condition_json: string;
+  allowed_action: string;
+  requires_approval: number;
+  confidence: number;
+  learned_from_card_id: string | null;
+  source: string;
+  migrated: number;
+  active: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export function insertBoundaryRule(row: BoundaryRuleRow) {
+  db.prepare(
+    `INSERT INTO boundary_rules (id, scope, condition_json, allowed_action, requires_approval,
+       confidence, learned_from_card_id, source, migrated, active, created_at, updated_at)
+     VALUES (@id, @scope, @condition_json, @allowed_action, @requires_approval,
+       @confidence, @learned_from_card_id, @source, @migrated, @active, @created_at, @updated_at)`
+  ).run(row);
+}
+
+export function listBoundaryRules(opts: { activeOnly?: boolean } = {}): BoundaryRuleRow[] {
+  if (opts.activeOnly) {
+    return db
+      .prepare(`SELECT * FROM boundary_rules WHERE active = 1 ORDER BY created_at DESC`)
+      .all() as BoundaryRuleRow[];
+  }
+  return db
+    .prepare(`SELECT * FROM boundary_rules ORDER BY created_at DESC`)
+    .all() as BoundaryRuleRow[];
+}
+
+export function getBoundaryRule(id: string): BoundaryRuleRow | null {
+  return (
+    (db.prepare(`SELECT * FROM boundary_rules WHERE id = ?`).get(id) as
+      | BoundaryRuleRow
+      | undefined) ?? null
+  );
+}
+
+export function updateBoundaryRuleActive(id: string, active: boolean): BoundaryRuleRow | null {
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE boundary_rules SET active = ?, updated_at = ? WHERE id = ?`
+  ).run(active ? 1 : 0, now, id);
+  return getBoundaryRule(id);
+}
+
+// -------- audit_logs (MVP6) --------
+
+export type AuditLogRow = {
+  id: string;
+  agent_run_id: string | null;
+  card_id: string | null;
+  rule_id: string | null;
+  action: string;
+  reason: string;
+  payload_json: string | null;
+  created_at: string;
+};
+
+export function insertAuditLog(row: AuditLogRow) {
+  db.prepare(
+    `INSERT INTO audit_logs (id, agent_run_id, card_id, rule_id, action, reason, payload_json, created_at)
+     VALUES (@id, @agent_run_id, @card_id, @rule_id, @action, @reason, @payload_json, @created_at)`
+  ).run(row);
+}
+
+export function listAuditLogs(limit = 200): AuditLogRow[] {
+  return db
+    .prepare(`SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT ?`)
+    .all(limit) as AuditLogRow[];
 }

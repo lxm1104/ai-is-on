@@ -17,9 +17,11 @@ import { agentRunsRouter } from './routes/agentRuns.js';
 import { caringRouter } from './routes/caring.js';
 import { manualEventRouter } from './routes/manualEvent.js';
 import { contextSpacesRouter } from './routes/contextSpaces.js';
+import { boundaryRouter } from './routes/boundary.js';
 import { startCollectorScheduler, stopCollectorScheduler } from './collectors/scheduler.js';
 import { startTriggerScheduler, stopTriggerScheduler } from './triggers/triggerScheduler.js';
 import { bootstrapAgents } from './agents/index.js';
+import { migrateUserRulesIfNeeded } from './boundary/migration.js';
 
 const app = express();
 app.use(cors({ origin: config.webOrigin, credentials: true }));
@@ -41,6 +43,7 @@ app.use('/api', agentRunsRouter);
 app.use('/api', caringRouter);
 app.use('/api', manualEventRouter);
 app.use('/api', contextSpacesRouter);
+app.use('/api', boundaryRouter);
 
 const server = http.createServer(app);
 attachWebSocket(server);
@@ -53,6 +56,7 @@ server.listen(config.port, '127.0.0.1', () => {
     .start()
     .then(() => console.log('[server] claude runtime started'))
     .catch((err) => console.error('[server] failed to start claude runtime:', err));
+  migrateUserRulesIfNeeded();
   bootstrapAgents();
   startCollectorScheduler();
   startTriggerScheduler();

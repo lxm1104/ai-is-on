@@ -90,10 +90,10 @@ export const trackCommitmentHandler: AgentHandler = async ({ trigger, unit }) =>
   });
 
   return {
-    summary: `${overdue ? 'overdue' : 'due-soon'} reminder for "${title}" (P=${priority})`,
+    summary: `${overdue ? 'overdue' : 'due-soon'} reminder for "${title}" (P=${priority})${card ? '' : ' [boundary-blocked]'}`,
     proposalIds: [proposalId],
-    cardIds: [card.id],
-    data: { priority, overdue, hoursAbs: hours },
+    cardIds: card ? [card.id] : [],
+    data: { priority, overdue, hoursAbs: hours, boundaryBlocked: !card },
   };
 };
 

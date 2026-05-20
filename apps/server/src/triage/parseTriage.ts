@@ -84,6 +84,7 @@ const ALLOWED_ACTION_KINDS = new Set([
   'draft_reply',
   'open_source',
   'mark_done',
+  'auto_henceforth',
 ]);
 
 const ALLOWED_PRIORITIES = new Set(['P0', 'P1', 'P2', 'P3']);

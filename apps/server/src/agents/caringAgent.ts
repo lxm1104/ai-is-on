@@ -137,9 +137,9 @@ export const caringHandler: AgentHandler = async ({ trigger }) => {
   setSetting('last_checkin_at', now);
 
   return {
-    summary: `caring: ${parsed.observations.length} obs, tone=${parsed.tone}`,
+    summary: `caring: ${parsed.observations.length} obs, tone=${parsed.tone}${card ? '' : ' [boundary-blocked]'}`,
     proposalIds: [proposalId],
-    cardIds: [card.id],
+    cardIds: card ? [card.id] : [],
     data: parsed,
   };
 };

@@ -112,9 +112,9 @@ export const prepareMeetingHandler: AgentHandler = async ({ trigger, unit }) => 
   });
 
   return {
-    summary: `meeting brief for "${unit.title}" — ${parsed.talkingPoints.length} pts, ${parsed.missingInfo.length} unknowns`,
+    summary: `meeting brief for "${unit.title}" — ${parsed.talkingPoints.length} pts, ${parsed.missingInfo.length} unknowns${card ? '' : ' [boundary-blocked]'}`,
     proposalIds: [proposalId],
-    cardIds: [card.id],
+    cardIds: card ? [card.id] : [],
     data: parsed,
   };
 };

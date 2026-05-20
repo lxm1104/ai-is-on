@@ -248,6 +248,69 @@ export async function reconcileContextSpaces(): Promise<{ scanned: number; linke
   return (await r.json()) as { scanned: number; linked: number };
 }
 
+export type BoundaryRule = {
+  id: string;
+  scope: string;
+  condition: {
+    triggerType?: string[];
+    source?: string[];
+    priorityAtMost?: string;
+    scope?: string[];
+    entityRef?: { type: string; nameLike?: string };
+    kind?: string[];
+    rawDescription?: string;
+  };
+  allowedAction: string;
+  requiresApproval: boolean;
+  confidence: number;
+  learnedFromCardId?: string;
+  source: string;
+  migrated: boolean;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AuditLog = {
+  id: string;
+  agent_run_id: string | null;
+  card_id: string | null;
+  rule_id: string | null;
+  action: string;
+  reason: string;
+  payload_json: string | null;
+  created_at: string;
+};
+
+export async function fetchBoundaryRules(activeOnly = false): Promise<BoundaryRule[]> {
+  const url = activeOnly ? '/api/boundary/rules?active=1' : '/api/boundary/rules';
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`boundary/rules ${r.status}`);
+  const j = await r.json();
+  return (j.items ?? []) as BoundaryRule[];
+}
+
+export async function patchBoundaryRule(id: string, active: boolean): Promise<BoundaryRule> {
+  const r = await fetch(`/api/boundary/rules/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ active }),
+  });
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    throw new Error(j.error || `patch boundary rule ${r.status}`);
+  }
+  const j = await r.json();
+  return j.rule as BoundaryRule;
+}
+
+export async function fetchAuditLogs(limit = 50): Promise<AuditLog[]> {
+  const r = await fetch(`/api/audit-logs?limit=${limit}`);
+  if (!r.ok) throw new Error(`audit-logs ${r.status}`);
+  const j = await r.json();
+  return (j.items ?? []) as AuditLog[];
+}
+
 export async function postContextFeedback(input: {
   contextUnitId?: string;
   cardId?: string;

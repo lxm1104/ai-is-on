@@ -40,7 +40,8 @@ export type CardActionKind =
   | 'ask_agent'
   | 'draft_reply'
   | 'open_source'
-  | 'mark_done';
+  | 'mark_done'
+  | 'auto_henceforth';
 
 export type CardAction = {
   id: string;
@@ -49,7 +50,7 @@ export type CardAction = {
   prompt?: string;
 };
 
-export type CardStatus = 'new' | 'acknowledged' | 'snoozed' | 'dismissed' | 'done';
+export type CardStatus = 'new' | 'acknowledged' | 'snoozed' | 'dismissed' | 'done' | 'batched';
 
 export type CardSourceKind = 'triage' | 'agent_run' | 'manual';
 

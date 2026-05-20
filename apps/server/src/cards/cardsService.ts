@@ -9,6 +9,10 @@ import {
   listOpenCards,
   updateCardStatus,
 } from '../db.js';
+import { evaluateCard, type CardCandidate } from '../boundary/boundaryEvaluator.js';
+import { writeAudit } from '../boundary/auditLog.js';
+import { createRule } from '../boundary/boundaryStore.js';
+import type { CardSourceKey, Priority } from '../boundary/BoundaryRule.js';
 import { broadcast } from '../ws.js';
 import { recordUserMessage } from '../messageBus.js';
 import { claudeRuntime } from '../claude/ClaudeRuntime.js';
@@ -50,6 +54,11 @@ function defaultActionsForSource(source: string): CardAction[] {
   const ack: CardAction = { id: 'ack', label: '知道了', kind: 'ack' };
   const snooze: CardAction = { id: 'snooze', label: '稍后提醒', kind: 'snooze' };
   const dismiss: CardAction = { id: 'dismiss', label: '忽略这类', kind: 'dismiss' };
+  const auto: CardAction = {
+    id: 'auto_henceforth',
+    label: '以后自动',
+    kind: 'auto_henceforth',
+  };
   const askAgent: CardAction = {
     id: 'ask_agent',
     label: '帮我处理',
@@ -60,18 +69,35 @@ function defaultActionsForSource(source: string): CardAction[] {
       { id: 'draft_reply', label: '生成回复草稿', kind: 'draft_reply' },
       askAgent,
       ack,
+      auto,
       dismiss,
     ];
   }
-  return [askAgent, ack, snooze, dismiss];
+  return [askAgent, ack, snooze, auto, dismiss];
 }
 
 export function createCardsFromTriage(ev: EventRow, item: TriageItem, triageId: string) {
+  const candidate: CardCandidate = {
+    priority: item.priority,
+    source: ev.source,
+  };
+  const decision = evaluateCard(candidate);
+  if (decision.decision === 'block') {
+    writeAudit({
+      action: 'card_blocked',
+      reason: decision.reason,
+      ruleId: decision.matchedRule.id,
+      payload: { eventId: ev.id, triageId, title: item.title, priority: item.priority },
+    });
+    return;
+  }
+
   const now = new Date().toISOString();
   const id = randomUUID();
   const actions = item.cardActions?.length
     ? item.cardActions
     : defaultActionsForSource(ev.source);
+  const status: SignalCard['status'] = decision.decision === 'soften' ? 'batched' : 'new';
   const row: CardRow = {
     id,
     triage_id: triageId,
@@ -82,7 +108,7 @@ export function createCardsFromTriage(ev: EventRow, item: TriageItem, triageId: 
     reason: item.reason,
     suggested_action: item.suggestedAction ?? null,
     draft_reply: item.draftReply ?? null,
-    status: 'new',
+    status,
     actions_json: JSON.stringify(actions),
     raw_event_id: ev.id,
     source_url: ev.url,
@@ -92,6 +118,15 @@ export function createCardsFromTriage(ev: EventRow, item: TriageItem, triageId: 
     updated_at: now,
   };
   insertCard(row);
+  if (decision.decision === 'soften') {
+    writeAudit({
+      action: 'card_softened',
+      reason: decision.reason,
+      cardId: id,
+      ruleId: decision.matchedRule.id,
+      payload: { priority: item.priority, source: ev.source },
+    });
+  }
   broadcast({ type: 'card_created', card: rowToCard(row) });
 }
 
@@ -112,10 +147,29 @@ export type ProposalCardInput = {
  * Project an ActionProposal into a SignalCard. source_kind='agent_run',
  * source_ref_id is the proposal id, so we can trace back through audit logs.
  */
-export function createCardFromProposal(input: ProposalCardInput): SignalCard {
+export function createCardFromProposal(input: ProposalCardInput): SignalCard | null {
+  const decision = evaluateCard({
+    priority: input.priority,
+    source: input.source,
+  });
+  if (decision.decision === 'block') {
+    writeAudit({
+      action: 'card_blocked',
+      reason: decision.reason,
+      ruleId: decision.matchedRule.id,
+      payload: {
+        proposalId: input.proposal.id,
+        title: input.proposal.title,
+        priority: input.priority,
+        agentType: input.agentType,
+      },
+    });
+    return null;
+  }
   const now = new Date().toISOString();
   const id = randomUUID();
   const actions = input.actions?.length ? input.actions : defaultActionsForSource(input.source);
+  const status: SignalCard['status'] = decision.decision === 'soften' ? 'batched' : 'new';
   const row: CardRow = {
     id,
     triage_id: null,
@@ -126,7 +180,7 @@ export function createCardFromProposal(input: ProposalCardInput): SignalCard {
     reason: input.reason,
     suggested_action: input.suggestedAction ?? null,
     draft_reply: input.draftReply ?? null,
-    status: 'new',
+    status,
     actions_json: JSON.stringify(actions),
     raw_event_id: input.rawEventId ?? null,
     source_url: input.sourceUrl ?? null,
@@ -136,6 +190,15 @@ export function createCardFromProposal(input: ProposalCardInput): SignalCard {
     updated_at: now,
   };
   insertCard(row);
+  if (decision.decision === 'soften') {
+    writeAudit({
+      action: 'card_softened',
+      reason: decision.reason,
+      cardId: id,
+      ruleId: decision.matchedRule.id,
+      payload: { priority: input.priority, source: input.source, agentType: input.agentType },
+    });
+  }
   const card = rowToCard(row);
   broadcast({ type: 'card_created', card });
   return card;
@@ -185,6 +248,30 @@ export async function applyCardAction(
     });
   }
 
+  if (action.kind === 'auto_henceforth') {
+    // MVP6: infer a structured boundary_rule from the card's current shape.
+    const rule = createRule({
+      scope: 'work',
+      condition: {
+        source: [row.source as CardSourceKey],
+        priorityAtMost: row.priority as Priority,
+      },
+      allowedAction: 'record',
+      requiresApproval: false,
+      confidence: 0.75,
+      source: 'card_action',
+      learnedFromCardId: row.id,
+      active: true,
+    });
+    writeAudit({
+      action: 'rule_learned',
+      reason: `用户在卡片"${row.title}"上选择"以后自动处理"`,
+      cardId: row.id,
+      ruleId: rule.id,
+      payload: { priority: row.priority, source: row.source },
+    });
+  }
+
   if (action.kind === 'ask_agent' || action.kind === 'draft_reply') {
     const prompt = action.prompt?.trim() || buildDefaultPrompt(row, action.kind);
     recordUserMessage(prompt);
@@ -211,6 +298,8 @@ function mapKindToStatus(kind: CardActionKind, prev: CardStatus): CardStatus {
     case 'snooze':
       return 'snoozed';
     case 'dismiss':
+    case 'auto_henceforth':
+      // 学了规则后，这张卡片本身也算"以后不需要看了"
       return 'dismissed';
     case 'mark_done':
       return 'done';
