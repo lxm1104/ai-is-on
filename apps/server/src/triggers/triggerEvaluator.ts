@@ -23,7 +23,11 @@ export type TriggerType =
   | 'commitment_due'
   | 'meeting_prepare'
   | 'check_in_due'
-  | 'context_divergence';
+  | 'context_divergence'
+  | 'daily_digest_due';
+
+const DIGEST_HOUR_LOCAL = Number(process.env.DIGEST_HOUR_LOCAL ?? 18);
+const DIGEST_COOLDOWN_MS = 18 * 3600_000;
 
 const CHECK_IN_HOUR_LOCAL = 12; // 中午 12 点
 const CHECK_IN_COOLDOWN_MS = 12 * 3600_000;
@@ -191,6 +195,12 @@ export function evaluateActiveUnitsForPullPath(now: number = Date.now()): string
     const id = persistTrigger(cd);
     if (id) ids.push(id);
   }
+  // MVP6.1 daily_digest_due — 18:00 local 之后，距上次 digest > 18h，合并近 24h P2/P3 卡片
+  const dd = evaluateDailyDigest(now);
+  if (dd) {
+    const id = persistTrigger(dd);
+    if (id) ids.push(id);
+  }
   // MVP5.1 context_divergence — 扫所有 Space，给每条 divergence finding 写一个 trigger
   try {
     const findings = detectAllDivergences(now);
@@ -256,5 +266,25 @@ export function evaluateCheckIn(now: number): TriggerDraft | null {
       personalUnitCount: personalRows.length,
       hourLocal: d.getHours(),
     },
+  };
+}
+
+/** MVP6.1 daily_digest_due. 18:00 local 之后，每日最多一次。 */
+export function evaluateDailyDigest(now: number): TriggerDraft | null {
+  const d = new Date(now);
+  if (d.getHours() < DIGEST_HOUR_LOCAL) return null;
+  const last = getSetting('last_digest_at');
+  if (last) {
+    const lastMs = new Date(last).getTime();
+    if (Number.isFinite(lastMs) && now - lastMs < DIGEST_COOLDOWN_MS) return null;
+  }
+  const dayBucket = d.toISOString().slice(0, 10);
+  return {
+    triggerType: 'daily_digest_due',
+    contextUnitId: 'system',
+    dueAt: d.toISOString(),
+    dueAtBucket: dayBucket,
+    reasoning: `${DIGEST_HOUR_LOCAL} 点后，距上次日报 > 18h，准备合并 P2/P3`,
+    payload: { hourLocal: d.getHours() },
   };
 }

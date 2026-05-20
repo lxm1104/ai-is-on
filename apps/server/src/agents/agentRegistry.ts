@@ -52,6 +52,8 @@ export function selectAgentForTrigger(triggerType: string): string | null {
       return 'caring';
     case 'context_divergence':
       return 'sync_draft';
+    case 'daily_digest_due':
+      return 'daily_digest';
     default:
       return null;
   }
