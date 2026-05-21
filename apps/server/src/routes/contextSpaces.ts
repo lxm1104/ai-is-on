@@ -1,14 +1,18 @@
 import { Router } from 'express';
 import {
   archiveSpace,
+  confirmChatAffinitySuggestion,
   createSpace,
   getSpaceDetail,
   listSpaces,
+  listSuggestionsForSpace,
   reconcileAllUnitsToSpaces,
+  rejectSuggestion,
   type SpaceType,
 } from '../spaces/contextSpaceService.js';
 import { getContextUnitById } from '../context/contextStore.js';
 import { listDecisionsBySpace } from '../db.js';
+import { runSuggestionWorker } from '../spaces/suggestionWorker.js';
 
 export const contextSpacesRouter = Router();
 
@@ -83,4 +87,69 @@ contextSpacesRouter.post('/context-spaces/:id/archive', (req, res) => {
     return;
   }
   res.json({ space: row });
+});
+
+// ---------- MVP12 Phase 2/3：suggestions ----------
+
+contextSpacesRouter.get('/context-spaces/:id/suggestions', (req, res) => {
+  const status = typeof req.query.status === 'string' ? req.query.status : 'suggested';
+  const items = listSuggestionsForSpace(req.params.id, status);
+  // 解 evidence_json，方便前端直接渲染
+  const out = items.map((s) => {
+    let evidence: unknown = null;
+    try {
+      evidence = JSON.parse(s.evidence_json);
+    } catch {
+      evidence = null;
+    }
+    return { ...s, evidence };
+  });
+  res.json({ items: out });
+});
+
+contextSpacesRouter.post(
+  '/context-spaces/:id/suggestions/:sid/confirm',
+  (req, res) => {
+    const r = confirmChatAffinitySuggestion({
+      spaceId: req.params.id,
+      suggestionId: req.params.sid,
+    });
+    if (!r.ok) {
+      res.status(400).json({ error: r.reason ?? 'failed' });
+      return;
+    }
+    res.json(r);
+  }
+);
+
+contextSpacesRouter.post(
+  '/context-spaces/:id/suggestions/:sid/reject',
+  (req, res) => {
+    const r = rejectSuggestion({
+      spaceId: req.params.id,
+      suggestionId: req.params.sid,
+      cooldownDays:
+        typeof req.body?.cooldownDays === 'number'
+          ? req.body.cooldownDays
+          : undefined,
+    });
+    if (!r.ok) {
+      res.status(400).json({ error: r.reason ?? 'failed' });
+      return;
+    }
+    res.json(r);
+  }
+);
+
+// 触发后台 worker（首期手动；后续可加 setInterval）
+contextSpacesRouter.post('/context-spaces/run-suggestion-worker', (_req, res) => {
+  try {
+    const stats = runSuggestionWorker();
+    res.json({ ok: true, stats });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 });

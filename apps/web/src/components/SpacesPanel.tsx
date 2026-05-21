@@ -1,11 +1,16 @@
 import { useEffect, useState } from 'react';
 import {
+  confirmSpaceSuggestion,
   createContextSpace,
   fetchContextSpaceDetail,
   fetchContextSpaces,
+  fetchSpaceSuggestions,
   reconcileContextSpaces,
+  rejectSpaceSuggestion,
+  runSpaceSuggestionWorker,
   type ContextSpace,
   type ContextSpaceDetail,
+  type SpaceSuggestion,
 } from '../lib/api';
 import type { ContextUnit } from '../types';
 
@@ -159,7 +164,13 @@ export function SpacesPanel() {
             ))}
           </ul>
           {detail && selectedId && (
-            <SpaceDetail detail={detail} />
+            <SpaceDetail
+              detail={detail}
+              onReloadDetail={async () => {
+                const d = await fetchContextSpaceDetail(selectedId);
+                setDetail(d);
+              }}
+            />
           )}
         </div>
       )}
@@ -167,7 +178,13 @@ export function SpacesPanel() {
   );
 }
 
-function SpaceDetail({ detail }: { detail: ContextSpaceDetail }) {
+function SpaceDetail({
+  detail,
+  onReloadDetail,
+}: {
+  detail: ContextSpaceDetail;
+  onReloadDetail: () => Promise<void>;
+}) {
   const { space, commitments, goals, risks, state, recentEvents, allUnitCount, entityLinks } = detail;
   return (
     <div className="sp-detail">
@@ -178,6 +195,7 @@ function SpaceDetail({ detail }: { detail: ContextSpaceDetail }) {
         </span>
       </div>
       {space.description && <div className="sp-detail__desc">{space.description}</div>}
+      <SuggestionsSection spaceId={space.id} onAfterConfirm={onReloadDetail} />
       <SpaceGroup title="关键承诺" units={commitments} />
       <SpaceGroup title="目标 / 意图" units={goals} />
       <SpaceGroup title="状态" units={state} />
@@ -188,6 +206,175 @@ function SpaceDetail({ detail }: { detail: ContextSpaceDetail }) {
       )}
     </div>
   );
+}
+
+// MVP12 Phase 2/3 — "📥 建议加入" 区块。
+function SuggestionsSection({
+  spaceId,
+  onAfterConfirm,
+}: {
+  spaceId: string;
+  onAfterConfirm: () => Promise<void>;
+}) {
+  const [items, setItems] = useState<SpaceSuggestion[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  async function refresh() {
+    setLoading(true);
+    setErr(null);
+    try {
+      setItems(await fetchSpaceSuggestions(spaceId));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+  useEffect(() => {
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spaceId]);
+
+  async function onRunWorker() {
+    setLoading(true);
+    setErr(null);
+    try {
+      const r = await runSpaceSuggestionWorker();
+      if (r.stats) {
+        setErr(
+          `worker: chats=${r.stats.chatsScanned} (skip ${r.stats.chatsBigSkipped}) · ` +
+            `chat=${r.stats.chatAffinityInserted}+${r.stats.chatAffinityUpdated} · ` +
+            `person=${r.stats.personCoOccurInserted}+${r.stats.personCoOccurUpdated}`
+        );
+      }
+      await refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function onConfirm(s: SpaceSuggestion) {
+    setBusyId(s.id);
+    setErr(null);
+    try {
+      const r = await confirmSpaceSuggestion(spaceId, s.id);
+      if (r.reconciled) {
+        setErr(`confirmed · reconciled scanned=${r.reconciled.scanned} linked=${r.reconciled.linked}`);
+      }
+      await refresh();
+      await onAfterConfirm();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function onReject(s: SpaceSuggestion) {
+    setBusyId(s.id);
+    setErr(null);
+    try {
+      await rejectSpaceSuggestion(spaceId, s.id);
+      await refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div className="sp-group sp-sugs">
+      <div className="sp-group__title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        📥 建议加入（{items.length}）
+        <button
+          type="button"
+          className="btn btn--ghost"
+          style={{ marginLeft: 'auto' }}
+          onClick={() => void onRunWorker()}
+          disabled={loading}
+          title="重新扫近 7 天的 unit，看看有哪些 chat / person 值得加进这个 Space"
+        >
+          {loading ? '扫描中…' : '↻ 重新扫描'}
+        </button>
+      </div>
+      {err && <div className="ctx-panel__err">{err}</div>}
+      {items.length === 0 && !loading && (
+        <div className="ctx-panel__empty" style={{ fontSize: 12 }}>
+          暂无建议。点 ↻ 重新扫描 触发一次。
+        </div>
+      )}
+      <ul className="sp-group__list">
+        {items.map((s) => (
+          <li key={s.id} className="sp-group__item" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className={`ctx-kind ctx-kind--${s.suggestion_type === 'chat_affinity' ? 'commitment' : 'state'}`}>
+                {s.suggestion_type === 'chat_affinity' ? 'chat' : 'person'}
+              </span>
+              <span className="sp-group__name" style={{ flex: 1 }}>
+                {renderSuggestionLabel(s)}
+              </span>
+              <span className="sp-group__due">score {s.score.toFixed(2)}</span>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
+              {renderSuggestionEvidence(s)}
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={() => void onConfirm(s)}
+                disabled={busyId === s.id}
+              >
+                {busyId === s.id ? '…' : '✓ 加入'}
+              </button>
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={() => void onReject(s)}
+                disabled={busyId === s.id}
+                title="30 天内不再建议"
+              >
+                ✕ 不要
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function renderSuggestionLabel(s: SpaceSuggestion): string {
+  if (s.suggestion_type === 'chat_affinity') {
+    const ev = s.evidence ?? {};
+    const alias = ev.chatAliases && ev.chatAliases.length ? ev.chatAliases[0] : undefined;
+    const id = ev.chatName?.replace('lark_chat:', '').slice(-6) ?? '???';
+    return alias ? `${alias} (#${id})` : `群 #${id}`;
+  }
+  return `person ${s.target_id.slice(0, 8)}…`;
+}
+
+function renderSuggestionEvidence(s: SpaceSuggestion): string {
+  const ev = s.evidence ?? {};
+  if (s.suggestion_type === 'chat_affinity') {
+    const parts: string[] = [];
+    if (ev.unitsInChat != null) parts.push(`${ev.unitsInChat} units`);
+    if (ev.directHits != null) parts.push(`${ev.directHits} 命中`);
+    if (ev.personOverlap) parts.push(`${ev.personOverlap} 同人`);
+    if (ev.docOverlap) parts.push(`${ev.docOverlap} 同 doc`);
+    if (ev.recentDays) parts.push(`近 ${ev.recentDays}d`);
+    return parts.join(' · ');
+  }
+  // person_co_occur
+  const parts: string[] = [];
+  if (ev.coOccurCount != null) parts.push(`与 seed 共现 ${ev.coOccurCount} 次`);
+  if (ev.chatName) parts.push(`群 ${ev.chatName.slice(-8)}`);
+  return parts.join(' · ');
 }
 
 function SpaceGroup({ title, units }: { title: string; units: ContextUnit[] }) {

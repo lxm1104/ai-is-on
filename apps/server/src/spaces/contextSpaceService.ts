@@ -1,13 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import {
+  db,
   type ContextSpaceLinkRow,
   type ContextSpaceRow,
+  type ContextSpaceSuggestionRow,
   getContextSpace,
   getContextSpaceByTypeName,
   insertContextSpace,
   listContextSpaces,
   listContextUnits,
   listSpaceLinks,
+  listSpaceSuggestions,
   listSpacesForTarget,
   listUnitRoutingCacheByUnit,
   tryInsertContextSpaceLink,
@@ -212,6 +215,94 @@ export function resolveUnitToSpaces(unit: ContextUnit): string[] {
     if (r === 'inserted' || r === 'upgraded') linked.push(spaceId);
   }
   return linked;
+}
+
+// MVP12 Phase 2 §5.2：confirm 一条 chat_affinity suggestion → 写 chat seed +
+// 触发 reconcile，让历史 unit 也补上 'about_via_chat' link。
+//
+// 同时把该 suggestion 状态置为 'confirmed'。返回 reconcile 命中数。
+export function confirmChatAffinitySuggestion(args: {
+  spaceId: string;
+  suggestionId: string;
+}): {
+  ok: boolean;
+  reason?: string;
+  reconciled?: { scanned: number; linked: number };
+} {
+  const row = listAllSuggestionsForSpace(args.spaceId).find(
+    (s) => s.id === args.suggestionId
+  );
+  if (!row) return { ok: false, reason: 'suggestion not found' };
+  if (row.suggestion_type !== 'chat_affinity')
+    return { ok: false, reason: 'only chat_affinity supported here' };
+  if (row.target_type !== 'entity') return { ok: false, reason: 'bad target_type' };
+
+  // 写 chat seed entity link（target_type='entity', link_type='about', confidence=1.0）
+  const now = new Date().toISOString();
+  tryInsertContextSpaceLink({
+    id: randomUUID(),
+    space_id: args.spaceId,
+    target_type: 'entity',
+    target_id: row.target_id,
+    link_type: 'about',
+    confidence: 1.0,
+    created_at: now,
+    reason_json: JSON.stringify({
+      via: 'chat_seed_confirmed',
+      sourceEntityId: row.target_id,
+      sourceEntityName: row.target_id,
+    }),
+  });
+  // 状态机
+  updateSuggestionStatus(args.suggestionId, 'confirmed', null);
+  // reconcile：把现有 unit 通过此 chat seed 重新路由
+  const stats = reconcileAllUnitsToSpaces();
+  return { ok: true, reconciled: stats };
+}
+
+export function rejectSuggestion(args: {
+  spaceId: string;
+  suggestionId: string;
+  cooldownDays?: number;
+}): { ok: boolean; reason?: string; cooldownUntil?: string } {
+  const days = args.cooldownDays ?? 30;
+  const row = listAllSuggestionsForSpace(args.spaceId).find(
+    (s) => s.id === args.suggestionId
+  );
+  if (!row) return { ok: false, reason: 'suggestion not found' };
+  const cooldownUntil = new Date(
+    Date.now() + days * 86400_000
+  ).toISOString();
+  updateSuggestionStatus(args.suggestionId, 'rejected', cooldownUntil);
+  return { ok: true, cooldownUntil };
+}
+
+function listAllSuggestionsForSpace(spaceId: string): ContextSpaceSuggestionRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM context_space_suggestions
+       WHERE space_id = ? ORDER BY score DESC, updated_at DESC`
+    )
+    .all(spaceId) as ContextSpaceSuggestionRow[];
+}
+
+function updateSuggestionStatus(
+  id: string,
+  status: 'suggested' | 'confirmed' | 'rejected',
+  cooldownUntil: string | null
+): void {
+  db.prepare(
+    `UPDATE context_space_suggestions
+     SET status = ?, cooldown_until = ?, updated_at = ?
+     WHERE id = ?`
+  ).run(status, cooldownUntil, new Date().toISOString(), id);
+}
+
+export function listSuggestionsForSpace(
+  spaceId: string,
+  status?: string
+): ContextSpaceSuggestionRow[] {
+  return listSpaceSuggestions(spaceId, status);
 }
 
 /**

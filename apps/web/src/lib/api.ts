@@ -271,6 +271,103 @@ export async function reconcileContextSpaces(): Promise<{ scanned: number; linke
   return (await r.json()) as { scanned: number; linked: number };
 }
 
+// -------- MVP12 Phase 2/3 suggestions --------
+
+export type SpaceSuggestion = {
+  id: string;
+  target_type: string;
+  target_id: string;
+  space_id: string;
+  suggestion_type: 'chat_affinity' | 'person_co_occur';
+  score: number;
+  evidence: {
+    unitsInChat?: number;
+    directHits?: number;
+    personOverlap?: number;
+    docOverlap?: number;
+    distinctSenders?: number;
+    chatName?: string;
+    chatAliases?: string[];
+    coOccurCount?: number;
+    chatId?: string;
+    recentDays?: number;
+  } | null;
+  status: string;
+  cooldown_until: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export async function fetchSpaceSuggestions(
+  spaceId: string,
+  status: 'suggested' | 'confirmed' | 'rejected' = 'suggested'
+): Promise<SpaceSuggestion[]> {
+  const r = await fetch(
+    `/api/context-spaces/${encodeURIComponent(spaceId)}/suggestions?status=${status}`
+  );
+  if (!r.ok) throw new Error(`suggestions ${r.status}`);
+  const j = await r.json();
+  return (j.items ?? []) as SpaceSuggestion[];
+}
+
+export async function confirmSpaceSuggestion(
+  spaceId: string,
+  sid: string
+): Promise<{ ok: boolean; reconciled?: { scanned: number; linked: number } }> {
+  const r = await fetch(
+    `/api/context-spaces/${encodeURIComponent(spaceId)}/suggestions/${encodeURIComponent(sid)}/confirm`,
+    { method: 'POST' }
+  );
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    throw new Error(j.error || `confirm ${r.status}`);
+  }
+  return (await r.json()) as { ok: boolean; reconciled?: { scanned: number; linked: number } };
+}
+
+export async function rejectSpaceSuggestion(
+  spaceId: string,
+  sid: string
+): Promise<{ ok: boolean; cooldownUntil?: string }> {
+  const r = await fetch(
+    `/api/context-spaces/${encodeURIComponent(spaceId)}/suggestions/${encodeURIComponent(sid)}/reject`,
+    { method: 'POST' }
+  );
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    throw new Error(j.error || `reject ${r.status}`);
+  }
+  return (await r.json()) as { ok: boolean; cooldownUntil?: string };
+}
+
+export async function runSpaceSuggestionWorker(): Promise<{
+  ok: boolean;
+  stats?: {
+    chatsScanned: number;
+    chatsBigSkipped: number;
+    chatAffinityInserted: number;
+    chatAffinityUpdated: number;
+    personCoOccurInserted: number;
+    personCoOccurUpdated: number;
+  };
+}> {
+  const r = await fetch('/api/context-spaces/run-suggestion-worker', {
+    method: 'POST',
+  });
+  if (!r.ok) throw new Error(`worker ${r.status}`);
+  return (await r.json()) as {
+    ok: boolean;
+    stats?: {
+      chatsScanned: number;
+      chatsBigSkipped: number;
+      chatAffinityInserted: number;
+      chatAffinityUpdated: number;
+      personCoOccurInserted: number;
+      personCoOccurUpdated: number;
+    };
+  };
+}
+
 export type BoundaryRule = {
   id: string;
   scope: string;
