@@ -8,6 +8,8 @@ import {
   listSuggestionsForSpace,
   reconcileAllUnitsToSpaces,
   rejectSuggestion,
+  type ConfirmReasonCode,
+  type RejectReasonCode,
   type SpaceType,
 } from '../spaces/contextSpaceService.js';
 import { getContextUnitById } from '../context/contextStore.js';
@@ -107,12 +109,43 @@ contextSpacesRouter.get('/context-spaces/:id/suggestions', (req, res) => {
   res.json({ items: out });
 });
 
+const CONFIRM_REASONS: ConfirmReasonCode[] = [
+  'exact_project_chat',
+  'useful_context_source',
+  'name_match',
+  'people_match',
+  'doc_match',
+  'other',
+];
+const REJECT_REASONS: RejectReasonCode[] = [
+  'wrong_space',
+  'chat_too_broad',
+  'only_incidental_mention',
+  'obsolete',
+  'duplicate_seed',
+  'private_or_noise',
+  'permanent_not_relevant',
+  'other',
+];
+
 contextSpacesRouter.post(
   '/context-spaces/:id/suggestions/:sid/confirm',
   (req, res) => {
+    const body = req.body ?? {};
+    const reasonCode =
+      typeof body.reasonCode === 'string' &&
+      CONFIRM_REASONS.includes(body.reasonCode as ConfirmReasonCode)
+        ? (body.reasonCode as ConfirmReasonCode)
+        : undefined;
+    const comment =
+      typeof body.comment === 'string' && body.comment.trim().length > 0
+        ? body.comment.trim()
+        : undefined;
     const r = confirmChatAffinitySuggestion({
       spaceId: req.params.id,
       suggestionId: req.params.sid,
+      reasonCode,
+      comment,
     });
     if (!r.ok) {
       res.status(400).json({ error: r.reason ?? 'failed' });
@@ -125,12 +158,24 @@ contextSpacesRouter.post(
 contextSpacesRouter.post(
   '/context-spaces/:id/suggestions/:sid/reject',
   (req, res) => {
+    const body = req.body ?? {};
+    const reasonCode =
+      typeof body.reasonCode === 'string' &&
+      REJECT_REASONS.includes(body.reasonCode as RejectReasonCode)
+        ? (body.reasonCode as RejectReasonCode)
+        : undefined;
+    const comment =
+      typeof body.comment === 'string' && body.comment.trim().length > 0
+        ? body.comment.trim()
+        : undefined;
     const r = rejectSuggestion({
       spaceId: req.params.id,
       suggestionId: req.params.sid,
+      reasonCode,
+      comment,
       cooldownDays:
-        typeof req.body?.cooldownDays === 'number'
-          ? req.body.cooldownDays
+        typeof body.cooldownDays === 'number'
+          ? body.cooldownDays
           : undefined,
     });
     if (!r.ok) {
@@ -142,14 +187,17 @@ contextSpacesRouter.post(
 );
 
 // 触发后台 worker（首期手动；后续可加 setInterval）
-contextSpacesRouter.post('/context-spaces/run-suggestion-worker', (_req, res) => {
-  try {
-    const stats = runSuggestionWorker();
-    res.json({ ok: true, stats });
-  } catch (err) {
-    res.status(500).json({
-      ok: false,
-      error: err instanceof Error ? err.message : String(err),
-    });
+contextSpacesRouter.post(
+  '/context-spaces/run-suggestion-worker',
+  async (_req, res) => {
+    try {
+      const stats = await runSuggestionWorker();
+      res.json({ ok: true, stats });
+    } catch (err) {
+      res.status(500).json({
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
-});
+);

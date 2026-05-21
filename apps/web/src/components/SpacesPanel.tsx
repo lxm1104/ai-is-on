@@ -257,11 +257,14 @@ function SuggestionsSection({
     }
   }
 
-  async function onConfirm(s: SpaceSuggestion) {
+  async function onConfirm(
+    s: SpaceSuggestion,
+    reasonCode?: import('../lib/api').SpaceConfirmReason
+  ) {
     setBusyId(s.id);
     setErr(null);
     try {
-      const r = await confirmSpaceSuggestion(spaceId, s.id);
+      const r = await confirmSpaceSuggestion(spaceId, s.id, { reasonCode });
       if (r.reconciled) {
         setErr(`confirmed · reconciled scanned=${r.reconciled.scanned} linked=${r.reconciled.linked}`);
       }
@@ -274,11 +277,14 @@ function SuggestionsSection({
     }
   }
 
-  async function onReject(s: SpaceSuggestion) {
+  async function onReject(
+    s: SpaceSuggestion,
+    reasonCode?: import('../lib/api').SpaceRejectReason
+  ) {
     setBusyId(s.id);
     setErr(null);
     try {
-      await rejectSpaceSuggestion(spaceId, s.id);
+      await rejectSpaceSuggestion(spaceId, s.id, { reasonCode });
       await refresh();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -323,23 +329,51 @@ function SuggestionsSection({
             <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>
               {renderSuggestionEvidence(s)}
             </div>
-            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+            <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
               <button
                 type="button"
                 className="btn btn--ghost"
-                onClick={() => void onConfirm(s)}
+                onClick={() => void onConfirm(s, 'exact_project_chat')}
                 disabled={busyId === s.id}
+                title="确认加入：这就是本项目的群"
               >
                 {busyId === s.id ? '…' : '✓ 加入'}
               </button>
               <button
                 type="button"
                 className="btn btn--ghost"
-                onClick={() => void onReject(s)}
+                onClick={() => void onReject(s, 'wrong_space')}
                 disabled={busyId === s.id}
-                title="30 天内不再建议"
+                title="90 天内不再建议：放错 Space 了"
               >
-                ✕ 不要
+                ✕ 错 Space
+              </button>
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={() => void onReject(s, 'chat_too_broad')}
+                disabled={busyId === s.id}
+                title="30 天内不再建议：群太宽，不专属本项目"
+              >
+                ✕ 群太泛
+              </button>
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={() => void onReject(s, 'only_incidental_mention')}
+                disabled={busyId === s.id}
+                title="30 天内不再建议：只是偶然提到"
+              >
+                ✕ 偶然提到
+              </button>
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={() => void onReject(s, 'private_or_noise')}
+                disabled={busyId === s.id}
+                title="90 天内不再建议：私人或噪声"
+              >
+                ✕ 噪声
               </button>
             </div>
           </li>

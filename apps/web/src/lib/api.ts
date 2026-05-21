@@ -310,13 +310,36 @@ export async function fetchSpaceSuggestions(
   return (j.items ?? []) as SpaceSuggestion[];
 }
 
+export type SpaceConfirmReason =
+  | 'exact_project_chat'
+  | 'useful_context_source'
+  | 'name_match'
+  | 'people_match'
+  | 'doc_match'
+  | 'other';
+
+export type SpaceRejectReason =
+  | 'wrong_space'
+  | 'chat_too_broad'
+  | 'only_incidental_mention'
+  | 'obsolete'
+  | 'duplicate_seed'
+  | 'private_or_noise'
+  | 'permanent_not_relevant'
+  | 'other';
+
 export async function confirmSpaceSuggestion(
   spaceId: string,
-  sid: string
+  sid: string,
+  opts: { reasonCode?: SpaceConfirmReason; comment?: string } = {}
 ): Promise<{ ok: boolean; reconciled?: { scanned: number; linked: number } }> {
   const r = await fetch(
     `/api/context-spaces/${encodeURIComponent(spaceId)}/suggestions/${encodeURIComponent(sid)}/confirm`,
-    { method: 'POST' }
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(opts ?? {}),
+    }
   );
   if (!r.ok) {
     const j = await r.json().catch(() => ({}));
@@ -327,11 +350,20 @@ export async function confirmSpaceSuggestion(
 
 export async function rejectSpaceSuggestion(
   spaceId: string,
-  sid: string
+  sid: string,
+  opts: {
+    reasonCode?: SpaceRejectReason;
+    comment?: string;
+    cooldownDays?: number;
+  } = {}
 ): Promise<{ ok: boolean; cooldownUntil?: string }> {
   const r = await fetch(
     `/api/context-spaces/${encodeURIComponent(spaceId)}/suggestions/${encodeURIComponent(sid)}/reject`,
-    { method: 'POST' }
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(opts ?? {}),
+    }
   );
   if (!r.ok) {
     const j = await r.json().catch(() => ({}));
@@ -340,16 +372,25 @@ export async function rejectSpaceSuggestion(
   return (await r.json()) as { ok: boolean; cooldownUntil?: string };
 }
 
+export type SpaceWorkerStats = {
+  chatsScanned: number;
+  chatsBigSkipped: number;
+  chatAffinityInserted: number;
+  chatAffinityUpdated: number;
+  personCoOccurInserted: number;
+  personCoOccurUpdated: number;
+  candidateGenerated?: number;
+  candidateRanked?: number;
+  llmAccepted?: number;
+  llmRejected?: number;
+  llmFailed?: number;
+  rankerCacheHit?: number;
+  fallbackSuggested?: number;
+};
+
 export async function runSpaceSuggestionWorker(): Promise<{
   ok: boolean;
-  stats?: {
-    chatsScanned: number;
-    chatsBigSkipped: number;
-    chatAffinityInserted: number;
-    chatAffinityUpdated: number;
-    personCoOccurInserted: number;
-    personCoOccurUpdated: number;
-  };
+  stats?: SpaceWorkerStats;
 }> {
   const r = await fetch('/api/context-spaces/run-suggestion-worker', {
     method: 'POST',

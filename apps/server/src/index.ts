@@ -22,6 +22,7 @@ import { bootstrapRouter } from './routes/bootstrap.js';
 import { correctionRouter } from './routes/correction.js';
 import { actionItemsRouter } from './routes/actionItems.js';
 import { resolveRouter } from './routes/resolve.js';
+import { adminSuggestionRouter } from './routes/adminSuggestion.js';
 import { startCollectorScheduler, stopCollectorScheduler } from './collectors/scheduler.js';
 import { startTriggerScheduler, stopTriggerScheduler } from './triggers/triggerScheduler.js';
 import { bootstrapAgents } from './agents/index.js';
@@ -52,6 +53,7 @@ app.use('/api', bootstrapRouter);
 app.use('/api', correctionRouter);
 app.use('/api', actionItemsRouter);
 app.use('/api', resolveRouter);
+app.use('/api', adminSuggestionRouter);
 
 const server = http.createServer(app);
 attachWebSocket(server);

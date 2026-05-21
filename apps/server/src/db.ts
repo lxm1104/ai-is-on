@@ -418,6 +418,77 @@ ensureColumn('boundary_rules', 'impact_scope', "TEXT NOT NULL DEFAULT 'self'");
 // （via='person'|'doc'|'chat_seed' ...）。upsertContextSpaceLinkBestHit cap 5 条 evidence。
 ensureColumn('context_space_links', 'reason_json', 'TEXT');
 
+// MVP13 §3.1: Space intent + Work Map ref
+ensureColumn('context_spaces', 'intent_json', "TEXT NOT NULL DEFAULT '{}'");
+ensureColumn('context_spaces', 'work_map_ref_json', 'TEXT');
+ensureColumn('context_spaces', 'suggestion_policy', "TEXT NOT NULL DEFAULT 'manual_confirm'");
+
+// MVP13 §3.2: context_space_suggestions 扩展 LLM ranker 输出
+ensureColumn('context_space_suggestions', 'rule_score', 'REAL');
+ensureColumn('context_space_suggestions', 'llm_score', 'REAL');
+ensureColumn('context_space_suggestions', 'final_score', 'REAL');
+ensureColumn('context_space_suggestions', 'llm_decision', 'TEXT');
+ensureColumn('context_space_suggestions', 'llm_confidence', 'REAL');
+ensureColumn('context_space_suggestions', 'ranker_status', "TEXT NOT NULL DEFAULT 'rule_only'");
+ensureColumn('context_space_suggestions', 'ranker_version', 'TEXT');
+ensureColumn('context_space_suggestions', 'model_id', 'TEXT');
+ensureColumn('context_space_suggestions', 'decided_at', 'TEXT');
+ensureColumn('context_space_suggestions', 'decided_by', 'TEXT');
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_css_ranker_status
+  ON context_space_suggestions(ranker_status);
+CREATE INDEX IF NOT EXISTS idx_css_decided_at
+  ON context_space_suggestions(decided_at);
+
+-- MVP13 §3.3: ranker run audit + input_hash cache
+CREATE TABLE IF NOT EXISTS context_space_ranker_runs (
+  id TEXT PRIMARY KEY,
+  worker_run_id TEXT NOT NULL,
+  ranker_version TEXT NOT NULL,
+  prompt_version TEXT NOT NULL,
+  model_id TEXT,
+  status TEXT NOT NULL,
+  candidate_count INTEGER NOT NULL DEFAULT 0,
+  accepted_count INTEGER NOT NULL DEFAULT 0,
+  rejected_count INTEGER NOT NULL DEFAULT 0,
+  input_hash TEXT NOT NULL,
+  input_summary_json TEXT NOT NULL,
+  output_json TEXT,
+  reused_from_run_id TEXT,
+  error TEXT,
+  started_at TEXT NOT NULL,
+  completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_csr_input_hash
+  ON context_space_ranker_runs(input_hash, started_at);
+CREATE INDEX IF NOT EXISTS idx_csr_worker
+  ON context_space_ranker_runs(worker_run_id);
+CREATE INDEX IF NOT EXISTS idx_csr_status
+  ON context_space_ranker_runs(status);
+
+-- MVP13 §3.4: feedback history（snapshot 不丢，行级 upsert 不损失历史）
+CREATE TABLE IF NOT EXISTS context_space_suggestion_feedback (
+  id TEXT PRIMARY KEY,
+  suggestion_id TEXT NOT NULL,
+  space_id TEXT NOT NULL,
+  target_type TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  suggestion_type TEXT NOT NULL,
+  action TEXT NOT NULL,
+  reason_code TEXT NOT NULL,
+  comment TEXT,
+  cooldown_until TEXT,
+  snapshot_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cssf_space
+  ON context_space_suggestion_feedback(space_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_cssf_target
+  ON context_space_suggestion_feedback(target_type, target_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_cssf_reason
+  ON context_space_suggestion_feedback(reason_code);
+`);
+
 // MVP3 迁移：旧的 idempotency 索引是 partial (WHERE status='pending')，
 // 导致 pull worker 每 60s 对同一 commitment 重复触发新 trigger，
 // 累计后会刷一屏卡片。改为全状态 UNIQUE。
@@ -1156,7 +1227,7 @@ export function setSetting(key: string, value: string): void {
   ).run(key, value, now);
 }
 
-// -------- context_spaces (MVP5) --------
+// -------- context_spaces (MVP5 + MVP13) --------
 
 export type ContextSpaceRow = {
   id: string;
@@ -1167,13 +1238,24 @@ export type ContextSpaceRow = {
   status: string;
   created_at: string;
   updated_at: string;
+  // MVP13 §3.1
+  intent_json?: string;
+  work_map_ref_json?: string | null;
+  suggestion_policy?: string;
 };
 
 export function insertContextSpace(row: ContextSpaceRow) {
   db.prepare(
-    `INSERT INTO context_spaces (id, type, name, description, owner_subject_id, status, created_at, updated_at)
-     VALUES (@id, @type, @name, @description, @owner_subject_id, @status, @created_at, @updated_at)`
-  ).run(row);
+    `INSERT INTO context_spaces (id, type, name, description, owner_subject_id, status, created_at, updated_at,
+       intent_json, work_map_ref_json, suggestion_policy)
+     VALUES (@id, @type, @name, @description, @owner_subject_id, @status, @created_at, @updated_at,
+       @intent_json, @work_map_ref_json, @suggestion_policy)`
+  ).run({
+    ...row,
+    intent_json: row.intent_json ?? '{}',
+    work_map_ref_json: row.work_map_ref_json ?? null,
+    suggestion_policy: row.suggestion_policy ?? 'manual_confirm',
+  });
 }
 
 export function getContextSpace(id: string): ContextSpaceRow | null {
@@ -1203,9 +1285,17 @@ export function listContextSpaces(opts: { status?: string; limit?: number } = {}
 export function updateContextSpace(row: ContextSpaceRow) {
   db.prepare(
     `UPDATE context_spaces SET type=@type, name=@name, description=@description,
-       owner_subject_id=@owner_subject_id, status=@status, updated_at=@updated_at
+       owner_subject_id=@owner_subject_id, status=@status, updated_at=@updated_at,
+       intent_json=COALESCE(@intent_json, intent_json),
+       work_map_ref_json=@work_map_ref_json,
+       suggestion_policy=COALESCE(@suggestion_policy, suggestion_policy)
      WHERE id=@id`
-  ).run(row);
+  ).run({
+    ...row,
+    intent_json: row.intent_json ?? null,
+    work_map_ref_json: row.work_map_ref_json ?? null,
+    suggestion_policy: row.suggestion_policy ?? null,
+  });
 }
 
 // -------- context_space_links --------
@@ -1692,7 +1782,7 @@ export function listUnitRoutingCacheByUnit(unitId: string): UnitRoutingCacheRow[
     .all(unitId) as UnitRoutingCacheRow[];
 }
 
-// -------- context_space_suggestions (MVP12 schema-only, Phase 2 logic) --------
+// -------- context_space_suggestions (MVP12 schema + MVP13 ranker fields) --------
 
 export type ContextSpaceSuggestionRow = {
   id: string;
@@ -1700,12 +1790,23 @@ export type ContextSpaceSuggestionRow = {
   target_id: string;
   space_id: string;
   suggestion_type: string;
-  score: number;
+  score: number;                    // MVP13: stores final_score for back-compat sort
   evidence_json: string;
   status: string;
   cooldown_until: string | null;
   created_at: string;
   updated_at: string;
+  // MVP13 §3.2
+  rule_score?: number | null;
+  llm_score?: number | null;
+  final_score?: number | null;
+  llm_decision?: string | null;
+  llm_confidence?: number | null;
+  ranker_status?: string;
+  ranker_version?: string | null;
+  model_id?: string | null;
+  decided_at?: string | null;
+  decided_by?: string | null;
 };
 
 export function listSpaceSuggestions(
@@ -1728,4 +1829,191 @@ export function listSpaceSuggestions(
        ORDER BY score DESC, updated_at DESC`
     )
     .all(spaceId) as ContextSpaceSuggestionRow[];
+}
+
+// -------- MVP13 ranker run audit --------
+
+export type ContextSpaceRankerRunRow = {
+  id: string;
+  worker_run_id: string;
+  ranker_version: string;
+  prompt_version: string;
+  model_id: string | null;
+  status: string;                  // ok | failed | timeout | parse_error | cache_hit
+  candidate_count: number;
+  accepted_count: number;
+  rejected_count: number;
+  input_hash: string;
+  input_summary_json: string;
+  output_json: string | null;
+  reused_from_run_id: string | null;
+  error: string | null;
+  started_at: string;
+  completed_at: string | null;
+};
+
+export function insertContextSpaceRankerRun(row: ContextSpaceRankerRunRow): void {
+  db.prepare(
+    `INSERT INTO context_space_ranker_runs
+       (id, worker_run_id, ranker_version, prompt_version, model_id, status,
+        candidate_count, accepted_count, rejected_count,
+        input_hash, input_summary_json, output_json, reused_from_run_id,
+        error, started_at, completed_at)
+     VALUES
+       (@id, @worker_run_id, @ranker_version, @prompt_version, @model_id, @status,
+        @candidate_count, @accepted_count, @rejected_count,
+        @input_hash, @input_summary_json, @output_json, @reused_from_run_id,
+        @error, @started_at, @completed_at)`
+  ).run(row);
+}
+
+export function updateContextSpaceRankerRun(
+  id: string,
+  patch: Partial<
+    Pick<
+      ContextSpaceRankerRunRow,
+      | 'status'
+      | 'candidate_count'
+      | 'accepted_count'
+      | 'rejected_count'
+      | 'output_json'
+      | 'reused_from_run_id'
+      | 'error'
+      | 'completed_at'
+      | 'model_id'
+    >
+  >
+): void {
+  const fields: string[] = [];
+  const params: Record<string, unknown> = { id };
+  for (const [k, v] of Object.entries(patch)) {
+    fields.push(`${k} = @${k}`);
+    params[k] = v ?? null;
+  }
+  if (fields.length === 0) return;
+  db.prepare(
+    `UPDATE context_space_ranker_runs SET ${fields.join(', ')} WHERE id = @id`
+  ).run(params);
+}
+
+/**
+ * MVP13 §3.3：24h TTL 内复用同 input_hash 的 ok 结果。
+ */
+export function findRecentRankerRunByInputHash(
+  inputHash: string,
+  ttlHours: number
+): ContextSpaceRankerRunRow | null {
+  const cutoff = new Date(Date.now() - ttlHours * 3600_000).toISOString();
+  const row = db
+    .prepare(
+      `SELECT * FROM context_space_ranker_runs
+       WHERE input_hash = ? AND status = 'ok' AND completed_at IS NOT NULL
+         AND started_at >= ?
+       ORDER BY started_at DESC
+       LIMIT 1`
+    )
+    .get(inputHash, cutoff) as ContextSpaceRankerRunRow | undefined;
+  return row ?? null;
+}
+
+export function deleteRankerRunsOlderThan(olderThanDays: number): number {
+  const cutoff = new Date(
+    Date.now() - olderThanDays * 86400_000
+  ).toISOString();
+  const r = db
+    .prepare(`DELETE FROM context_space_ranker_runs WHERE started_at < ?`)
+    .run(cutoff);
+  return r.changes;
+}
+
+// -------- MVP13 suggestion feedback history --------
+
+export type ContextSpaceSuggestionFeedbackRow = {
+  id: string;
+  suggestion_id: string;
+  space_id: string;
+  target_type: string;
+  target_id: string;
+  suggestion_type: string;
+  action: string;                  // confirmed | rejected
+  reason_code: string;
+  comment: string | null;
+  cooldown_until: string | null;
+  snapshot_json: string;
+  created_at: string;
+};
+
+export function insertContextSpaceSuggestionFeedback(
+  row: ContextSpaceSuggestionFeedbackRow
+): void {
+  db.prepare(
+    `INSERT INTO context_space_suggestion_feedback
+       (id, suggestion_id, space_id, target_type, target_id, suggestion_type,
+        action, reason_code, comment, cooldown_until, snapshot_json, created_at)
+     VALUES
+       (@id, @suggestion_id, @space_id, @target_type, @target_id, @suggestion_type,
+        @action, @reason_code, @comment, @cooldown_until, @snapshot_json, @created_at)`
+  ).run(row);
+}
+
+/**
+ * MVP13 §6.4：拉 few-shot examples。优先同 Space 最近 windowDays 天；
+ * 若同 Space 拿不满，返回 caller 用全局兜底。
+ */
+export function listSuggestionFeedbackExamples(opts: {
+  spaceId?: string;
+  windowDays: number;
+  perAction: number;
+}): ContextSpaceSuggestionFeedbackRow[] {
+  const cutoff = new Date(
+    Date.now() - opts.windowDays * 86400_000
+  ).toISOString();
+  if (opts.spaceId) {
+    const confirmed = db
+      .prepare(
+        `SELECT * FROM context_space_suggestion_feedback
+         WHERE space_id = ? AND action = 'confirmed' AND created_at >= ?
+         ORDER BY created_at DESC LIMIT ?`
+      )
+      .all(opts.spaceId, cutoff, opts.perAction) as ContextSpaceSuggestionFeedbackRow[];
+    const rejected = db
+      .prepare(
+        `SELECT * FROM context_space_suggestion_feedback
+         WHERE space_id = ? AND action = 'rejected' AND created_at >= ?
+         ORDER BY created_at DESC LIMIT ?`
+      )
+      .all(opts.spaceId, cutoff, opts.perAction) as ContextSpaceSuggestionFeedbackRow[];
+    return [...confirmed, ...rejected];
+  }
+  // global
+  const confirmed = db
+    .prepare(
+      `SELECT * FROM context_space_suggestion_feedback
+       WHERE action = 'confirmed' AND created_at >= ?
+       ORDER BY created_at DESC LIMIT ?`
+    )
+    .all(cutoff, opts.perAction) as ContextSpaceSuggestionFeedbackRow[];
+  const rejected = db
+    .prepare(
+      `SELECT * FROM context_space_suggestion_feedback
+       WHERE action = 'rejected' AND created_at >= ?
+       ORDER BY created_at DESC LIMIT ?`
+    )
+    .all(cutoff, opts.perAction) as ContextSpaceSuggestionFeedbackRow[];
+  return [...confirmed, ...rejected];
+}
+
+export function listSuggestionFeedbackForCalibration(
+  windowDays: number
+): ContextSpaceSuggestionFeedbackRow[] {
+  const cutoff = new Date(
+    Date.now() - windowDays * 86400_000
+  ).toISOString();
+  return db
+    .prepare(
+      `SELECT * FROM context_space_suggestion_feedback
+       WHERE created_at >= ?
+       ORDER BY created_at DESC`
+    )
+    .all(cutoff) as ContextSpaceSuggestionFeedbackRow[];
 }

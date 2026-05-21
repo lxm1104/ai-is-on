@@ -81,4 +81,26 @@ export const config = {
   triageTimeoutMs: envInt('TRIAGE_TIMEOUT_MS', 90_000),
   // How many signals to batch into one triage call
   triageBatchSize: envInt('TRIAGE_BATCH_SIZE', 6),
+
+  // ---------- MVP13 §S4 LLM chat_affinity ranker ----------
+  mvp13RankerEnabled: envBool('MVP13_LLM_RANKER_ENABLED', true),
+  mvp13RankerTimeoutMs: envInt('MVP13_LLM_RANKER_TIMEOUT_MS', 90_000),
+  mvp13RankerMaxCandidates: envInt('MVP13_LLM_RANKER_MAX_CANDIDATES', 50),
+  mvp13RankerBatchSize: envInt('MVP13_LLM_RANKER_BATCH_SIZE', 5),
+  mvp13RankerCacheTtlHours: envInt('MVP13_LLM_RANKER_CACHE_TTL_HOURS', 24),
+  mvp13RankerFewShotPerAction: envInt(
+    'MVP13_LLM_RANKER_FEW_SHOT_PER_ACTION',
+    5
+  ),
+  mvp13RankerFewShotGlobal: envInt('MVP13_LLM_RANKER_FEW_SHOT_GLOBAL', 3),
+  mvp13RankerFewShotWindowDays: envInt(
+    'MVP13_LLM_RANKER_FEW_SHOT_WINDOW_DAYS',
+    30
+  ),
+  mvp13SurfaceFinalScore: Number(
+    envStr('MVP13_LLM_RANKER_SURFACE_FINAL_SCORE', '0.62')
+  ),
+  mvp13SurfaceLlmConfidence: Number(
+    envStr('MVP13_LLM_RANKER_SURFACE_LLM_CONFIDENCE', '0.55')
+  ),
 };

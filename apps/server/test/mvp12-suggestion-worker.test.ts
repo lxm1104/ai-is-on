@@ -20,6 +20,8 @@ import os from 'node:os';
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiio-mvp12-sw-'));
 process.env.SQLITE_PATH = path.join(tmpDir, 'test.sqlite');
 process.env.COLLECTOR_ENABLED = 'false';
+// MVP13 worker 默认开 LLM；mvp12 这条 test 不想真起子进程
+process.env.MVP13_LLM_RANKER_ENABLED = 'false';
 
 const { insertMinimalEventContextUnit, upsertContextUnit } = await import(
   '../src/context/contextStore.js'
@@ -66,7 +68,7 @@ function newEvent(text = 'b'): string {
   return id;
 }
 
-test('chat_affinity suggestion produced when chat has units linked to Space via person seed', () => {
+test('chat_affinity suggestion produced when chat has units linked to Space via person seed', async () => {
   const now = new Date().toISOString();
   const aliceEnt = resolveOrCreateEntity('person', 'Alice');
   // Space with Alice as seed
@@ -112,7 +114,7 @@ test('chat_affinity suggestion produced when chat has units linked to Space via 
     resolveUnitToSpaces(evUnit);
   }
 
-  const stats = runSuggestionWorker();
+  const stats = await runSuggestionWorker();
   assert.ok(stats.chatAffinityInserted >= 1, 'at least one chat_affinity inserted');
 
   const items = listSuggestionsForSpace(spaceId, 'suggested');
@@ -155,7 +157,7 @@ test('confirm chat_affinity writes chat seed link + reconcile picks up historica
   void now;
 });
 
-test('person_co_occur advisory: non-seed person 与 seed person 在 chat 中共现 ≥ 5 → suggested', () => {
+test('person_co_occur advisory: non-seed person 与 seed person 在 chat 中共现 ≥ 5 → suggested', async () => {
   const now = new Date().toISOString();
   const charlieEnt = resolveOrCreateEntity('person', 'Charlie');
   const spaceId = randomUUID();
@@ -198,7 +200,7 @@ test('person_co_occur advisory: non-seed person 与 seed person 在 chat 中共�
       ],
     });
   }
-  runSuggestionWorker();
+  await runSuggestionWorker();
   const items = listSuggestionsForSpace(spaceId, 'suggested');
   const co = items.find((s) => s.suggestion_type === 'person_co_occur');
   assert.ok(co, 'person_co_occur present');
@@ -206,7 +208,7 @@ test('person_co_occur advisory: non-seed person 与 seed person 在 chat 中共�
   assert.ok(evidence.coOccurCount >= 5);
 });
 
-test('reject suggestion sets 30d cooldown', () => {
+test('reject suggestion sets 30d cooldown', async () => {
   // 新建 second Space + chat for isolation
   const now = new Date().toISOString();
   const bobEnt = resolveOrCreateEntity('person', 'Bob');
@@ -250,7 +252,7 @@ test('reject suggestion sets 30d cooldown', () => {
     resolveUnitToSpaces(u);
   }
 
-  runSuggestionWorker();
+  await runSuggestionWorker();
   const items = listSuggestionsForSpace(spaceId, 'suggested');
   const ca = items.find((s) => s.suggestion_type === 'chat_affinity');
   assert.ok(ca);
@@ -259,7 +261,7 @@ test('reject suggestion sets 30d cooldown', () => {
   assert.ok(r.cooldownUntil);
 
   // 再跑 worker：rejected 期间不应该重新 'suggested'
-  runSuggestionWorker();
+  await runSuggestionWorker();
   const after = listSuggestionsForSpace(spaceId, 'suggested');
   assert.equal(
     after.find((s) => s.id === ca!.id),

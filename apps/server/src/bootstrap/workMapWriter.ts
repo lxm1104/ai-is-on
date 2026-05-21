@@ -14,7 +14,11 @@ import {
 import { upsertContextUnit } from '../context/contextStore.js';
 import { resolveOrCreateEntity } from '../context/entityResolver.js';
 import { computeConditionHash, createRule } from '../boundary/boundaryStore.js';
-import { createSpace } from '../spaces/contextSpaceService.js';
+import {
+  createSpace,
+  syncSpaceIntentFromWorkMap,
+} from '../spaces/contextSpaceService.js';
+import { extractKeywords } from '../spaces/keywordExtractor.js';
 import type { BoundaryCondition } from '../boundary/BoundaryRule.js';
 import type {
   BoundarySeedDraft,
@@ -233,6 +237,36 @@ function writeProject(p: ProjectMapDraft) {
     if (!u) continue;
     ensureDocEntityLinked(space.id, u);
   }
+
+  // MVP13 §5.1: sync Space intent_json from Work Map
+  //   - summary = description 或前两个 goal 拼起来
+  //   - keywords = name + goals + risks 抽取
+  //   - 用户 updatedBy='user' 时 syncSpaceIntentFromWorkMap 内部会保留用户字段
+  const summary =
+    p.description?.trim() ||
+    p.goals.slice(0, 2).filter(Boolean).join('；') ||
+    undefined;
+  const keywords = extractKeywords(
+    [p.name, ...p.goals, ...p.risks].filter(Boolean).join('\n'),
+    12
+  );
+  syncSpaceIntentFromWorkMap(
+    space.id,
+    {
+      summary,
+      aliases: [p.name],
+      keywords,
+      workMapGoalTitles: p.goals.filter((g) => g.trim()),
+      workMapRiskTitles: p.risks.filter((g) => g.trim()),
+      authoritativeDocNames: p.authoritativeDocs.filter((u) => u.trim()),
+    },
+    {
+      source: 'work_map_writer',
+      projectName: name,
+      origin: 'work_map',
+      updatedAt: new Date().toISOString(),
+    }
+  );
 
   return { unitsWritten, unitsUpdated, spacesWritten };
 }
