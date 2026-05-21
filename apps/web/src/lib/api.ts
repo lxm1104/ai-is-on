@@ -89,14 +89,37 @@ export async function fetchCards(): Promise<SignalCard[]> {
   return j.cards ?? [];
 }
 
+// MVP11.1：会议 ask 卡片专用确认通道
+export async function postActionItemsConfirm(
+  cardId: string,
+  accept: 'all' | 'none'
+): Promise<{ ok: boolean; accepted: number; unitIds?: string[] }> {
+  const r = await fetch(
+    `/api/cards/${encodeURIComponent(cardId)}/action-items/confirm`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accept }),
+    }
+  );
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `action-items confirm ${r.status}`);
+  return j;
+}
+
 export async function postCardAction(
   cardId: string,
-  actionId: string
+  actionId: string,
+  opts?: { extraPrompt?: string }
 ): Promise<SignalCard> {
+  const body: Record<string, unknown> = { actionId };
+  if (opts?.extraPrompt && opts.extraPrompt.trim()) {
+    body.extraPrompt = opts.extraPrompt.trim();
+  }
   const r = await fetch(`/api/cards/${encodeURIComponent(cardId)}/action`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ actionId }),
+    body: JSON.stringify(body),
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || `card action ${r.status}`);
@@ -267,6 +290,10 @@ export type BoundaryRule = {
   source: string;
   migrated: boolean;
   active: boolean;
+  // MVP10.1
+  autonomy: 'local_auto' | 'local_with_audit' | 'external_always_confirm';
+  reversible: boolean;
+  impactScope: 'self' | 'shared';
   createdAt: string;
   updatedAt: string;
 };
@@ -311,6 +338,48 @@ export async function fetchAuditLogs(limit = 50): Promise<AuditLog[]> {
   return (j.items ?? []) as AuditLog[];
 }
 
+// -------- MVP10 Correction --------
+
+export type CorrectionType =
+  | 'wrong_priority'
+  | 'wrong_meaning'
+  | 'wrong_actionability'
+  | 'wrong_entity'
+  | 'wrong_kind';
+
+export type CorrectionApplyResult = {
+  applied: boolean;
+  tier: 'low' | 'medium' | 'high';
+  requiresConfirm: boolean;
+  journal?: {
+    id: string;
+    correction_type: string;
+    target_kind: string;
+    target_id: string;
+    forward_patch_json: string;
+    inverse_patch_json: string | null;
+    inverse_lossy: number;
+    applied_at: string;
+  };
+  preview: Record<string, unknown>;
+};
+
+export async function postCardCorrection(input: {
+  cardId: string;
+  type: CorrectionType;
+  payload: Record<string, unknown>;
+  confirm?: boolean;
+}): Promise<CorrectionApplyResult> {
+  const r = await fetch(`/api/cards/${encodeURIComponent(input.cardId)}/correction`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: input.type, payload: input.payload, confirm: input.confirm }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `correction ${r.status}`);
+  return j as CorrectionApplyResult;
+}
+
 export async function postContextFeedback(input: {
   contextUnitId?: string;
   cardId?: string;
@@ -326,6 +395,107 @@ export async function postContextFeedback(input: {
     const j = await r.json().catch(() => ({}));
     throw new Error(j.error || `context feedback ${r.status}`);
   }
+}
+
+// -------- MVP7 Work Map --------
+
+export type WorkMapBoundaryDraft = {
+  description: string;
+  triggerType?: string[];
+  priorityAtMost?: 'P0' | 'P1' | 'P2' | 'P3';
+  source?: Array<'calendar' | 'im' | 'mail' | 'drive' | 'manual' | 'agent'>;
+  allowedAction?: 'record' | 'notify' | 'draft' | 'execute_reversible';
+};
+
+export type WorkMapProjectDraft = {
+  name: string;
+  description?: string;
+  goals: string[];
+  authoritativeDocs: string[];
+  upcomingDeadlines: Array<{ title: string; dueAt?: string }>;
+  risks: string[];
+};
+
+export type WorkMapDraft = {
+  profile: {
+    roleTitle?: string;
+    teamName?: string;
+    responsibilities: string[];
+  };
+  projects: WorkMapProjectDraft[];
+  stakeholders: Array<{ name: string; note?: string }>;
+  preferences: string[];
+  boundaries: WorkMapBoundaryDraft[];
+};
+
+export type WorkMapWriteSummary = {
+  unitsWritten: number;
+  unitsUpdated: number;
+  spacesWritten: number;
+  rulesWritten: number;
+  rulesTouched: number;
+  bootstrapCompletedAt: string;
+};
+
+export type CurrentWorkMap = {
+  bootstrapCompletedAt: string | null;
+  role: ContextUnit | null;
+  responsibilities: ContextUnit[];
+  goals: ContextUnit[];
+  commitments: ContextUnit[];
+  risks: ContextUnit[];
+  preferences: ContextUnit[];
+  relationships: ContextUnit[];
+  spaces: Array<{
+    id: string;
+    name: string;
+    description: string | null;
+    docCount: number;
+  }>;
+  boundaryRules: BoundaryRule[];
+};
+
+export async function fetchWorkMapCurrent(): Promise<CurrentWorkMap> {
+  const r = await fetch('/api/bootstrap/work-map/current');
+  if (!r.ok) throw new Error(`work-map/current ${r.status}`);
+  return (await r.json()) as CurrentWorkMap;
+}
+
+export type WorkMapDraftResponse = {
+  draft: WorkMapDraft;
+  tokenEstimate: number;
+  itemsConsidered: number;
+  itemsTruncated: number;
+  rawText: string;
+};
+
+export async function generateWorkMapDraft(input: {
+  seedText?: string;
+  lookbackDays?: number;
+  mode?: 'full' | 'incremental';
+}): Promise<WorkMapDraftResponse> {
+  const r = await fetch('/api/bootstrap/work-map/draft', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `work-map/draft ${r.status}`);
+  return j as WorkMapDraftResponse;
+}
+
+export async function confirmWorkMap(draft: WorkMapDraft): Promise<{
+  summary: WorkMapWriteSummary;
+  current: CurrentWorkMap;
+}> {
+  const r = await fetch('/api/bootstrap/work-map/confirm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(draft),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `work-map/confirm ${r.status}`);
+  return j as { summary: WorkMapWriteSummary; current: CurrentWorkMap };
 }
 
 export async function runCollectorsOnce(name?: string): Promise<RunOnceResult[]> {

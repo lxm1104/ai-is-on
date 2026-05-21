@@ -92,6 +92,13 @@ export function RulesPanel() {
   );
 }
 
+// MVP10.1 §6.4：把 active rule 按 autonomy 分组成 自动 / 必问 / 不可逆 三栏
+const AUTONOMY_LABEL: Record<BoundaryRule['autonomy'], string> = {
+  local_auto: '自动（本地、可逆）',
+  local_with_audit: '本地 · 留痕',
+  external_always_confirm: '必问（涉及对外）',
+};
+
 function RulesList({
   rules,
   onToggle,
@@ -102,26 +109,66 @@ function RulesList({
   if (rules.length === 0) {
     return <div className="ctx-panel__empty">还没有 boundary rule。在卡片上点"以后自动"来创建。</div>;
   }
+  const groups: Array<{ key: BoundaryRule['autonomy']; rules: BoundaryRule[] }> = [
+    { key: 'local_auto', rules: rules.filter((r) => r.autonomy === 'local_auto') },
+    { key: 'external_always_confirm', rules: rules.filter((r) => r.autonomy === 'external_always_confirm') },
+    { key: 'local_with_audit', rules: rules.filter((r) => r.autonomy === 'local_with_audit') },
+  ];
+  const irreversible = rules.filter((r) => !r.reversible);
   return (
-    <ul className="rules-list">
-      {rules.map((r) => (
-        <li key={r.id} className={`rule-row ${r.active ? '' : 'is-off'}`}>
-          <div className="rule-row__head">
-            <span className={`rule-source rule-source--${r.source}`}>{r.source}</span>
-            <span className="rule-action">{r.allowedAction}</span>
-            {r.migrated && <span className="rule-tag rule-tag--migrated">需复核</span>}
-            <button
-              type="button"
-              className="btn btn--ghost rule-toggle"
-              onClick={() => onToggle(r)}
-            >
-              {r.active ? '关闭' : '启用'}
-            </button>
-          </div>
-          <div className="rule-row__cond">{describeCondition(r)}</div>
-        </li>
-      ))}
-    </ul>
+    <div className="rules-by-autonomy">
+      {groups.map((g) =>
+        g.rules.length > 0 ? (
+          <section key={g.key} className={`rules-group rules-group--${g.key}`}>
+            <h5 className="rules-group__title">
+              {AUTONOMY_LABEL[g.key]} · {g.rules.length}
+            </h5>
+            <ul className="rules-list">
+              {g.rules.map((r) => (
+                <RuleRow key={r.id} rule={r} onToggle={onToggle} />
+              ))}
+            </ul>
+          </section>
+        ) : null
+      )}
+      {irreversible.length > 0 && (
+        <section className="rules-group rules-group--irreversible">
+          <h5 className="rules-group__title">不可逆 · {irreversible.length}</h5>
+          <ul className="rules-list">
+            {irreversible.map((r) => (
+              <RuleRow key={r.id} rule={r} onToggle={onToggle} />
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
+  );
+}
+
+function RuleRow({ rule, onToggle }: { rule: BoundaryRule; onToggle: (r: BoundaryRule) => void }) {
+  return (
+    <li className={`rule-row ${rule.active ? '' : 'is-off'}`}>
+      <div className="rule-row__head">
+        <span className={`rule-source rule-source--${rule.source}`}>{rule.source}</span>
+        <span className="rule-action">{rule.allowedAction}</span>
+        <span className={`rule-autonomy rule-autonomy--${rule.autonomy}`}>
+          {AUTONOMY_LABEL[rule.autonomy]}
+        </span>
+        {rule.impactScope === 'shared' && (
+          <span className="rule-tag rule-tag--shared">shared</span>
+        )}
+        {!rule.reversible && <span className="rule-tag rule-tag--irreversible">不可逆</span>}
+        {rule.migrated && <span className="rule-tag rule-tag--migrated">需复核</span>}
+        <button
+          type="button"
+          className="btn btn--ghost rule-toggle"
+          onClick={() => onToggle(rule)}
+        >
+          {rule.active ? '关闭' : '启用'}
+        </button>
+      </div>
+      <div className="rule-row__cond">{describeCondition(rule)}</div>
+    </li>
   );
 }
 

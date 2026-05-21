@@ -6,9 +6,17 @@ import {
   tryInsertTrigger,
 } from '../db.js';
 import type { ContextUnit } from '../context/ContextUnit.js';
+import {
+  type ChangeContext,
+  shrinkChangeContextForPayload,
+} from '../context/changeContext.js';
 import { getContextUnitById } from '../context/contextStore.js';
+import { computeSpacePriority } from '../context/agentContextAssembler.js';
+import { listSpacesForTarget, listSpaceLinks } from '../db.js';
+import { resolveOrCreateEntity } from '../context/entityResolver.js';
 import { isCaringPaused } from '../caring/caringSettings.js';
 import { detectAllDivergences } from '../spaces/divergenceDetector.js';
+import { decodeSemanticTags } from '../context/semanticTags.js';
 
 /**
  * MVP3 §5.3: 只实现 2 类。
@@ -24,7 +32,9 @@ export type TriggerType =
   | 'meeting_prepare'
   | 'check_in_due'
   | 'context_divergence'
-  | 'daily_digest_due';
+  | 'daily_digest_due'
+  | 'doc_comment_attention'
+  | 'meeting_artifact_ready';
 
 const DIGEST_HOUR_LOCAL = Number(process.env.DIGEST_HOUR_LOCAL ?? 18);
 const DIGEST_COOLDOWN_MS = 18 * 3600_000;
@@ -59,8 +69,77 @@ export function evaluateUnit(unit: ContextUnit, now: number): TriggerDraft[] {
   if (unit.kind === 'event') {
     const mp = checkMeetingPrepare(unit, now);
     if (mp) drafts.push(mp);
+    // MVP11.0-b：评论 attention 也走 event kind，但靠 semanticTags 路由
+    const dc = checkDocCommentAttention(unit, now);
+    if (dc) drafts.push(dc);
+    // MVP11.1：会议纪要 ready
+    const ma = checkMeetingArtifactReady(unit);
+    if (ma) drafts.push(ma);
   }
   return drafts;
+}
+
+/**
+ * MVP11.1 meeting_artifact_ready：
+ * - semanticTags.signal_kind === 'meeting_artifact'
+ * - bucket = `<minute_token>:<content_hash_bucket>`
+ *   同一 minute 同一内容只触发一次；transcript / summary 更新 → bucket 变 → 再触发一次
+ */
+function checkMeetingArtifactReady(unit: ContextUnit): TriggerDraft | null {
+  const { tags } = decodeSemanticTags(unit.meaning);
+  if (tags.signal_kind !== 'meeting_artifact') return null;
+  const minuteToken = typeof tags.minute_token === 'string' ? tags.minute_token : undefined;
+  const bucket =
+    typeof tags.content_hash_bucket === 'string' ? tags.content_hash_bucket : undefined;
+  if (!minuteToken || !bucket) return null;
+  return {
+    triggerType: 'meeting_artifact_ready',
+    contextUnitId: unit.id,
+    dueAtBucket: `${minuteToken}:${bucket}`,
+    reasoning: `会议纪要 ${minuteToken} 首次到位（或内容更新）`,
+    payload: {
+      minuteToken,
+      contentHashBucket: bucket,
+      hasActionItems: tags.has_action_items === true,
+      truncated: tags.truncated === true,
+    },
+  };
+}
+
+/**
+ * MVP11.0-b doc_comment_attention：
+ * - 只看 semanticTags.signal_kind ∈ {doc_comment, doc_comment_reply}
+ * - 排除 author_is_self
+ * - 必须 is_at_me 或 on_authoritative_doc
+ * idempotency：以 contextUnitId + day-bucket，同一天对同一 unit 至多 1 次。
+ */
+function checkDocCommentAttention(unit: ContextUnit, now: number): TriggerDraft | null {
+  const { tags } = decodeSemanticTags(unit.meaning);
+  const kind = tags.signal_kind;
+  if (kind !== 'doc_comment' && kind !== 'doc_comment_reply') return null;
+  if (tags.author_is_self === true) return null;
+  if (tags.is_at_me !== true && tags.on_authoritative_doc !== true) return null;
+
+  const docEnt = unit.entities.find((e) => e.type === 'doc');
+  const authorEnt = unit.entities.find((e) => e.role === 'author');
+  const dayBucket = new Date(now).toISOString().slice(0, 10);
+  const reasoning =
+    tags.is_at_me === true
+      ? `${authorEnt?.name ?? '某人'} 在文档评论 @ 你`
+      : `权威文档收到 ${authorEnt?.name ?? '某人'} 的评论`;
+  return {
+    triggerType: 'doc_comment_attention',
+    contextUnitId: unit.id,
+    dueAtBucket: dayBucket,
+    reasoning,
+    payload: {
+      signalKind: kind,
+      docUrl: docEnt?.name,
+      authorName: authorEnt?.name,
+      isAtMe: tags.is_at_me === true,
+      onAuthoritativeDoc: tags.on_authoritative_doc === true,
+    },
+  };
 }
 
 function checkCommitmentDue(unit: ContextUnit, now: number): TriggerDraft | null {
@@ -109,19 +188,47 @@ function checkMeetingPrepare(unit: ContextUnit, now: number): TriggerDraft | nul
     return null;
   }
   const hours = Math.round(diff / 60_000);
+  // MVP8.1 §5.5.1：当会议关联到 active goal 的 Space，附加 spacePriority hint。
+  // assembler 会重新计算一遍以补充 docs / name，这里只是给"非 packet 路径"留个回退。
+  const spacePriority = inferSpacePriorityForUnit(unit);
   return {
     triggerType: 'meeting_prepare',
     contextUnitId: unit.id,
     dueAt: startIso,
     dueAtBucket: bucketByHour(startIso),
-    reasoning: `会议 ${hours} 分钟后开始（${unit.title}），准备会前摘要`,
+    reasoning: `会议 ${hours} 分钟后开始（${unit.title}），准备会前摘要${
+      spacePriority && spacePriority !== 'normal' ? `（Space=${spacePriority}）` : ''
+    }`,
     payload: {
       meetingTitle: unit.title,
       startsAt: startIso,
       minutesUntil: hours,
       entities: unit.entities.map((e) => ({ type: e.type, name: e.name })),
+      spacePriorityHint: spacePriority,
     },
   };
+}
+
+function inferSpacePriorityForUnit(
+  unit: ContextUnit
+): 'critical' | 'high' | 'normal' | null {
+  let best: 'critical' | 'high' | 'normal' = 'normal';
+  const seen = new Set<string>();
+  for (const e of unit.entities ?? []) {
+    try {
+      const ent = resolveOrCreateEntity(e.type, e.name);
+      const links = listSpacesForTarget('entity', ent.id);
+      for (const l of links) {
+        if (seen.has(l.space_id)) continue;
+        seen.add(l.space_id);
+        const allLinks = listSpaceLinks(l.space_id);
+        const p = computeSpacePriority(allLinks);
+        if (p === 'critical') return 'critical';
+        if (p === 'high' && best === 'normal') best = 'high';
+      }
+    } catch {}
+  }
+  return seen.size === 0 ? null : best;
 }
 
 function bucketByDay(iso: string): string {
@@ -140,14 +247,36 @@ function bucketByHour(iso: string): string {
   }
 }
 
-/** Persist a TriggerDraft. Returns the trigger id, or null if idempotency clashed. */
+// MVP8.0 §5.2: triggers.payload_json 整体 cap = 4 KB。
+const TRIGGER_PAYLOAD_MAX_BYTES = 4096;
+
+/**
+ * Persist a TriggerDraft. Returns the trigger id, or null if idempotency clashed.
+ * 序列化时若 payload 过大 → 对 changeContext.before.title/meaning 截断。
+ */
 export function persistTrigger(draft: TriggerDraft): string | null {
   const now = new Date().toISOString();
+  let payloadJson = JSON.stringify(draft.payload);
+  if (Buffer.byteLength(payloadJson, 'utf8') > TRIGGER_PAYLOAD_MAX_BYTES) {
+    const cc = (draft.payload as { changeContext?: ChangeContext }).changeContext;
+    if (cc?.before) {
+      const shrunk = shrinkChangeContextForPayload(cc);
+      const next = { ...draft.payload, changeContext: shrunk };
+      payloadJson = JSON.stringify(next);
+    }
+    if (Buffer.byteLength(payloadJson, 'utf8') > TRIGGER_PAYLOAD_MAX_BYTES) {
+      // 实在装不下：丢掉 before snapshot，保留 changedFields 元信息
+      const cc2 = (draft.payload as { changeContext?: ChangeContext }).changeContext;
+      const stripped = cc2 ? { isUpdate: cc2.isUpdate, changedFields: cc2.changedFields } : undefined;
+      const next = { ...draft.payload, changeContext: stripped };
+      payloadJson = JSON.stringify(next);
+    }
+  }
   const row: TriggerRow = {
     id: randomUUID(),
     trigger_type: draft.triggerType,
     context_unit_id: draft.contextUnitId,
-    payload_json: JSON.stringify(draft.payload),
+    payload_json: payloadJson,
     status: 'pending',
     due_at: draft.dueAt ?? null,
     due_at_bucket: draft.dueAtBucket ?? null,
@@ -161,11 +290,21 @@ export function persistTrigger(draft: TriggerDraft): string | null {
 /**
  * Push path: contextStore upsert hook calls this. Synchronous & cheap.
  * Returns the created trigger ids (may be empty).
+ *
+ * MVP8.0 §5.2: changeContext 是 upsert 时算出的字段级 diff，evaluator 把它原样
+ * 塞进每个 draft.payload.changeContext。无 trigger draft 时 diff 自然丢失。
  */
-export function evaluateAndPersistForUnit(unit: ContextUnit, now: number = Date.now()): string[] {
+export function evaluateAndPersistForUnit(
+  unit: ContextUnit,
+  now: number = Date.now(),
+  changeContext?: ChangeContext
+): string[] {
   const drafts = evaluateUnit(unit, now);
   const ids: string[] = [];
   for (const d of drafts) {
+    if (changeContext) {
+      d.payload = { ...d.payload, changeContext };
+    }
     const id = persistTrigger(d);
     if (id) ids.push(id);
   }

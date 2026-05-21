@@ -74,6 +74,10 @@ export function buildActiveContext(opts: ActiveContextOptions = {}): ActiveConte
   return { items: picked, summary, tokenEstimate: used };
 }
 
+export function scoreContextUnit(u: ContextUnit, now: number): number {
+  return score(u, now);
+}
+
 function score(u: ContextUnit, now: number): number {
   const created = new Date(u.updatedAt).getTime();
   const ageHours = Math.max(0, (now - created) / 3600_000);
@@ -82,13 +86,24 @@ function score(u: ContextUnit, now: number): number {
   const due = dueProximityWeight(u, now);
   const confidence = u.confidence ?? 0.5;
   const pinned = 0; // MVP2 没引入 pinned 字段
-  return (
+  let s =
     W.recency * recency +
     W.actionability * actionability +
     W.due * due +
     W.confidence * confidence +
-    W.pinned * pinned
-  );
+    W.pinned * pinned;
+  // MVP7 §4.4 workMapBoost：Work Map 写入的 state/goal/preference/relationship
+  // 在 work scope 下 +0.6（≈ 19% 提权），让冷启动给的世界模型在 active context
+  // top-N 中稳定居前但不至于霸屏。
+  const isWorkMap =
+    u.scope === 'work' &&
+    (u.kind === 'state' ||
+      u.kind === 'goal' ||
+      u.kind === 'preference' ||
+      u.kind === 'relationship') &&
+    (u.mergeKey?.startsWith('work_map:') ?? false);
+  if (isWorkMap) s += 0.6;
+  return s;
 }
 
 function dueProximityWeight(u: ContextUnit, now: number): number {
@@ -151,9 +166,24 @@ function renderSummary(items: ActiveContextItem[], truncated: number): string {
         : u.time?.occurredAt
           ? ` (${formatTime(u.time.occurredAt)})`
           : '';
+      // MVP12 §4.1 P1.8：渲染时过滤掉 chat / app 这种 routing-only entity。
+      // chat entity 的 alias[0] 用作群名，没有 alias 则用 "群聊" 兜底。其它 type 正常显示 name。
+      const renderable: string[] = [];
+      if (u.entities && u.entities.length > 0) {
+        for (const e of u.entities) {
+          if (e.role === 'container' || e.type === 'chat' || e.type === 'app') {
+            if (e.type === 'chat') {
+              const alias = e.aliases?.find((a) => a && a.trim());
+              renderable.push(alias || '群聊');
+            }
+            continue;
+          }
+          renderable.push(e.name);
+        }
+      }
       const ent =
-        u.entities && u.entities.length > 0
-          ? ` 相关：${u.entities.slice(0, 3).map((e) => e.name).join('、')}`
+        renderable.length > 0
+          ? ` 相关：${renderable.slice(0, 3).join('、')}`
           : '';
       lines.push(`- ${u.title}${time}${ent}`);
     }

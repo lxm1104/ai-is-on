@@ -5,14 +5,17 @@ import {
   type ContextLinkRow,
   type ContextUnitEntityRow,
   type ContextUnitRow,
+  deleteUnitRoutingCacheByEvent,
   getActiveContextUnitByMergeKey,
   getActiveContextUnitByOrigin,
+  getActiveContextUnitByOriginAndKind,
   getContextEntityByTypeName,
   getContextUnit,
   insertContextEntity,
   insertContextFeedback,
   insertContextLink,
   insertContextUnit,
+  insertUnitSource,
   linkUnitEntity,
   listContextEntities,
   listContextFeedback,
@@ -20,9 +23,12 @@ import {
   listContextRelations,
   listContextUnits,
   listEntitiesForUnit,
+  listUnitSourcesByEvent,
   updateContextUnit,
+  upsertUnitRoutingCache,
 } from '../db.js';
 import {
+  type ContextActionability,
   type ContextEntityRef,
   type ContextOriginKind,
   type ContextScope,
@@ -33,7 +39,14 @@ import {
   defaultExpiresAt,
   fallbackSalientPhrase,
 } from './ContextUnit.js';
-import { resolveOrCreateEntity } from './entityResolver.js';
+import { resolveAliased, resolveOrCreateEntity } from './entityResolver.js';
+import { type SemanticTags, encodeSemanticTags } from './semanticTags.js';
+import {
+  type ChangeContext,
+  computeChangeContext,
+  createdChangeContext,
+  snapshotOf,
+} from './changeContext.js';
 
 export type UpsertContextUnitInput = ContextUnitDraft & {
   subjectId?: string;
@@ -47,7 +60,8 @@ export type UpsertResult = {
 };
 
 // MVP3: lazy import to avoid circular require (triggerEvaluator → contextStore.getContextUnitById)
-type PushHook = (unit: ContextUnit) => void;
+// MVP8.0 §5.2：hook 签名扩成 (unit, changeContext?) 让 trigger 能把字段级 diff 带到 payload。
+type PushHook = (unit: ContextUnit, changeContext?: ChangeContext) => void;
 let pushHook: PushHook | null = null;
 export function registerUpsertHook(hook: PushHook) {
   pushHook = hook;
@@ -94,11 +108,23 @@ function hydrateEntities(unitId: string): ContextEntityRef[] {
   for (const l of links) {
     const ent = getEntityById(l.entity_id);
     if (!ent) continue;
+    let aliases: string[] | undefined;
+    if (ent.aliases_json) {
+      try {
+        const parsed = JSON.parse(ent.aliases_json);
+        if (Array.isArray(parsed) && parsed.every((x) => typeof x === 'string')) {
+          aliases = parsed as string[];
+        }
+      } catch {
+        /* ignore malformed aliases_json */
+      }
+    }
     out.push({
       type: ent.type,
       name: ent.name,
       confidence: l.confidence,
       role: l.role,
+      aliases,
     });
   }
   return out;
@@ -118,12 +144,13 @@ export function upsertContextUnit(input: UpsertContextUnitInput): UpsertResult {
   const now = new Date().toISOString();
   const subjectId = input.subjectId ?? 'me';
 
-  // 1) 解析 entity → entity_id
+  // 1) 解析 entity → entity_id；MVP10：mergeKey 计算用 alias 解析后的 id，
+  // 让"X 合并到 Y"之后 X 的新 unit 与 Y 的旧 unit 落到同一 mergeKey。
   const entityIds: string[] = [];
   const entityRefs: Array<{ id: string; ref: ContextEntityRef }> = [];
   for (const e of input.entities ?? []) {
     const ent = resolveOrCreateEntity(e.type, e.name, e.aliases);
-    entityIds.push(ent.id);
+    entityIds.push(resolveAliased(ent.id));
     entityRefs.push({ id: ent.id, ref: { ...e, name: ent.name } });
   }
 
@@ -134,12 +161,18 @@ export function upsertContextUnit(input: UpsertContextUnitInput): UpsertResult {
       : fallbackSalientPhrase(input.kind, input.origin);
 
   // 3) mergeKey
-  const mergeKey = computeMergeKey({
-    subjectId,
-    kind: input.kind,
-    primaryEntityIds: entityIds,
-    salientPhrase: salient,
-  });
+  //   - MVP7: `work_map:` 前缀的 mergeHint 直接当 mergeKey 用，不再 sha1。
+  //     原因：活动 context scorer 要靠 `mergeKey.startsWith('work_map:')` 给 Work Map
+  //     条目加 +0.6 boost；sha1 之后无法识别。可读性也好。
+  //     幂等性等价：同一 work_map slug → 同一 mergeKey → 同一 unit。
+  const mergeKey = salient.startsWith('work_map:')
+    ? salient
+    : computeMergeKey({
+        subjectId,
+        kind: input.kind,
+        primaryEntityIds: entityIds,
+        salientPhrase: salient,
+      });
 
   // 4) 已存在 → UPDATE，否则 INSERT
   const existing = getActiveContextUnitByMergeKey(mergeKey);
@@ -148,6 +181,10 @@ export function upsertContextUnit(input: UpsertContextUnitInput): UpsertResult {
     input.time?.expiresAt ?? defaultExpiresAt(input.kind, existing?.created_at ?? now, dueAt);
 
   if (existing) {
+    // MVP8.0 §5.2：在覆盖前抓 before snapshot（带旧 entities），用于 diff。
+    const beforeUnit = rowToUnit(existing, hydrateEntities(existing.id));
+    const beforeSnap = snapshotOf(beforeUnit);
+
     const updated: ContextUnitRow = {
       ...existing,
       subject_id: subjectId,
@@ -178,11 +215,13 @@ export function upsertContextUnit(input: UpsertContextUnitInput): UpsertResult {
         confidence: ref.confidence ?? 0.7,
       });
     }
-    const result: UpsertResult = {
-      unit: rowToUnit(updated, entityRefs.map((e) => e.ref)),
-      wasUpdate: true,
-    };
-    invokeHook(result.unit);
+    const newUnit = rowToUnit(updated, entityRefs.map((e) => e.ref));
+    const changeContext = computeChangeContext(beforeSnap, newUnit);
+    // MVP12 §4.1 P1.5：必须在 invokeHook 之前落地 unit_sources / unit_routing_cache，
+    // 否则 resolveUnitToSpaces 在 hook 里读到空 cache。
+    materializeRoutingForUnit(newUnit, now);
+    const result: UpsertResult = { unit: newUnit, wasUpdate: true };
+    invokeHook(result.unit, changeContext);
     return result;
   }
 
@@ -222,14 +261,146 @@ export function upsertContextUnit(input: UpsertContextUnitInput): UpsertResult {
     unit: rowToUnit(row, entityRefs.map((e) => e.ref)),
     wasUpdate: false,
   };
-  invokeHook(result.unit);
+  // MVP12 §4.1 P1.5：见 update 分支注释。
+  materializeRoutingForUnit(result.unit, now);
+  invokeHook(result.unit, createdChangeContext());
   return result;
 }
 
-function invokeHook(unit: ContextUnit) {
+// MVP12 §4.1 P1.5：把这次 upsert 的 routing 证据落到 unit_sources + unit_routing_cache。
+//
+// 规则：
+//   - kind='event' 且 origin.kind='event'：
+//       * 写 unit_sources(unit_id=unit.id, event_id=origin.refId)
+//       * DELETE unit_routing_cache WHERE source_event_id = origin.refId
+//       * 重新 materialize：为所有 unit_sources WHERE event_id = origin.refId
+//         的 unit（包含本 event unit 自己 + 所有引用它的 semantic unit）写一行 cache
+//   - kind != 'event' 且 origin.kind='event'（即 triage 产出的 semantic unit）：
+//       * 写 unit_sources(unit_id=unit.id, event_id=origin.refId)
+//       * 仅为 (unit.id, origin.refId) materialize 一行（用本 unit 当前 routing entities
+//         + 该 event 的 routing entities 取并集太重；保持简单：用本 unit 自己的 entities，
+//         resolver 端拉 cache + own entities 时会再合并）
+//   - 其它 origin（chat / agent_run / manual / system）：不写。
+//
+// 注意：cache 里只保留 routing entity 类型（chat / doc / app）；其他类型在 resolver 里
+// 通过 unit.entities 直接命中，不需要 cache。
+function materializeRoutingForUnit(unit: ContextUnit, nowIso: string): void {
+  if (unit.origin.kind !== 'event') return;
+  const eventId = unit.origin.refId;
+  if (!eventId) return;
+
+  // 1) 写 unit_sources
+  try {
+    insertUnitSource({
+      id: randomUUID(),
+      unit_id: unit.id,
+      event_id: eventId,
+      recorded_at: nowIso,
+    });
+  } catch (err) {
+    console.warn(
+      '[routing] insertUnitSource failed:',
+      err instanceof Error ? err.message : String(err)
+    );
+  }
+
+  const routingEntities = filterRoutingEntities(unit.entities);
+
+  if (unit.kind === 'event') {
+    // event unit：抽 routing entities，整个 source_event_id 重建 cache
+    try {
+      deleteUnitRoutingCacheByEvent(eventId);
+    } catch (err) {
+      console.warn(
+        '[routing] deleteUnitRoutingCacheByEvent failed:',
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+    const json = JSON.stringify(routingEntities);
+    // 为本 event 的所有 source units 各 materialize 一行
+    let sources: { unit_id: string }[] = [];
+    try {
+      sources = listUnitSourcesByEvent(eventId).map((r) => ({ unit_id: r.unit_id }));
+    } catch (err) {
+      console.warn(
+        '[routing] listUnitSourcesByEvent failed:',
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+    // 防御：本次插入的 unit_sources 行可能尚未被 sources 包含（race）；
+    // 确保至少 unit.id 在内。
+    if (!sources.some((s) => s.unit_id === unit.id)) {
+      sources.push({ unit_id: unit.id });
+    }
+    for (const s of sources) {
+      try {
+        upsertUnitRoutingCache({
+          id: randomUUID(),
+          unit_id: s.unit_id,
+          source_event_id: eventId,
+          routing_entities_json: json,
+          updated_at: nowIso,
+        });
+      } catch (err) {
+        console.warn(
+          '[routing] upsertUnitRoutingCache failed:',
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
+    return;
+  }
+
+  // semantic unit（kind != 'event'）：为本 (unit.id, eventId) 写一行 cache。
+  // routing entities = 源 event ContextUnit 上的 chat/doc/app 取并集 + 本 unit 自己可能含的 doc。
+  // 即便 semantic unit 不含 routing 类型，也要写一行让 resolver 通过 chat / doc 找到 Space。
+  const eventUnit = getActiveContextUnitByOriginAndKind('event', eventId, 'event');
+  const merged: ContextEntityRef[] = [...routingEntities];
+  if (eventUnit) {
+    try {
+      const evEntities = hydrateEntities(eventUnit.id);
+      for (const e of filterRoutingEntities(evEntities)) {
+        merged.push(e);
+      }
+    } catch {
+      /* swallow */
+    }
+  }
+  // dedup by (type, name, role)
+  const seen = new Set<string>();
+  const finalRouting: ContextEntityRef[] = [];
+  for (const e of merged) {
+    const key = `${e.type}::${e.name}::${e.role ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    finalRouting.push(e);
+  }
+  try {
+    upsertUnitRoutingCache({
+      id: randomUUID(),
+      unit_id: unit.id,
+      source_event_id: eventId,
+      routing_entities_json: JSON.stringify(finalRouting),
+      updated_at: nowIso,
+    });
+  } catch (err) {
+    console.warn(
+      '[routing] upsertUnitRoutingCache (semantic) failed:',
+      err instanceof Error ? err.message : String(err)
+    );
+  }
+}
+
+const ROUTING_ENTITY_TYPES = new Set(['chat', 'doc', 'app']);
+
+function filterRoutingEntities(entities: ContextEntityRef[]): ContextEntityRef[] {
+  return entities.filter((e) => ROUTING_ENTITY_TYPES.has(e.type));
+}
+
+function invokeHook(unit: ContextUnit, changeContext?: ChangeContext) {
   if (!pushHook) return;
   try {
-    pushHook(unit);
+    pushHook(unit, changeContext);
   } catch (err) {
     console.warn(
       '[context] upsert hook failed:',
@@ -323,12 +494,33 @@ export function insertMinimalEventContextUnit(opts: {
   source: string;
   actor?: string;
   actorRole?: string;
+  // MVP11.0-a：collector 现场算出的结构化字段（优先于默认 fallback）。
+  entities?: ContextEntityRef[];
+  contextMergeHint?: string;
+  actionability?: ContextActionability;
+  semanticTags?: SemanticTags;
 }): ContextUnit {
-  // 用 entity 表把 actor / source 落下来，便于后续合并
+  // MVP12 §4.1 P1.3：union + dedup by (type, name, role)。
+  //   - collector entities 已含 actor 角色 → 跳过 fallback；
+  //   - 否则按旧逻辑补一个 actor person。
+  const seen = new Set<string>();
   const entities: ContextEntityRef[] = [];
-  if (opts.actor && opts.actor.trim()) {
-    entities.push({ type: 'person', name: opts.actor, role: opts.actorRole ?? 'actor' });
+  const push = (e: ContextEntityRef) => {
+    const key = `${e.type}::${e.name}::${e.role ?? ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    entities.push(e);
+  };
+  for (const e of opts.entities ?? []) push(e);
+  const hasActorAlready = entities.some((e) => e.role === 'actor');
+  if (!hasActorAlready && opts.actor && opts.actor.trim()) {
+    push({ type: 'person', name: opts.actor, role: opts.actorRole ?? 'actor' });
   }
+  // semanticTags 通过 meaning 前缀透传给 evaluator
+  const meaning =
+    opts.semanticTags && Object.keys(opts.semanticTags).length
+      ? encodeSemanticTags(opts.semanticTags)
+      : undefined;
   return upsertContextUnit({
     kind: 'event',
     title: opts.title,
@@ -337,7 +529,9 @@ export function insertMinimalEventContextUnit(opts: {
     scope: opts.scope,
     origin: { kind: 'event', refId: opts.eventId },
     time: { occurredAt: opts.occurredAt },
-    actionability: 'record',
+    actionability: opts.actionability ?? 'record',
     confidence: 0.9,
+    mergeHint: opts.contextMergeHint,
+    meaning,
   }).unit;
 }

@@ -7,7 +7,11 @@ export type AuditAction =
   | 'card_batched_into_digest'
   | 'rule_learned'
   | 'rule_deactivated'
-  | 'auto_resolved';
+  | 'auto_resolved'
+  | 'correction_applied'        // MVP10.0
+  | 'correction_reverted'       // MVP10.0
+  | 'action_items_confirmed'    // MVP11.1
+  | 'action_items_declined';    // MVP11.1
 
 export function writeAudit(input: {
   action: AuditAction;

@@ -307,6 +307,79 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_rule ON audit_logs(rule_id);
+
+-- ============ MVP10 Feedback Correction + Entity Alias ============
+
+-- 仅记录"X 被合并到 Y"的有向引用；不动 context_entities 主表。
+-- 运行时 resolveAliased(id) 透传到 alias_of 的终态。
+CREATE TABLE IF NOT EXISTS entity_aliases (
+  id TEXT PRIMARY KEY,                 -- 被合并掉的 entity_id
+  alias_of TEXT NOT NULL,              -- 合并后保留的 entity_id (target)
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_entity_aliases_target ON entity_aliases(alias_of);
+
+-- 每条用户纠错的 forward / inverse patch 写在这里，配合 audit_logs 做可撤销。
+CREATE TABLE IF NOT EXISTS correction_journal (
+  id TEXT PRIMARY KEY,
+  feedback_id TEXT NOT NULL,                 -- card 触发；保留与 context_feedback.id 关联
+  correction_type TEXT NOT NULL,             -- wrong_priority | wrong_entity | wrong_kind | ...
+  target_kind TEXT NOT NULL,                 -- context_unit | boundary_rule | entity_alias
+  target_id TEXT NOT NULL,
+  forward_patch_json TEXT NOT NULL,
+  inverse_patch_json TEXT,                   -- NULL = 不可无损撤销
+  inverse_lossy INTEGER NOT NULL DEFAULT 0,
+  applied_at TEXT NOT NULL,
+  reverted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_correction_journal_feedback ON correction_journal(feedback_id);
+CREATE INDEX IF NOT EXISTS idx_correction_journal_target ON correction_journal(target_kind, target_id);
+
+-- ============ MVP12 Source / Semantic routing ============
+
+-- unit→source events 多对一：upsertContextUnit 时记录「这条 unit 是哪些 event 喂出来的」，
+-- 让 mergeKey 合并多个 event 后仍能枚举所有源 event 的 routing entities。
+CREATE TABLE IF NOT EXISTS unit_sources (
+  id TEXT PRIMARY KEY,
+  unit_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  recorded_at TEXT NOT NULL,
+  UNIQUE(unit_id, event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_unit_sources_unit ON unit_sources(unit_id);
+CREATE INDEX IF NOT EXISTS idx_unit_sources_event ON unit_sources(event_id);
+
+-- materialized routing cache：resolver hot path 直接读这里，避免回查 event unit。
+-- 每行 = (unit_id, source_event_id) → 这个 event 上抽出来的 routing entities (chat / doc / app)。
+CREATE TABLE IF NOT EXISTS unit_routing_cache (
+  id TEXT PRIMARY KEY,
+  unit_id TEXT NOT NULL,
+  source_event_id TEXT NOT NULL,
+  routing_entities_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(unit_id, source_event_id)
+);
+CREATE INDEX IF NOT EXISTS idx_unit_routing_unit ON unit_routing_cache(unit_id);
+CREATE INDEX IF NOT EXISTS idx_unit_routing_event ON unit_routing_cache(source_event_id);
+
+-- Phase 2 chat_affinity / person_co_occur / doc_overlap 等学习建议；schema 先建好，
+-- 本期 (Phase 1) 不写入。
+CREATE TABLE IF NOT EXISTS context_space_suggestions (
+  id TEXT PRIMARY KEY,
+  target_type TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  space_id TEXT NOT NULL,
+  suggestion_type TEXT NOT NULL,
+  score REAL NOT NULL,
+  evidence_json TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'suggested',
+  cooldown_until TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(target_type, target_id, space_id, suggestion_type)
+);
+CREATE INDEX IF NOT EXISTS idx_css_space ON context_space_suggestions(space_id);
+CREATE INDEX IF NOT EXISTS idx_css_status ON context_space_suggestions(status);
 `);
 
 // Forward-compat: add columns that may be missing in databases created by an earlier MVP0 boot.
@@ -324,6 +397,26 @@ ensureColumn('cards', 'source_kind', "TEXT NOT NULL DEFAULT 'triage'");
 ensureColumn('cards', 'source_ref_id', 'TEXT');
 // MVP2: events 加 context_extracted_at（与 processed_at 解耦）
 ensureColumn('events', 'context_extracted_at', 'TEXT');
+
+// MVP7: boundary_rules 加 condition_hash 做幂等。结构化字段稳定 JSON → sha1。
+// 重跑 bootstrap / 同样的 card_action 学到完全相同的 rule 时只更新 updated_at，不新建行。
+ensureColumn('boundary_rules', 'condition_hash', 'TEXT');
+db.exec(
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_boundary_rules_condition_hash
+   ON boundary_rules(condition_hash) WHERE condition_hash IS NOT NULL`
+);
+
+// MVP10.1: 3 级 autonomy 梯度（doc §6.4）。
+// - local_auto: 纯本地、可逆、低风险，自动执行（如合并 P3 到 daily_digest）
+// - local_with_audit: 本地状态写入或规则学习，必须 audit + journal（默认）
+// - external_always_confirm: 对外、共享、不可控副作用，永远确认
+ensureColumn('boundary_rules', 'autonomy', "TEXT NOT NULL DEFAULT 'local_with_audit'");
+ensureColumn('boundary_rules', 'reversible', 'INTEGER NOT NULL DEFAULT 1');
+ensureColumn('boundary_rules', 'impact_scope', "TEXT NOT NULL DEFAULT 'self'");
+
+// MVP12: context_space_links 加 reason_json，记录这条 link 的命中路径
+// （via='person'|'doc'|'chat_seed' ...）。upsertContextSpaceLinkBestHit cap 5 条 evidence。
+ensureColumn('context_space_links', 'reason_json', 'TEXT');
 
 // MVP3 迁移：旧的 idempotency 索引是 partial (WHERE status='pending')，
 // 导致 pull worker 每 60s 对同一 commitment 重复触发新 trigger，
@@ -430,6 +523,34 @@ export function listEvents(limit = 50): EventRow[] {
       `SELECT * FROM events ORDER BY occurred_at DESC LIMIT ?`
     )
     .all(limit) as EventRow[];
+}
+
+/**
+ * MVP11.0-b：列出近 sinceIso 之后、指定 source/kind 的 events，按 occurred_at desc。
+ * 给 driveCommentCollector 用来获取「近 14 天编辑过的 doc」候选 file_token 集合。
+ */
+export function listEventsBySourceSince(
+  source: string,
+  kind: string | null,
+  sinceIso: string,
+  limit = 500
+): EventRow[] {
+  if (kind) {
+    return db
+      .prepare(
+        `SELECT * FROM events
+         WHERE source = ? AND kind = ? AND occurred_at >= ?
+         ORDER BY occurred_at DESC LIMIT ?`
+      )
+      .all(source, kind, sinceIso, limit) as EventRow[];
+  }
+  return db
+    .prepare(
+      `SELECT * FROM events
+       WHERE source = ? AND occurred_at >= ?
+       ORDER BY occurred_at DESC LIMIT ?`
+    )
+    .all(source, sinceIso, limit) as EventRow[];
 }
 
 // -------- triage results --------
@@ -645,6 +766,25 @@ export function getActiveContextUnitByOrigin(
   );
 }
 
+// MVP12：按 origin + kind 精确取 unit，避免 multiple semantic units share origin
+// 时拿到错的那个（典型场景：triage 出的 commitment 与 collector 直写的 event unit
+// 都有 origin_kind='event' && origin_ref_id=<eventId>，按 updated_at DESC 取会拿到 semantic）。
+export function getActiveContextUnitByOriginAndKind(
+  originKind: string,
+  originRefId: string,
+  kind: string
+): ContextUnitRow | null {
+  return (
+    (db
+      .prepare(
+        `SELECT * FROM context_units
+         WHERE origin_kind = ? AND origin_ref_id = ? AND kind = ? AND status = 'active'
+         ORDER BY updated_at DESC LIMIT 1`
+      )
+      .get(originKind, originRefId, kind) as ContextUnitRow | undefined) ?? null
+  );
+}
+
 export function getActiveContextUnitByMergeKey(mergeKey: string): ContextUnitRow | null {
   return (
     (db
@@ -726,6 +866,14 @@ export function listContextEntities(limit = 200): ContextEntityRow[] {
   return db
     .prepare(`SELECT * FROM context_entities ORDER BY updated_at DESC LIMIT ?`)
     .all(limit) as ContextEntityRow[];
+}
+
+export function getContextEntityById(id: string): ContextEntityRow | null {
+  return (
+    (db.prepare(`SELECT * FROM context_entities WHERE id = ?`).get(id) as
+      | ContextEntityRow
+      | undefined) ?? null
+  );
 }
 
 // -------- context_unit_entities --------
@@ -1070,19 +1218,57 @@ export type ContextSpaceLinkRow = {
   link_type: string;
   confidence: number;
   created_at: string;
+  reason_json?: string | null;     // MVP12: 命中路径 evidence; cap 5
 };
 
 export function tryInsertContextSpaceLink(row: ContextSpaceLinkRow): boolean {
   try {
     db.prepare(
-      `INSERT INTO context_space_links (id, space_id, target_type, target_id, link_type, confidence, created_at)
-       VALUES (@id, @space_id, @target_type, @target_id, @link_type, @confidence, @created_at)`
-    ).run(row);
+      `INSERT INTO context_space_links (id, space_id, target_type, target_id, link_type, confidence, created_at, reason_json)
+       VALUES (@id, @space_id, @target_type, @target_id, @link_type, @confidence, @created_at, @reason_json)`
+    ).run({ reason_json: null, ...row });
     return true;
   } catch (err) {
     if (err instanceof Error && /UNIQUE/i.test(err.message)) return false;
     throw err;
   }
+}
+
+export function getContextSpaceLink(
+  spaceId: string,
+  targetType: string,
+  targetId: string
+): ContextSpaceLinkRow | null {
+  return (
+    (db
+      .prepare(
+        `SELECT * FROM context_space_links
+         WHERE space_id = ? AND target_type = ? AND target_id = ?`
+      )
+      .get(spaceId, targetType, targetId) as ContextSpaceLinkRow | undefined) ?? null
+  );
+}
+
+export function updateContextSpaceLink(
+  id: string,
+  patch: { link_type?: string; confidence?: number; reason_json?: string | null }
+): void {
+  const sets: string[] = [];
+  const params: Record<string, unknown> = { id };
+  if (patch.link_type !== undefined) {
+    sets.push('link_type = @link_type');
+    params.link_type = patch.link_type;
+  }
+  if (patch.confidence !== undefined) {
+    sets.push('confidence = @confidence');
+    params.confidence = patch.confidence;
+  }
+  if (patch.reason_json !== undefined) {
+    sets.push('reason_json = @reason_json');
+    params.reason_json = patch.reason_json;
+  }
+  if (sets.length === 0) return;
+  db.prepare(`UPDATE context_space_links SET ${sets.join(', ')} WHERE id = @id`).run(params);
 }
 
 export function listSpaceLinks(spaceId: string): ContextSpaceLinkRow[] {
@@ -1100,6 +1286,138 @@ export function listSpacesForTarget(
       `SELECT * FROM context_space_links WHERE target_type = ? AND target_id = ?`
     )
     .all(targetType, targetId) as ContextSpaceLinkRow[];
+}
+
+// MVP12 §4.1 P1.7：context_unit link 的 rank-aware upsert。
+// 比较新 hit.rank vs 旧 link 当前 rank：
+//   - 新 rank > 旧 → 升级 link_type / confidence；reason_json append（cap 5）
+//   - 新 rank == 旧 → 取较大 confidence；reason_json append
+//   - 新 rank < 旧 → 仅 append reason_json
+// Space seed entity link 不走此路径（target_type='entity' 仍用 tryInsertContextSpaceLink）。
+export type SpaceLinkHit = {
+  rank: number;
+  linkType: string;
+  confidence: number;
+  reason: {
+    via: 'person' | 'project' | 'doc' | 'chat_seed' | 'topic' | string;
+    sourceEntityId: string;
+    sourceEntityName: string;
+  };
+};
+
+const REASON_CAP = 5;
+
+type ReasonJson = {
+  via: string;
+  sourceEntityId: string;
+  sourceEntityName: string;
+  more?: Array<{ via: string; sourceEntityId: string; sourceEntityName: string }>;
+};
+
+function rankOfLinkType(linkType: string): number {
+  if (linkType === 'about') return 3;
+  if (linkType === 'about_via_doc') return 2;
+  if (linkType === 'about_via_chat') return 1;
+  // unknown link types from older data — treat as 0 so any new hit wins
+  return 0;
+}
+
+export function upsertContextSpaceLinkBestHit(
+  spaceId: string,
+  unitId: string,
+  hit: SpaceLinkHit,
+  idFactory: () => string,
+  nowIso: string
+): 'inserted' | 'upgraded' | 'reason-appended' | 'noop' {
+  const existing = getContextSpaceLink(spaceId, 'context_unit', unitId);
+  const newReason: ReasonJson = {
+    via: hit.reason.via,
+    sourceEntityId: hit.reason.sourceEntityId,
+    sourceEntityName: hit.reason.sourceEntityName,
+  };
+
+  if (!existing) {
+    const ok = tryInsertContextSpaceLink({
+      id: idFactory(),
+      space_id: spaceId,
+      target_type: 'context_unit',
+      target_id: unitId,
+      link_type: hit.linkType,
+      confidence: hit.confidence,
+      created_at: nowIso,
+      reason_json: JSON.stringify(newReason),
+    });
+    return ok ? 'inserted' : 'noop';
+  }
+
+  const oldRank = rankOfLinkType(existing.link_type);
+  let existingReason: ReasonJson | null = null;
+  try {
+    existingReason = existing.reason_json ? JSON.parse(existing.reason_json) : null;
+  } catch {
+    existingReason = null;
+  }
+
+  // Build appended reason: keep current primary, push old primary into more[] if upgrading.
+  function appendReason(
+    primary: ReasonJson,
+    incoming: { via: string; sourceEntityId: string; sourceEntityName: string }
+  ): ReasonJson {
+    const more = primary.more ? [...primary.more] : [];
+    // skip duplicates on (via, sourceEntityId)
+    const dupKey = (r: { via: string; sourceEntityId: string }) =>
+      `${r.via}::${r.sourceEntityId}`;
+    if (
+      dupKey(primary) === dupKey(incoming) ||
+      more.some((m) => dupKey(m) === dupKey(incoming))
+    ) {
+      return primary;
+    }
+    more.push(incoming);
+    if (more.length > REASON_CAP - 1) more.length = REASON_CAP - 1;
+    return { ...primary, more };
+  }
+
+  if (hit.rank > oldRank) {
+    // Upgrade: new becomes primary, old primary demoted into more[].
+    const upgraded: ReasonJson = { ...newReason };
+    if (existingReason) {
+      upgraded.more = [
+        {
+          via: existingReason.via,
+          sourceEntityId: existingReason.sourceEntityId,
+          sourceEntityName: existingReason.sourceEntityName,
+        },
+        ...(existingReason.more ?? []),
+      ].slice(0, REASON_CAP - 1);
+    }
+    updateContextSpaceLink(existing.id, {
+      link_type: hit.linkType,
+      confidence: hit.confidence,
+      reason_json: JSON.stringify(upgraded),
+    });
+    return 'upgraded';
+  }
+
+  if (hit.rank === oldRank) {
+    const newConf = Math.max(existing.confidence, hit.confidence);
+    const merged = existingReason
+      ? appendReason(existingReason, newReason)
+      : newReason;
+    updateContextSpaceLink(existing.id, {
+      confidence: newConf,
+      reason_json: JSON.stringify(merged),
+    });
+    return 'reason-appended';
+  }
+
+  // hit.rank < oldRank: keep link, just append evidence
+  if (existingReason) {
+    const merged = appendReason(existingReason, newReason);
+    updateContextSpaceLink(existing.id, { reason_json: JSON.stringify(merged) });
+    return 'reason-appended';
+  }
+  return 'noop';
 }
 
 // -------- decisions --------
@@ -1145,6 +1463,11 @@ export type BoundaryRuleRow = {
   source: string;
   migrated: number;
   active: number;
+  condition_hash: string | null;
+  // MVP10.1
+  autonomy: string;
+  reversible: number;
+  impact_scope: string;
   created_at: string;
   updated_at: string;
 };
@@ -1152,10 +1475,27 @@ export type BoundaryRuleRow = {
 export function insertBoundaryRule(row: BoundaryRuleRow) {
   db.prepare(
     `INSERT INTO boundary_rules (id, scope, condition_json, allowed_action, requires_approval,
-       confidence, learned_from_card_id, source, migrated, active, created_at, updated_at)
+       confidence, learned_from_card_id, source, migrated, active, condition_hash,
+       autonomy, reversible, impact_scope, created_at, updated_at)
      VALUES (@id, @scope, @condition_json, @allowed_action, @requires_approval,
-       @confidence, @learned_from_card_id, @source, @migrated, @active, @created_at, @updated_at)`
+       @confidence, @learned_from_card_id, @source, @migrated, @active, @condition_hash,
+       @autonomy, @reversible, @impact_scope, @created_at, @updated_at)`
   ).run(row);
+}
+
+export function getBoundaryRuleByConditionHash(hash: string): BoundaryRuleRow | null {
+  return (
+    (db
+      .prepare(`SELECT * FROM boundary_rules WHERE condition_hash = ?`)
+      .get(hash) as BoundaryRuleRow | undefined) ?? null
+  );
+}
+
+export function touchBoundaryRule(id: string): void {
+  db.prepare(`UPDATE boundary_rules SET updated_at = ? WHERE id = ?`).run(
+    new Date().toISOString(),
+    id
+  );
 }
 
 export function listBoundaryRules(opts: { activeOnly?: boolean } = {}): BoundaryRuleRow[] {
@@ -1209,4 +1549,183 @@ export function listAuditLogs(limit = 200): AuditLogRow[] {
   return db
     .prepare(`SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT ?`)
     .all(limit) as AuditLogRow[];
+}
+
+// -------- entity_aliases (MVP10) --------
+
+export type EntityAliasRow = {
+  id: string;
+  alias_of: string;
+  created_at: string;
+};
+
+export function insertEntityAlias(row: EntityAliasRow): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO entity_aliases (id, alias_of, created_at)
+     VALUES (@id, @alias_of, @created_at)`
+  ).run(row);
+}
+
+export function getEntityAlias(id: string): EntityAliasRow | null {
+  return (
+    (db.prepare(`SELECT * FROM entity_aliases WHERE id = ?`).get(id) as
+      | EntityAliasRow
+      | undefined) ?? null
+  );
+}
+
+export function deleteEntityAlias(id: string): void {
+  db.prepare(`DELETE FROM entity_aliases WHERE id = ?`).run(id);
+}
+
+// -------- correction_journal (MVP10) --------
+
+export type CorrectionJournalRow = {
+  id: string;
+  feedback_id: string;
+  correction_type: string;
+  target_kind: string;
+  target_id: string;
+  forward_patch_json: string;
+  inverse_patch_json: string | null;
+  inverse_lossy: number;
+  applied_at: string;
+  reverted_at: string | null;
+};
+
+export function insertCorrectionJournal(row: CorrectionJournalRow): void {
+  db.prepare(
+    `INSERT INTO correction_journal
+     (id, feedback_id, correction_type, target_kind, target_id,
+      forward_patch_json, inverse_patch_json, inverse_lossy, applied_at, reverted_at)
+     VALUES (@id, @feedback_id, @correction_type, @target_kind, @target_id,
+       @forward_patch_json, @inverse_patch_json, @inverse_lossy, @applied_at, @reverted_at)`
+  ).run(row);
+}
+
+export function getCorrectionJournal(id: string): CorrectionJournalRow | null {
+  return (
+    (db.prepare(`SELECT * FROM correction_journal WHERE id = ?`).get(id) as
+      | CorrectionJournalRow
+      | undefined) ?? null
+  );
+}
+
+export function listCorrectionJournalForCard(cardId: string): CorrectionJournalRow[] {
+  // feedback_id 在 MVP10 阶段直接复用 card_id（每张卡的 inline correction 用 card_id 作 feedback_id）
+  return db
+    .prepare(
+      `SELECT * FROM correction_journal WHERE feedback_id = ? ORDER BY applied_at DESC`
+    )
+    .all(cardId) as CorrectionJournalRow[];
+}
+
+export function listCorrectionJournalRecent(limit = 50): CorrectionJournalRow[] {
+  return db
+    .prepare(`SELECT * FROM correction_journal ORDER BY applied_at DESC LIMIT ?`)
+    .all(limit) as CorrectionJournalRow[];
+}
+
+export function markCorrectionReverted(id: string, at: string): void {
+  db.prepare(`UPDATE correction_journal SET reverted_at = ? WHERE id = ?`).run(at, id);
+}
+
+// -------- unit_sources / unit_routing_cache (MVP12) --------
+
+export type UnitSourceRow = {
+  id: string;
+  unit_id: string;
+  event_id: string;
+  recorded_at: string;
+};
+
+export function insertUnitSource(row: UnitSourceRow): boolean {
+  try {
+    db.prepare(
+      `INSERT INTO unit_sources (id, unit_id, event_id, recorded_at)
+       VALUES (@id, @unit_id, @event_id, @recorded_at)`
+    ).run(row);
+    return true;
+  } catch (err) {
+    if (err instanceof Error && /UNIQUE/i.test(err.message)) return false;
+    throw err;
+  }
+}
+
+export function listUnitSourcesByEvent(eventId: string): UnitSourceRow[] {
+  return db
+    .prepare(`SELECT * FROM unit_sources WHERE event_id = ?`)
+    .all(eventId) as UnitSourceRow[];
+}
+
+export function listUnitSourcesByUnit(unitId: string): UnitSourceRow[] {
+  return db
+    .prepare(`SELECT * FROM unit_sources WHERE unit_id = ?`)
+    .all(unitId) as UnitSourceRow[];
+}
+
+export type UnitRoutingCacheRow = {
+  id: string;
+  unit_id: string;
+  source_event_id: string;
+  routing_entities_json: string;
+  updated_at: string;
+};
+
+export function upsertUnitRoutingCache(row: UnitRoutingCacheRow): void {
+  db.prepare(
+    `INSERT INTO unit_routing_cache (id, unit_id, source_event_id, routing_entities_json, updated_at)
+     VALUES (@id, @unit_id, @source_event_id, @routing_entities_json, @updated_at)
+     ON CONFLICT(unit_id, source_event_id) DO UPDATE SET
+       routing_entities_json = excluded.routing_entities_json,
+       updated_at = excluded.updated_at`
+  ).run(row);
+}
+
+export function deleteUnitRoutingCacheByEvent(eventId: string): void {
+  db.prepare(`DELETE FROM unit_routing_cache WHERE source_event_id = ?`).run(eventId);
+}
+
+export function listUnitRoutingCacheByUnit(unitId: string): UnitRoutingCacheRow[] {
+  return db
+    .prepare(`SELECT * FROM unit_routing_cache WHERE unit_id = ?`)
+    .all(unitId) as UnitRoutingCacheRow[];
+}
+
+// -------- context_space_suggestions (MVP12 schema-only, Phase 2 logic) --------
+
+export type ContextSpaceSuggestionRow = {
+  id: string;
+  target_type: string;
+  target_id: string;
+  space_id: string;
+  suggestion_type: string;
+  score: number;
+  evidence_json: string;
+  status: string;
+  cooldown_until: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export function listSpaceSuggestions(
+  spaceId: string,
+  status?: string
+): ContextSpaceSuggestionRow[] {
+  if (status) {
+    return db
+      .prepare(
+        `SELECT * FROM context_space_suggestions
+         WHERE space_id = ? AND status = ?
+         ORDER BY score DESC, updated_at DESC`
+      )
+      .all(spaceId, status) as ContextSpaceSuggestionRow[];
+  }
+  return db
+    .prepare(
+      `SELECT * FROM context_space_suggestions
+       WHERE space_id = ?
+       ORDER BY score DESC, updated_at DESC`
+    )
+    .all(spaceId) as ContextSpaceSuggestionRow[];
 }

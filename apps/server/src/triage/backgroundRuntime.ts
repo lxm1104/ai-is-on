@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { config } from '../config.js';
 import { TRIAGE_SYSTEM_PROMPT } from './triagePrompt.js';
+import { buildClaudeChildEnv } from '../claude/childEnv.js';
 
 export type OneShotResult = {
   text: string;
@@ -40,7 +41,7 @@ export function runOneShot(
 
     const child = spawn('node', args, {
       cwd: process.cwd(),
-      env: process.env,
+      env: buildClaudeChildEnv(),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 

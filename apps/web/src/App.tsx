@@ -6,6 +6,7 @@ import { CardList } from './components/CardList';
 import { ContextPanel } from './components/ContextPanel';
 import { SpacesPanel } from './components/SpacesPanel';
 import { RulesPanel } from './components/RulesPanel';
+import { WorkMapPanel } from './components/WorkMapPanel';
 import {
   fetchCards,
   fetchCollectors,
@@ -32,6 +33,8 @@ export function App() {
   const [collectors, setCollectors] = useState<CollectorStatus[]>([]);
   const [sending, setSending] = useState(false);
   const [topError, setTopError] = useState<string | null>(null);
+  const [bootstrapCompletedAt, setBootstrapCompletedAt] = useState<string | null>(null);
+  const [bootstrapBannerDismissed, setBootstrapBannerDismissed] = useState(false);
   const seenIds = useRef<Set<string>>(new Set());
 
   function applyMessage(m: ChatMessage, mode: 'add' | 'update') {
@@ -143,9 +146,13 @@ export function App() {
     }
   }
 
-  async function onCardAction(cardId: string, actionId: string) {
+  async function onCardAction(
+    cardId: string,
+    actionId: string,
+    opts?: { extraPrompt?: string }
+  ) {
     try {
-      await postCardAction(cardId, actionId);
+      await postCardAction(cardId, actionId, opts);
     } catch (err) {
       setTopError(err instanceof Error ? err.message : String(err));
       throw err;
@@ -182,6 +189,20 @@ export function App() {
           </button>
         </div>
       )}
+      {!bootstrapCompletedAt && !bootstrapBannerDismissed && (
+        <div className="banner banner--info">
+          <span>
+            还没填 Work Map。花 5 分钟告诉 Agent "我是谁、负责什么、不希望被什么打扰"，
+            后续判断会更聪明。
+          </span>
+          <button
+            className="btn btn--ghost"
+            onClick={() => setBootstrapBannerDismissed(true)}
+          >
+            稍后
+          </button>
+        </div>
+      )}
       <main className="main main--split">
         <aside className="pane pane--cards">
           <CardList
@@ -189,6 +210,10 @@ export function App() {
             onAction={onCardAction}
             onRunOnce={onRunOnce}
             collectorsHint={collectorsHint}
+          />
+          <WorkMapPanel
+            initialOpen={!bootstrapCompletedAt}
+            onBootstrapChange={(t) => setBootstrapCompletedAt(t)}
           />
           <SpacesPanel />
           <RulesPanel />

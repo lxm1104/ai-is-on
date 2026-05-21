@@ -26,7 +26,7 @@ const RELEVANT_KINDS = new Set([
   'preference',
 ]);
 
-export const caringHandler: AgentHandler = async ({ trigger }) => {
+export const caringHandler: AgentHandler = async ({ trigger, agentRunId }) => {
   if (isCaringPaused()) {
     return {
       summary: 'caring skipped (paused)',
@@ -82,7 +82,7 @@ export const caringHandler: AgentHandler = async ({ trigger }) => {
   const title = '我看到了一些什么';
   const proposal: ActionProposalRow = {
     id: proposalId,
-    agent_run_id: null,
+    agent_run_id: agentRunId,
     proposal_type: 'caring_note',
     title,
     body,
@@ -108,6 +108,9 @@ export const caringHandler: AgentHandler = async ({ trigger }) => {
     priority: 'P2',
     source: 'agent',
     reason: trigger.reasoning ?? '已陪伴你一段时间，做一次轻量回应',
+    triggerType: trigger.trigger_type,
+    kind: 'emotion',
+    scope: 'personal',
     actions: [
       { id: 'chat', label: '聊聊', kind: 'ask_agent', prompt: '我看了你的 caring 卡片，想跟你聊聊我最近的状态' },
       { id: 'note', label: '先记下', kind: 'ack' },

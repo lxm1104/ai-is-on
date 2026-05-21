@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch --clear-screen=false src/index.ts",
-    "start": "tsx src/index.ts"
+    "start": "tsx src/index.ts",
+    "test:unit": "tsx --test test/sanitize-excerpt.test.ts",
+    "eval:mvp7": "tsx test/eval/mvp7.eval.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0",

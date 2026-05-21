@@ -62,6 +62,19 @@ export const config = {
   imChatListMaxPages: envInt('IM_CHAT_LIST_MAX_PAGES', 5),
   // 并发拉取 chat 数（避免一次起几十个 lark-cli 进程）
   imChatFetchConcurrency: envInt('IM_CHAT_FETCH_CONCURRENCY', 4),
+  // MVP11.0-b drive comment collector
+  driveCommentEnabled: envBool('DRIVE_COMMENT_COLLECTOR_ENABLED', true),
+  driveCommentIntervalMs: envInt('DRIVE_COMMENT_COLLECTOR_INTERVAL_MS', 300_000),
+  driveCommentLookbackDays: envInt('DRIVE_COMMENT_LOOKBACK_DAYS', 14),
+  driveCommentMaxDocsPerTick: envInt('DRIVE_COMMENT_MAX_DOCS_PER_TICK', 30),
+  driveCommentMaxCommentsPerDoc: envInt('DRIVE_COMMENT_MAX_COMMENTS_PER_DOC', 100),
+
+  // MVP11.1 meeting artifact collector
+  meetingArtifactEnabled: envBool('MEETING_ARTIFACT_COLLECTOR_ENABLED', true),
+  meetingArtifactIntervalMs: envInt('MEETING_ARTIFACT_COLLECTOR_INTERVAL_MS', 600_000),
+  meetingArtifactLookbackDays: envInt('MEETING_ARTIFACT_LOOKBACK_DAYS', 3),
+  meetingArtifactMaxPerTick: envInt('MEETING_ARTIFACT_MAX_PER_TICK', 50),
+  meetingArtifactRawCapBytes: envInt('MEETING_ARTIFACT_RAW_CAP_BYTES', 256 * 1024),
   // Triage queue concurrency. Keep at 1 (each round spawns a fresh Claude process).
   triageQueueConcurrency: envInt('TRIAGE_QUEUE_CONCURRENCY', 1),
   // Per-round triage timeout (one-shot Claude subprocess)

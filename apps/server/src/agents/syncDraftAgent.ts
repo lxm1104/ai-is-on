@@ -41,13 +41,36 @@ const SYNC_DRAFT_SYSTEM_PROMPT = `你正在为用户起草一段简短的飞书�
   "confidence": 0.7
 }`;
 
-export const syncDraftHandler: AgentHandler = async ({ trigger }) => {
+export const syncDraftHandler: AgentHandler = async ({
+  trigger,
+  unit,
+  packet,
+  agentRunId,
+}) => {
   const payload = safeJSON(trigger.payload_json) as Record<string, unknown> | null;
   if (!payload) {
     return { summary: 'sync_draft skipped (no payload)', proposalIds: [], cardIds: [] };
   }
 
-  const userMessage = JSON.stringify({ divergence: payload }, null, 2);
+  const llmInput: Record<string, unknown> = { divergence: payload };
+  if (packet?.spaces?.length) {
+    llmInput.spaces = packet.spaces.map((s) => ({
+      name: s.name,
+      priority: s.priority,
+      docs: s.docs.map((d) => d.name),
+    }));
+  }
+  if (packet?.focalUnit) {
+    llmInput.focalUnit = {
+      kind: packet.focalUnit.kind,
+      title: packet.focalUnit.title,
+      meaning: packet.focalUnit.meaning,
+    };
+  }
+  if (packet?.stakeholders?.length) {
+    llmInput.stakeholders = packet.stakeholders;
+  }
+  const userMessage = JSON.stringify(llmInput, null, 2);
   let parsed: SyncDraftResult;
   try {
     const r = await runOneShot(userMessage, {
@@ -83,7 +106,7 @@ export const syncDraftHandler: AgentHandler = async ({ trigger }) => {
 
   const proposal: ActionProposalRow = {
     id: proposalId,
-    agent_run_id: null,
+    agent_run_id: agentRunId,
     proposal_type: 'sync_draft',
     title,
     body,
@@ -109,6 +132,10 @@ export const syncDraftHandler: AgentHandler = async ({ trigger }) => {
     source: 'agent',
     reason: trigger.reasoning ?? 'Context divergence — 准备同步草稿',
     draftReply: parsed.draft,
+    triggerType: trigger.trigger_type,
+    kind: unit?.kind,
+    entities: unit?.entities.map((e) => ({ type: e.type, name: e.name })),
+    scope: 'work',
     actions: [
       // MVP5 范围：不自动发；用户复制/编辑后自己发飞书。
       { id: 'copy', label: '复制草稿', kind: 'ack' },

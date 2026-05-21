@@ -9,12 +9,15 @@ import {
   listContextUnits,
   listSpaceLinks,
   listSpacesForTarget,
+  listUnitRoutingCacheByUnit,
   tryInsertContextSpaceLink,
   updateContextSpace,
+  upsertContextSpaceLinkBestHit,
+  type SpaceLinkHit,
 } from '../db.js';
-import type { ContextUnit } from '../context/ContextUnit.js';
+import type { ContextEntityRef, ContextUnit } from '../context/ContextUnit.js';
 import { getContextUnitById } from '../context/contextStore.js';
-import { resolveOrCreateEntity } from '../context/entityResolver.js';
+import { resolveAliased, resolveOrCreateEntity } from '../context/entityResolver.js';
 
 export type SpaceType = 'project' | 'topic';
 
@@ -104,39 +107,109 @@ export function archiveSpace(id: string): ContextSpaceRow | null {
   return updated;
 }
 
+// MVP12 §4.1 P1.6：rank 表（rank 越大越优）
+//
+//   person / project (direct via unit.entities)        → rank 3, 'about',          conf 0.80
+//   doc            (direct via unit.entities or cache) → rank 2, 'about_via_doc',  conf 0.85
+//   chat seed      (only via routing cache)            → rank 1, 'about_via_chat', conf 0.75
+const RANK_TABLE: Record<string, { rank: number; linkType: string; confidence: number; via: string }> = {
+  person: { rank: 3, linkType: 'about', confidence: 0.8, via: 'person' },
+  project: { rank: 3, linkType: 'about', confidence: 0.8, via: 'project' },
+  topic: { rank: 3, linkType: 'about', confidence: 0.8, via: 'topic' },
+  doc: { rank: 2, linkType: 'about_via_doc', confidence: 0.85, via: 'doc' },
+  chat: { rank: 1, linkType: 'about_via_chat', confidence: 0.75, via: 'chat_seed' },
+};
+
 /**
- * Given a freshly upserted ContextUnit, attach it to any Space whose seed
- * entities overlap with the unit's entities. Idempotent.
+ * 把 unit 自身的 entities 与（semantic 时）routing cache 里的 entities 合并去重，
+ * dedup by (type, name, role)。
  */
-export function resolveUnitToSpaces(unit: ContextUnit): string[] {
-  if (!unit.entities || unit.entities.length === 0) return [];
-  const matchedSpaceIds = new Set<string>();
-  // Resolve each unit entity → entity_id, look up spaces that have an
-  // 'entity' link to that entity_id.
-  for (const e of unit.entities) {
+function collectRoutingEntities(unit: ContextUnit): ContextEntityRef[] {
+  const seen = new Set<string>();
+  const out: ContextEntityRef[] = [];
+  const push = (e: ContextEntityRef) => {
+    const key = `${e.type}::${e.name}::${e.role ?? ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(e);
+  };
+  for (const e of unit.entities ?? []) push(e);
+
+  if (unit.kind !== 'event') {
     try {
-      const ent = resolveOrCreateEntity(e.type, e.name);
-      const links = listSpacesForTarget('entity', ent.id);
-      for (const l of links) matchedSpaceIds.add(l.space_id);
-    } catch {
-      // skip malformed entity
+      for (const row of listUnitRoutingCacheByUnit(unit.id)) {
+        const refs = JSON.parse(row.routing_entities_json) as ContextEntityRef[];
+        for (const e of refs) push(e);
+      }
+    } catch (err) {
+      console.warn(
+        '[spaces] read routing cache failed:',
+        err instanceof Error ? err.message : String(err)
+      );
     }
   }
-  if (matchedSpaceIds.size === 0) return [];
+  return out;
+}
 
+/**
+ * MVP12 §4.1 P1.6：把 unit 路由到所有匹配 Space，rank-aware 写 link。
+ * 同 Space 多个 entity 命中取 max rank（并列取较大 confidence），reason 累加。
+ */
+export function resolveUnitToSpaces(unit: ContextUnit): string[] {
+  const routing = collectRoutingEntities(unit);
+  if (routing.length === 0) return [];
+
+  // spaceId → 当前最佳 hit（基于 rank → confidence）
+  const bestPerSpace = new Map<string, SpaceLinkHit>();
+  // spaceId → 已 evidence 过的 (via, sourceEntityId) 集合，避免同 unit 同入口多次写
+  const evidenceSeen = new Map<string, Set<string>>();
+
+  for (const e of routing) {
+    const tier = RANK_TABLE[e.type];
+    if (!tier) continue; // 不参与路由的 entity type (emotion / org / ...)
+    let entId: string;
+    try {
+      const ent = resolveOrCreateEntity(e.type, e.name);
+      entId = resolveAliased(ent.id);
+    } catch {
+      continue;
+    }
+    const links = listSpacesForTarget('entity', entId);
+    if (links.length === 0) continue;
+    for (const l of links) {
+      const seenKey = `${tier.via}::${entId}`;
+      const seenSet = evidenceSeen.get(l.space_id) ?? new Set<string>();
+      if (seenSet.has(seenKey)) continue;
+      seenSet.add(seenKey);
+      evidenceSeen.set(l.space_id, seenSet);
+
+      const candidate: SpaceLinkHit = {
+        rank: tier.rank,
+        linkType: tier.linkType,
+        confidence: tier.confidence,
+        reason: {
+          via: tier.via,
+          sourceEntityId: entId,
+          sourceEntityName: e.name,
+        },
+      };
+      const current = bestPerSpace.get(l.space_id);
+      if (
+        !current ||
+        candidate.rank > current.rank ||
+        (candidate.rank === current.rank && candidate.confidence > current.confidence)
+      ) {
+        bestPerSpace.set(l.space_id, candidate);
+      }
+    }
+  }
+
+  if (bestPerSpace.size === 0) return [];
   const now = new Date().toISOString();
   const linked: string[] = [];
-  for (const spaceId of matchedSpaceIds) {
-    const ok = tryInsertContextSpaceLink({
-      id: randomUUID(),
-      space_id: spaceId,
-      target_type: 'context_unit',
-      target_id: unit.id,
-      link_type: 'about',
-      confidence: 0.8,
-      created_at: now,
-    });
-    if (ok) linked.push(spaceId);
+  for (const [spaceId, hit] of bestPerSpace) {
+    const r = upsertContextSpaceLinkBestHit(spaceId, unit.id, hit, randomUUID, now);
+    if (r === 'inserted' || r === 'upgraded') linked.push(spaceId);
   }
   return linked;
 }

@@ -3,6 +3,8 @@ import { config } from '../config.js';
 import { runLarkCliJson } from '../util/larkCli.js';
 import { toLocalTzIso } from '../util/iso.js';
 import { getMyOpenId } from '../util/identity.js';
+import { extractFeishuDocEntities } from '../util/extractFeishuDocRefs.js';
+import type { ContextEntityRef } from '../context/ContextUnit.js';
 import type { Collector, RawSignal } from './types.js';
 
 // ---------- types ----------
@@ -76,6 +78,82 @@ function isWanted(msg: ImMessage, myOpenId: string): boolean {
 
 function shortHash(input: string): string {
   return crypto.createHash('sha256').update(input).digest('hex').slice(0, 32);
+}
+
+// MVP12 §4.1 P1.1：sender 是否为机器人 / 应用网关
+function isBotSender(sender?: ImMessage['sender']): boolean {
+  if (!sender) return false;
+  if (sender.sender_type === 'app') return true;
+  if (sender.id && sender.id.startsWith('cli_')) return true;
+  return false;
+}
+
+// MVP12 §4.1 P1.1：构造 routing 用的 chat entity
+//   - name = 'lark_chat:<chat_id>'（稳定 key，群改名不变）
+//   - aliases = [chat_name]（取最近一次显示名）
+//   - role = 'container'（不参与 actor / about；renderer 会过滤）
+function chatEntity(chatId: string, chatName?: string): ContextEntityRef {
+  const aliases = chatName?.trim() ? [chatName.trim()] : undefined;
+  return {
+    type: 'chat',
+    name: `lark_chat:${chatId}`,
+    aliases,
+    role: 'container',
+    confidence: 1.0,
+  };
+}
+
+// MVP12 §4.1 P1.1：单条消息的 sender entity（人 vs 应用）
+function senderEntity(sender?: ImMessage['sender']): ContextEntityRef | null {
+  if (!sender) return null;
+  const displayName = sender.name?.trim() || sender.id?.trim();
+  if (!displayName) return null;
+  const isBot = isBotSender(sender);
+  const aliases = sender.id && sender.id !== displayName ? [sender.id] : undefined;
+  return {
+    type: isBot ? 'app' : 'person',
+    name: displayName,
+    aliases,
+    role: 'actor',
+    confidence: 0.9,
+  };
+}
+
+// MVP12：聚合消息的发送者 entities —— 机器人合并、人去重 cap 8。
+function aggregateSenderEntities(msgs: ImMessage[]): ContextEntityRef[] {
+  const out: ContextEntityRef[] = [];
+  const seenPersonName = new Set<string>();
+  let seenBot = false;
+  for (const m of msgs) {
+    const e = senderEntity(m.sender);
+    if (!e) continue;
+    if (e.type === 'app') {
+      if (seenBot) continue;
+      seenBot = true;
+      out.push(e);
+      continue;
+    }
+    if (seenPersonName.has(e.name)) continue;
+    seenPersonName.add(e.name);
+    out.push(e);
+    if (out.filter((x) => x.type === 'person').length >= 8) {
+      // person cap 命中后继续吸收 bot（最多一条），但 person 不再加
+      // 由 outer continue 控制
+    }
+  }
+  return out;
+}
+
+function dedupEntities(refs: ContextEntityRef[]): ContextEntityRef[] {
+  const seen = new Set<string>();
+  const out: ContextEntityRef[] = [];
+  for (const r of refs) {
+    const key = `${r.type}::${r.name}::${r.role ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+  }
+  return out;
 }
 
 /**
@@ -311,36 +389,51 @@ export const imCollector: Collector = {
         : chat.chat_id
           ? `未命名群 #${chat.chat_id.slice(-6)}`
           : '未知群';
+      const chatId = chat.chat_id ?? '';
+      const chatEnt = chatId ? chatEntity(chatId, chat.name) : null;
       if (msgs.length >= config.imAggregateThreshold) {
         // aggregated signal: one per chat per window
         const lastMsgId = msgs[msgs.length - 1]?.message_id ?? '';
+        const text = summarizeAggregate(chatName, msgs, startLocal);
+        const entities: ContextEntityRef[] = [];
+        if (chatEnt) entities.push(chatEnt);
+        entities.push(...aggregateSenderEntities(msgs));
+        entities.push(...extractFeishuDocEntities(text));
         signals.push({
           source: 'im',
           sourceId: `chat:${chat.chat_id}:agg:${sinceIso}`,
           kind: msgs.some((m) => isAtMe(m, myOpenId)) ? 'group_burst_at_me' : 'group_burst',
           occurredAt: parseCreateTime(msgs[msgs.length - 1]?.create_time),
           title: `${chatName} · 新增 ${msgs.length} 条`,
-          text: summarizeAggregate(chatName, msgs, startLocal),
+          text,
           actor: undefined,
           url: msgs[msgs.length - 1]?.message_app_link,
           raw: { chat, msgs },
           contentHash: shortHash(
             `agg|${chat.chat_id}|${msgs.length}|${lastMsgId}|${sinceIso}`
           ),
+          entities: dedupEntities(entities),
         });
       } else {
         for (const m of msgs) {
+          const text = summarizeOne(m, chatName);
+          const entities: ContextEntityRef[] = [];
+          if (chatEnt) entities.push(chatEnt);
+          const se = senderEntity(m.sender);
+          if (se) entities.push(se);
+          entities.push(...extractFeishuDocEntities(text));
           signals.push({
             source: 'im',
             sourceId: m.message_id!,
             kind: isAtMe(m, myOpenId) ? 'at_me' : 'group_message',
             occurredAt: parseCreateTime(m.create_time),
             title: chatName,
-            text: summarizeOne(m, chatName),
+            text,
             actor: m.sender?.name ?? m.sender?.id,
             url: m.message_app_link,
             raw: { chat, msg: m },
             contentHash: shortHash(`${m.message_id}|${m.content ?? ''}|${m.create_time ?? ''}`),
+            entities: dedupEntities(entities),
           });
         }
       }
@@ -361,35 +454,47 @@ export const imCollector: Collector = {
     for (const [chatId, msgs] of p2pByChat) {
       msgs.sort((a, b) => (a.create_time ?? '').localeCompare(b.create_time ?? ''));
       const chatName = derivePeerChatName(msgs, chatId);
+      const chatEnt = chatEntity(chatId, chatName);
       if (msgs.length >= config.imAggregateThreshold) {
         const lastMsgId = msgs[msgs.length - 1]?.message_id ?? '';
+        const text = summarizeAggregate(chatName, msgs, startLocal);
+        const entities: ContextEntityRef[] = [chatEnt];
+        entities.push(...aggregateSenderEntities(msgs));
+        entities.push(...extractFeishuDocEntities(text));
         signals.push({
           source: 'im',
           sourceId: `chat:${chatId}:agg:${sinceIso}`,
           kind: 'p2p_burst',
           occurredAt: parseCreateTime(msgs[msgs.length - 1]?.create_time),
           title: `${chatName} · 新增 ${msgs.length} 条`,
-          text: summarizeAggregate(chatName, msgs, startLocal),
+          text,
           actor: msgs[msgs.length - 1]?.sender?.name,
           url: msgs[msgs.length - 1]?.message_app_link,
           raw: { chatId, msgs },
           contentHash: shortHash(`p2p-agg|${chatId}|${msgs.length}|${lastMsgId}|${sinceIso}`),
+          entities: dedupEntities(entities),
         });
       } else {
         for (const m of msgs) {
+          const text = summarizeOne(m, chatName);
+          const entities: ContextEntityRef[] = [chatEnt];
+          const se = senderEntity(m.sender);
+          if (se) entities.push(se);
+          entities.push(...extractFeishuDocEntities(text));
           signals.push({
             source: 'im',
             sourceId: m.message_id!,
             kind: 'p2p',
             occurredAt: parseCreateTime(m.create_time),
             title: chatName,
-            text: summarizeOne(m, chatName),
+            text,
             actor: m.sender?.name ?? m.sender?.id,
             url: m.message_app_link,
             raw: { chatId, msg: m },
             contentHash: shortHash(
               `${m.message_id}|${m.content ?? ''}|${m.create_time ?? ''}`
             ),
+            entities: dedupEntities(entities),
           });
         }
       }

@@ -10,6 +10,8 @@ import { broadcast } from '../ws.js';
 import { calendarCollector } from './calendarCollector.js';
 import { imCollector } from './imCollector.js';
 import { driveCollector } from './driveCollector.js';
+import { driveCommentCollector } from './driveCommentCollector.js';
+import { meetingArtifactCollector } from './meetingArtifactCollector.js';
 import { enqueueEvents } from '../triage/triageQueue.js';
 import type { Collector } from './types.js';
 import { insertMinimalEventContextUnit } from '../context/contextStore.js';
@@ -23,6 +25,7 @@ function scopeForSource(source: string): ContextScope {
     case 'im':
     case 'mail':
     case 'drive':
+    case 'minutes':
       return 'work';
     case 'manual':
       return 'personal';
@@ -50,6 +53,12 @@ export function startCollectorScheduler() {
   scheduled.push({ collector: imCollector, running: false });
   if (config.driveEnabled) {
     scheduled.push({ collector: driveCollector, running: false });
+  }
+  if (config.driveCommentEnabled) {
+    scheduled.push({ collector: driveCommentCollector, running: false });
+  }
+  if (config.meetingArtifactEnabled) {
+    scheduled.push({ collector: meetingArtifactCollector, running: false });
   }
 
   for (const s of scheduled) {
@@ -98,7 +107,9 @@ async function tick(s: ScheduledCollector): Promise<{ collected: number; newEven
     const since = state?.last_success_at ? new Date(state.last_success_at) : null;
 
     const signals = await s.collector.collect(since);
-    const newRows: EventRow[] = [];
+    // MVP11.0-a §I-6：把 skipTriage 与 row 绑定保存，避免 dedup 后 `signals[i]` 与 `newRows[i]` 错位。
+    type InsertedRow = { row: EventRow; skipTriage: boolean };
+    const newRows: InsertedRow[] = [];
     for (const sig of signals) {
       const id = randomUUID();
       const row: EventRow = {
@@ -117,19 +128,24 @@ async function tick(s: ScheduledCollector): Promise<{ collected: number; newEven
         created_at: now.toISOString(),
       };
       if (tryInsertEvent(row)) {
-        newRows.push(row);
+        newRows.push({ row, skipTriage: sig.skipTriage === true });
         // MVP2.0: 同步直写一条最小 ContextUnit（kind=event，无 LLM）。
         // 失败不阻塞主链路。
         try {
           insertMinimalEventContextUnit({
             eventId: row.id,
-            scope: scopeForSource(row.source),
+            scope: sig.scope ?? scopeForSource(row.source),
             title: row.title ?? row.text.slice(0, 30),
             content: row.text,
             occurredAt: row.occurred_at,
             source: row.source,
             actor: row.actor ?? undefined,
             actorRole: 'actor',
+            // MVP11.0-a：新增结构化透传
+            entities: sig.entities,
+            contextMergeHint: sig.contextMergeHint,
+            actionability: sig.actionability,
+            semanticTags: sig.semanticTags,
           });
           markEventContextExtracted(row.id, now.toISOString());
         } catch (err) {
@@ -161,7 +177,9 @@ async function tick(s: ScheduledCollector): Promise<{ collected: number; newEven
 
     if (newRows.length) {
       console.log(`[collectors] ${nameLabel}: ${newRows.length} new signal(s)`);
-      enqueueEvents(newRows);
+      // MVP11.0-a §I-6：skipTriage=true 的行已经结构化，不再过 triage LLM，避免双处理。
+      const triagedRows = newRows.filter((x) => !x.skipTriage).map((x) => x.row);
+      if (triagedRows.length) enqueueEvents(triagedRows);
     }
     return { collected: signals.length, newEvents: newRows.length };
   } catch (err) {

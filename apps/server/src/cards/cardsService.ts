@@ -12,7 +12,11 @@ import {
 import { evaluateCard, type CardCandidate } from '../boundary/boundaryEvaluator.js';
 import { writeAudit } from '../boundary/auditLog.js';
 import { createRule } from '../boundary/boundaryStore.js';
-import type { CardSourceKey, Priority } from '../boundary/BoundaryRule.js';
+import type {
+  BoundaryAutonomy,
+  CardSourceKey,
+  Priority,
+} from '../boundary/BoundaryRule.js';
 import { broadcast } from '../ws.js';
 import { recordUserMessage } from '../messageBus.js';
 import { claudeRuntime } from '../claude/ClaudeRuntime.js';
@@ -24,7 +28,7 @@ import type {
 } from '../claude/protocol.js';
 import type { TriageItem } from '../triage/parseTriage.js';
 
-function rowToCard(row: CardRow): SignalCard {
+export function rowToCard(row: CardRow): SignalCard {
   let actions: CardAction[] = [];
   try {
     actions = JSON.parse(row.actions_json) as CardAction[];
@@ -77,9 +81,13 @@ function defaultActionsForSource(source: string): CardAction[] {
 }
 
 export function createCardsFromTriage(ev: EventRow, item: TriageItem, triageId: string) {
+  // MVP8.1 §5.4: 升级 caller 透传更多字段给 boundary，让规则能匹配 kind / scope。
+  // 'event' kind 来自最小 ContextUnit；scope 走 default 'work'（calendar/im 默认 work）。
   const candidate: CardCandidate = {
     priority: item.priority,
     source: ev.source,
+    kind: 'event',
+    scope: 'work',
   };
   const decision = evaluateCard(candidate);
   if (decision.decision === 'block') {
@@ -141,6 +149,11 @@ export type ProposalCardInput = {
   rawEventId?: string;
   sourceUrl?: string;
   actions?: CardAction[];             // 默认走 defaultActionsForSource
+  // MVP8.1 §5.4: 把这几个字段透传给 evaluateCard，让 boundary 学习/匹配更准
+  triggerType?: string;
+  kind?: string;
+  entities?: Array<{ type: string; name: string }>;
+  scope?: 'personal' | 'work' | 'team';
 };
 
 /**
@@ -151,6 +164,10 @@ export function createCardFromProposal(input: ProposalCardInput): SignalCard | n
   const decision = evaluateCard({
     priority: input.priority,
     source: input.source,
+    scope: input.scope ?? 'work',
+    kind: input.kind,
+    triggerType: input.triggerType as CardCandidate['triggerType'],
+    entities: input.entities,
   });
   if (decision.decision === 'block') {
     writeAudit({
@@ -212,7 +229,8 @@ export type CardActionResult = { ok: boolean; card?: SignalCard; error?: string 
 
 export async function applyCardAction(
   cardId: string,
-  actionId: string
+  actionId: string,
+  opts?: { extraPrompt?: string }
 ): Promise<CardActionResult> {
   const row = getCard(cardId);
   if (!row) return { ok: false, error: 'card not found' };
@@ -249,7 +267,12 @@ export async function applyCardAction(
   }
 
   if (action.kind === 'auto_henceforth') {
-    // MVP6: infer a structured boundary_rule from the card's current shape.
+    // MVP10.1 §6.4 推断 autonomy/reversible/impactScope：
+    //   - im / mail 来源 + P0/P1 → external_always_confirm（这些路径未来可能对外发消息）
+    //   - 其他 (record 类) → local_auto（合并到 daily digest，纯本地、可逆）
+    const autonomy = inferAutonomy(row.source as CardSourceKey, row.priority as Priority);
+    const impactScope =
+      autonomy === 'external_always_confirm' ? 'shared' : 'self';
     const rule = createRule({
       scope: 'work',
       condition: {
@@ -257,23 +280,34 @@ export async function applyCardAction(
         priorityAtMost: row.priority as Priority,
       },
       allowedAction: 'record',
-      requiresApproval: false,
+      requiresApproval: autonomy === 'external_always_confirm',
       confidence: 0.75,
       source: 'card_action',
       learnedFromCardId: row.id,
       active: true,
+      autonomy,
+      reversible: true,
+      impactScope,
     });
     writeAudit({
       action: 'rule_learned',
-      reason: `用户在卡片"${row.title}"上选择"以后自动处理"`,
+      reason: `用户在卡片"${row.title}"上选择"以后自动处理"（autonomy=${autonomy}）`,
       cardId: row.id,
       ruleId: rule.id,
-      payload: { priority: row.priority, source: row.source },
+      payload: {
+        priority: row.priority,
+        source: row.source,
+        autonomy,
+        impactScope,
+      },
     });
   }
 
   if (action.kind === 'ask_agent' || action.kind === 'draft_reply') {
-    const prompt = action.prompt?.trim() || buildDefaultPrompt(row, action.kind);
+    // MVP11.0-b：前端可传 extraPrompt 覆盖 action 自带的默认 prompt。
+    // 优先级：用户输入 > action.prompt（agent 在生卡时填的）> buildDefaultPrompt 兜底。
+    const userPrompt = opts?.extraPrompt?.trim();
+    const prompt = userPrompt || action.prompt?.trim() || buildDefaultPrompt(row, action.kind);
     recordUserMessage(prompt);
     try {
       // MVP2.2: 卡片动作的内部 prompt 已经把卡片自身 context 嵌进去了，
@@ -289,6 +323,15 @@ export async function applyCardAction(
   const card = rowToCard(updated);
   broadcast({ type: 'card_updated', card });
   return { ok: true, card };
+}
+
+function inferAutonomy(source: CardSourceKey, priority: Priority): BoundaryAutonomy {
+  // 高优 + 通讯类 → 永远确认，避免学个规则把重要消息也丢进 digest
+  if ((source === 'im' || source === 'mail') && (priority === 'P0' || priority === 'P1')) {
+    return 'external_always_confirm';
+  }
+  // 其他 → 本地、可逆，自动
+  return 'local_auto';
 }
 
 function mapKindToStatus(kind: CardActionKind, prev: CardStatus): CardStatus {

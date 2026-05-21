@@ -4,6 +4,7 @@ import { config } from '../config.js';
 import { SYSTEM_PROMPT } from './prompts.js';
 import type { RuntimeEvent, RuntimeStatus } from './protocol.js';
 import { buildActiveContext } from '../context/activeContext.js';
+import { buildClaudeChildEnv } from './childEnv.js';
 
 export type SendUserMessageOptions = {
   /** If true, do NOT prepend active context summary to the message. Used for
@@ -51,7 +52,7 @@ export class ClaudeRuntime extends EventEmitter {
 
     const child = spawn('node', args, {
       cwd: process.cwd(),
-      env: process.env,
+      env: buildClaudeChildEnv(),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.child = child;

@@ -13,11 +13,10 @@ let pullTimer: NodeJS.Timeout | null = null;
 export function startTriggerScheduler() {
   // Push path: context upsert immediately evaluates the new/updated unit
   // and routes it into any matching Spaces.
-  registerUpsertHook((unit) => {
-    const ids = evaluateAndPersistForUnit(unit);
-    for (const triggerId of ids) {
-      enqueueAgentRunForTrigger(triggerId);
-    }
+  registerUpsertHook((unit, changeContext) => {
+    // MVP8.1: 先把 unit 路由到 Space，再 evaluate + enqueue。
+    // 原因：enqueueAgentRunForTrigger 内部的 void drain() 会同步跑到 assembler
+    // 才让出 microtask；assembler 读 Space links 时若 link 还没建立，就拿不到。
     try {
       resolveUnitToSpaces(unit);
     } catch (err) {
@@ -25,6 +24,10 @@ export function startTriggerScheduler() {
         '[spaces] resolveUnitToSpaces failed:',
         err instanceof Error ? err.message : String(err)
       );
+    }
+    const ids = evaluateAndPersistForUnit(unit, Date.now(), changeContext);
+    for (const triggerId of ids) {
+      enqueueAgentRunForTrigger(triggerId);
     }
   });
 

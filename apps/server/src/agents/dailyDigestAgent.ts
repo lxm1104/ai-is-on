@@ -19,7 +19,7 @@ import { setSetting } from '../db.js';
 
 const LOOKBACK_MS = 24 * 3600_000;
 
-export const dailyDigestHandler: AgentHandler = async ({ trigger }) => {
+export const dailyDigestHandler: AgentHandler = async ({ trigger, agentRunId }) => {
   const cutoff = new Date(Date.now() - LOOKBACK_MS).toISOString();
   const rows = db
     .prepare(
@@ -69,7 +69,7 @@ export const dailyDigestHandler: AgentHandler = async ({ trigger }) => {
   const proposalId = randomUUID();
   const proposal: ActionProposalRow = {
     id: proposalId,
-    agent_run_id: null,
+    agent_run_id: agentRunId,
     proposal_type: 'daily_digest',
     title: `日报：过去 24h · ${rows.length} 条低优先级`,
     body: lines.join('\n'),
@@ -94,6 +94,8 @@ export const dailyDigestHandler: AgentHandler = async ({ trigger }) => {
     priority: 'P3',
     source: 'agent',
     reason: '过去 24h 多条低优先级信号被合并为日报',
+    triggerType: trigger.trigger_type,
+    scope: 'work',
     actions: [
       { id: 'ack', label: '看过了', kind: 'ack' },
       { id: 'dismiss', label: '不需要日报', kind: 'dismiss' },

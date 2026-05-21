@@ -12,9 +12,14 @@ import {
   type AgentHandler,
   type AgentInput,
   type AgentOutput,
-  getAgent,
+  type RegisteredAgent,
+  getRegisteredAgent,
   selectAgentForTrigger,
 } from './agentRegistry.js';
+import {
+  PACKET_ASSEMBLER_VERSION,
+  assembleAgentContextPacket,
+} from '../context/agentContextAssembler.js';
 
 const DEFAULT_TIMEOUT_MS = 90_000;
 const MAX_RETRIES = 1;
@@ -57,7 +62,6 @@ async function runOne(item: QueueItem) {
     return;
   }
   if (trigger.status !== 'pending') {
-    // Another worker / previous attempt already processed
     return;
   }
   const agentType = selectAgentForTrigger(trigger.trigger_type);
@@ -66,23 +70,63 @@ async function runOne(item: QueueItem) {
     updateTriggerStatus(trigger.id, 'skipped', new Date().toISOString());
     return;
   }
-  const handler = getAgent(agentType);
-  if (!handler) {
+  const registered = getRegisteredAgent(agentType);
+  if (!registered) {
     console.warn(`[agents] handler ${agentType} not registered`);
     updateTriggerStatus(trigger.id, 'skipped', new Date().toISOString());
     return;
   }
 
   const unit = trigger.context_unit_id ? getContextUnitById(trigger.context_unit_id) : null;
-  const input: AgentInput = { trigger, unit };
-  const runId = createAgentRun(trigger, agentType, input);
-  updateTriggerStatus(trigger.id, 'running', new Date().toISOString());
+  // MVP8.1: pre-allocate runId so the assembled packet & all downstream proposals
+  // can reference the same id. createAgentRun writes the initial 'queued' row.
+  const runId = randomUUID();
+  const now0 = new Date().toISOString();
+  const baseRow: AgentRunRow = {
+    id: runId,
+    trigger_id: trigger.id,
+    agent_type: agentType,
+    input_json: '{}',          // placeholder, replaced once packet is assembled
+    output_json: null,
+    status: 'queued',
+    error: null,
+    started_at: null,
+    completed_at: null,
+    created_at: now0,
+  };
+  insertAgentRun(baseRow);
 
-  const startedAt = new Date().toISOString();
-  updateAgentRun(runId, { status: 'running', started_at: startedAt });
+  // MVP8.2: 所有 internal agent run 都装配 packet，即使 slices=[] 也输出骨架，
+  // 让 agent_runs.input_json 始终带 sliceVersion + materializedSlices 摘要。
+  let packet: ReturnType<typeof assembleAgentContextPacket>;
+  try {
+    packet = assembleAgentContextPacket({
+      agentRunId: runId,
+      trigger,
+      unit,
+      slices: registered.slices,
+      packetSliceVersion: registered.packetSliceVersion,
+    });
+  } catch (err) {
+    console.error(
+      `[agents] packet assembly failed for ${agentType}; this should not happen — investigate:`,
+      err instanceof Error ? err.message : String(err)
+    );
+    throw err;
+  }
+
+  // Persist input_json summary (packet 自身不入库；只落摘要 + 摘要 topItemIds)
+  const inputSummary = buildInputSummary(trigger, unit, registered, packet);
+  updateAgentRun(runId, { status: 'running', started_at: new Date().toISOString() });
+  // Persist input_json after entries above to keep order readable in DB:
+  // we have to call a separate update because updateAgentRun doesn't include input_json.
+  // For MVP8.1 simplicity: re-write whole row's input_json via raw db patch.
+  rewriteAgentRunInputJson(runId, inputSummary);
+
+  const input: AgentInput = { trigger, unit, packet, agentRunId: runId };
 
   try {
-    const output = await withTimeout(handler(input), DEFAULT_TIMEOUT_MS);
+    const output = await withTimeout(registered.handler(input), DEFAULT_TIMEOUT_MS);
     const completedAt = new Date().toISOString();
     updateAgentRun(runId, {
       status: 'done',
@@ -101,63 +145,56 @@ async function runOne(item: QueueItem) {
       console.warn(
         `[agents] ${agentType} failed on trigger ${trigger.id} (attempt ${item.attempt + 1}), retrying: ${msg}`
       );
-      updateAgentRun(runId, {
-        status: 'failed',
-        error: msg,
-        completed_at: completedAt,
-      });
-      // Reset trigger to pending so the retried run can pick it up
+      updateAgentRun(runId, { status: 'failed', error: msg, completed_at: completedAt });
       updateTriggerStatus(trigger.id, 'pending', completedAt);
       queue.push({ triggerId: trigger.id, attempt: item.attempt + 1 });
       return;
     }
 
-    updateAgentRun(runId, {
-      status: 'failed',
-      error: msg,
-      completed_at: completedAt,
-    });
+    updateAgentRun(runId, { status: 'failed', error: msg, completed_at: completedAt });
     updateTriggerStatus(trigger.id, 'failed', completedAt);
     console.error(`[agents] ${agentType} permanently failed on trigger ${trigger.id}: ${msg}`);
   }
 }
 
-function createAgentRun(
+function buildInputSummary(
   trigger: TriggerRow,
-  agentType: string,
-  input: AgentInput
-): string {
-  const id = randomUUID();
-  const now = new Date().toISOString();
-  const row: AgentRunRow = {
-    id,
-    trigger_id: trigger.id,
-    agent_type: agentType,
-    input_json: JSON.stringify({
-      trigger: {
-        id: trigger.id,
-        type: trigger.trigger_type,
-        reasoning: trigger.reasoning,
-        dueAt: trigger.due_at,
-        payload: safeJSON(trigger.payload_json),
-      },
-      unit: input.unit
-        ? {
-            id: input.unit.id,
-            kind: input.unit.kind,
-            title: input.unit.title,
-          }
-        : null,
-    }),
-    output_json: null,
-    status: 'queued',
-    error: null,
-    started_at: null,
-    completed_at: null,
-    created_at: now,
+  unit: ReturnType<typeof getContextUnitById>,
+  registered: RegisteredAgent,
+  packet: ReturnType<typeof assembleAgentContextPacket>
+): Record<string, unknown> {
+  const triggerPayload = safeJSON(trigger.payload_json) as Record<string, unknown> | null;
+  return {
+    trigger: {
+      id: trigger.id,
+      type: trigger.trigger_type,
+      reasoning: trigger.reasoning,
+      dueAt: trigger.due_at,
+      payload: triggerPayload,
+    },
+    unit: unit
+      ? { id: unit.id, kind: unit.kind, title: unit.title }
+      : null,
+    // packet summary（doc §5.3.4 schema）— MVP8.2 起始终非 null
+    packetAssemblerVersion: PACKET_ASSEMBLER_VERSION,
+    packetSliceVersion: packet.packetSliceVersion,
+    materializedSlices: packet.materializedSlices.map((s) => ({
+      name: s.name,
+      itemCount: s.itemCount,
+      topItemIds: s.topItemIds.slice(0, 3),
+    })),
+    focalUnitId: packet.focalUnit?.id ?? unit?.id ?? null,
+    changeContext: packet.trigger.changeContext ?? null,
+    declaredSlices: registered.slices,
   };
-  insertAgentRun(row);
-  return id;
+}
+
+import { db } from '../db.js';
+function rewriteAgentRunInputJson(id: string, summary: Record<string, unknown>) {
+  db.prepare(`UPDATE agent_runs SET input_json = ? WHERE id = ?`).run(
+    JSON.stringify(summary),
+    id
+  );
 }
 
 function safeJSON(s: string | null): unknown {
@@ -170,7 +207,6 @@ function safeJSON(s: string | null): unknown {
 }
 
 function isFatalError(msg: string): boolean {
-  // 不重试的硬错误：configuration / not found / OAuth
   return /no agent for|handler.*not registered|OAuth|permission denied/i.test(msg);
 }
 

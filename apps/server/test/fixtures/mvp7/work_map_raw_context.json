@@ -1,0 +1,88 @@
+{
+  "_meta": {
+    "comment": "MVP7.1 eval fixture: 一组虚构的 work-scope ContextUnits, 喂给 generateWorkMapDraft, 评估 LLM 能否把它们组织成 WorkMap。"
+  },
+  "seedText": "我现在主要负责 AI is ON，本周目标是把 MVP6 之后的路线想清楚。我常协作的人是 Alice、Bob、Carol，重要文档在飞书里。我不希望普通群消息打断我，P2/P3 合并成日报即可。",
+  "units": [
+    {
+      "kind": "event",
+      "title": "Workflow Agent 双日会",
+      "content": "会议：Workflow agent 需求 & 反馈跟进；组织者 Alice；参与 Bob、Carol。",
+      "entities": [
+        { "type": "person", "name": "Alice", "role": "actor" },
+        { "type": "person", "name": "Bob", "role": "actor" },
+        { "type": "person", "name": "Carol", "role": "actor" },
+        { "type": "project", "name": "AI is ON", "role": "about" }
+      ],
+      "time": { "occurredAt": "2026-05-19T11:45:00+08:00", "startsAt": "2026-05-19T11:45:00+08:00" },
+      "actionability": "notify",
+      "confidence": 0.85
+    },
+    {
+      "kind": "commitment",
+      "title": "完成 MVP7 评审稿",
+      "content": "向 Alice 承诺本周内交付 MVP7 评审稿。",
+      "entities": [
+        { "type": "person", "name": "Alice", "role": "target" },
+        { "type": "project", "name": "AI is ON", "role": "about" }
+      ],
+      "time": { "dueAt": "2026-05-23T18:00:00+08:00" },
+      "actionability": "act",
+      "confidence": 0.95
+    },
+    {
+      "kind": "goal",
+      "title": "想清楚 MVP6 之后的路线",
+      "content": "本周关键目标：把 MVP7-MVP10 范围想清楚并落到方案。",
+      "entities": [
+        { "type": "project", "name": "AI is ON", "role": "about" }
+      ],
+      "actionability": "notify",
+      "confidence": 0.9
+    },
+    {
+      "kind": "uncertainty",
+      "title": "Agent 缺乏判断坐标系",
+      "content": "目前 Agent 不知道'我服务谁、负责什么'，判断质量不稳。担心这块如果不补，MVP8 也带不动。",
+      "entities": [
+        { "type": "project", "name": "AI is ON", "role": "about" }
+      ],
+      "actionability": "notify",
+      "confidence": 0.7
+    },
+    {
+      "kind": "event",
+      "title": "Carol 发消息：抄送你看下这份方案",
+      "content": "Carol 在群里 @ 我，让我看下她的方案。文档链接 https://example.com/aiis/prd",
+      "entities": [
+        { "type": "person", "name": "Carol", "role": "actor" },
+        { "type": "doc", "name": "https://example.com/aiis/prd", "role": "about" },
+        { "type": "project", "name": "AI is ON", "role": "about" }
+      ],
+      "time": { "occurredAt": "2026-05-18T10:00:00+08:00" },
+      "actionability": "ask",
+      "confidence": 0.8
+    },
+    {
+      "kind": "event",
+      "title": "群里 N 条无关消息",
+      "content": "活跃群一天 50+ P3 消息，大部分跟我无关。",
+      "entities": [],
+      "time": { "occurredAt": "2026-05-19T15:00:00+08:00" },
+      "actionability": "record",
+      "confidence": 0.5
+    },
+    {
+      "kind": "event",
+      "title": "Bob 提了一个技术风险",
+      "content": "Bob 提到 packet 化的实现可能影响现有 agent；需要在 MVP8 前先验证。",
+      "entities": [
+        { "type": "person", "name": "Bob", "role": "actor" },
+        { "type": "project", "name": "AI is ON", "role": "about" }
+      ],
+      "time": { "occurredAt": "2026-05-17T20:00:00+08:00" },
+      "actionability": "notify",
+      "confidence": 0.75
+    }
+  ]
+}

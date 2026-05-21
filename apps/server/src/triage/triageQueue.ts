@@ -185,8 +185,17 @@ function persistContextUpdates(ev: EventRow, item: TriageItem) {
   const scope = scopeForEvent(ev);
   const eventCtxId = findEventContextUnitId(ev.id);
   for (const draft of item.contextUpdates) {
-    const { unit } = upsertContextUnit({
+    // MVP12 §4.1 P1.4：过滤 LLM 误产出的 type:'chat' / type:'app'。
+    // chat 路由证据只在 raw event ContextUnit 上保留；写进 semantic unit 会污染 mergeKey。
+    // doc 保留（commitment 的真实语义对象可以是 doc）。
+    const cleanedDraft = {
       ...draft,
+      entities: draft.entities
+        ? draft.entities.filter((e) => e.type !== 'chat' && e.type !== 'app')
+        : draft.entities,
+    };
+    const { unit } = upsertContextUnit({
+      ...cleanedDraft,
       scope,
       origin: { kind: 'event', refId: ev.id },
     });

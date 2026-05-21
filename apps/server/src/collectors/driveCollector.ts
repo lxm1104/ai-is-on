@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import { config } from '../config.js';
 import { runLarkCliJson } from '../util/larkCli.js';
+import { mergeDocIdentity } from '../context/entityResolver.js';
+import type { ContextEntityRef } from '../context/ContextUnit.js';
 import type { Collector, RawSignal } from './types.js';
 
 /**
@@ -105,6 +107,23 @@ export const driveCollector: Collector = {
         (doc.result_meta?.update_time
           ? new Date(doc.result_meta.update_time * 1000).toISOString()
           : new Date().toISOString());
+      const docUrl = doc.result_meta?.url;
+      const entities: ContextEntityRef[] = [];
+      if (docUrl) {
+        // entity.name = doc URL，与前端 cache key / Work Map seed 对齐。
+        // 同步把 doc:<token> 合并到 url entity，避免双 entity。
+        try {
+          mergeDocIdentity(token, docUrl);
+        } catch {
+          /* swallow */
+        }
+        entities.push({ type: 'doc', name: docUrl, role: 'about', confidence: 1.0 });
+      }
+      const editor = doc.result_meta?.edit_user_name;
+      if (editor) {
+        entities.push({ type: 'person', name: editor, role: 'actor', confidence: 0.9 });
+      }
+
       const sig: RawSignal = {
         source: 'drive',
         sourceId: `doc:${token}`,
@@ -114,9 +133,10 @@ export const driveCollector: Collector = {
         text: summarizeDoc(doc),
         raw: doc,
         contentHash: contentHash(doc),
+        entities,
       };
-      if (doc.result_meta?.edit_user_name) sig.actor = doc.result_meta.edit_user_name;
-      if (doc.result_meta?.url) sig.url = doc.result_meta.url;
+      if (editor) sig.actor = editor;
+      if (docUrl) sig.url = docUrl;
       signals.push(sig);
     }
     return signals;

@@ -34,6 +34,14 @@ export type BoundaryAction = 'record' | 'notify' | 'draft' | 'execute_reversible
 
 export type BoundarySource = 'user_rule_migration' | 'card_action' | 'manual';
 
+// MVP10.1 §6.4
+export type BoundaryAutonomy =
+  | 'local_auto'                 // 纯本地、可逆、低风险 → 自动执行
+  | 'local_with_audit'           // 本地状态写入 / 规则学习 → audit + journal
+  | 'external_always_confirm';   // 对外副作用 → 永远问
+
+export type BoundaryImpactScope = 'self' | 'shared';
+
 export type BoundaryRule = {
   id: string;
   scope: ContextScope;
@@ -45,6 +53,10 @@ export type BoundaryRule = {
   source: BoundarySource;
   migrated: boolean;
   active: boolean;
+  // MVP10.1
+  autonomy: BoundaryAutonomy;
+  reversible: boolean;
+  impactScope: BoundaryImpactScope;
   createdAt: string;
   updatedAt: string;
 };

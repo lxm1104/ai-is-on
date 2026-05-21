@@ -1,0 +1,26 @@
+{
+  "_meta": {
+    "evalVersion": 1,
+    "judgeModel": "claude-opus-4-6[1m]",
+    "seed": null,
+    "comment": "Structural expectations for MVP7.1 LLM draft. 不做语义判断, 只校验关键字段是否在产物中存在。judgeModel 由 runner 跑完时回填。"
+  },
+  "tokenEstimateAtMost": 8000,
+  "expect": {
+    "profile.roleTitle.nonEmpty": true,
+    "profile.responsibilities.minCount": 1,
+    "projects.minCount": 1,
+    "projects.mustContainName": [
+      "AI is ON"
+    ],
+    "projects[*].goals.minCount": 1,
+    "stakeholders.mustContainNames": [
+      "Alice",
+      "Bob",
+      "Carol"
+    ],
+    "preferences.minCount": 1,
+    "boundaries.minCount": 1,
+    "boundaries.atLeastOneStructured": true
+  }
+}
