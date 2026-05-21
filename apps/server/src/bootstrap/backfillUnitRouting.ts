@@ -28,13 +28,14 @@ import {
   db,
   deleteUnitRoutingCacheByEvent,
   insertUnitSource,
+  linkUnitEntity,
   listEvents,
   listSpacesForTarget as _unusedListSpaces,
   upsertUnitRoutingCache,
   type EventRow,
 } from '../db.js';
 import { extractFeishuDocUrls } from '../util/extractFeishuDocRefs.js';
-import { mergeDocIdentity } from '../context/entityResolver.js';
+import { mergeDocIdentity, resolveOrCreateEntity } from '../context/entityResolver.js';
 import type { ContextEntityRef } from '../context/ContextUnit.js';
 
 // silence unused import (kept for forward use)
@@ -50,6 +51,7 @@ export type BackfillStats = {
   eventsScanned: number;
   unitSourcesInserted: number;
   cacheRowsWritten: number;
+  entityLinksInserted: number;
 };
 
 export function backfillUnitRouting(opts: { eventLimit?: number } = {}): BackfillStats {
@@ -59,6 +61,7 @@ export function backfillUnitRouting(opts: { eventLimit?: number } = {}): Backfil
     eventsScanned: events.length,
     unitSourcesInserted: 0,
     cacheRowsWritten: 0,
+    entityLinksInserted: 0,
   };
   const now = new Date().toISOString();
 
@@ -77,6 +80,7 @@ export function backfillUnitRouting(opts: { eventLimit?: number } = {}): Backfil
       ...units.map((u) => u.id),
       ...semanticUnits.map((u) => u.id),
     ]);
+    const eventUnitIds = new Set(units.map((u) => u.id));
 
     // 1) unit_sources
     for (const uid of allUnitIds) {
@@ -102,6 +106,31 @@ export function backfillUnitRouting(opts: { eventLimit?: number } = {}): Backfil
         updated_at: now,
       });
       stats.cacheRowsWritten++;
+    }
+
+    // 3) MVP12 fix：旧 event ContextUnit 的 context_unit_entities 表里没有
+    // chat / doc / app entity（升级前 imCollector 不写它们）。worker 走的是
+    // context_unit_entities → event unit 这一链路，所以必须把这些 routing entity
+    // 也补进去，否则 chat_affinity 永远扫不到老 event。
+    //
+    // 只为 event unit 补；semantic unit 的 entities 由 cache 处理。
+    if (routing.length > 0) {
+      for (const uid of eventUnitIds) {
+        for (const e of routing) {
+          try {
+            const ent = resolveOrCreateEntity(e.type, e.name, e.aliases);
+            linkUnitEntity({
+              context_unit_id: uid,
+              entity_id: ent.id,
+              role: e.role ?? 'about',
+              confidence: e.confidence ?? 0.7,
+            });
+            stats.entityLinksInserted++;
+          } catch {
+            /* swallow */
+          }
+        }
+      }
     }
   }
 
