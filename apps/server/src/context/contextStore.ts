@@ -20,7 +20,6 @@ import {
   listContextEntities,
   listContextFeedback,
   listContextLinksFor,
-  listContextRelations,
   listContextUnits,
   listEntitiesForUnit,
   listUnitSourcesByEvent,
@@ -77,7 +76,6 @@ function rowToUnit(row: ContextUnitRow, entities: ContextEntityRef[] = []): Cont
     title: row.title,
     content: row.content,
     entities,
-    relations: [],
     time: row.time_json ? safeParse(row.time_json) : undefined,
     emotion: row.emotion_json ? safeParse(row.emotion_json) : undefined,
     meaning: row.meaning ?? undefined,
@@ -429,10 +427,6 @@ export function listActiveContextUnits(opts: ListContextUnitOpts = {}): ContextU
 
 export function listAllEntities(limit = 200) {
   return listContextEntities(limit);
-}
-
-export function listAllRelations(limit = 200) {
-  return listContextRelations(limit);
 }
 
 export function linkContextUnits(

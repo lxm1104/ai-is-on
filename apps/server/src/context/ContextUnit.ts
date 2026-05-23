@@ -40,12 +40,6 @@ export type ContextEntityRef = {
   role?: string;       // 'subject' | 'actor' | 'target' | 'about'
 };
 
-export type ContextRelationRef = {
-  fromEntityName: string;
-  toEntityName: string;
-  relationType: string;   // 'owns' | 'reports_to' | 'depends_on' | ...
-};
-
 export type ContextTimeInfo = {
   occurredAt?: string;
   startsAt?: string;
@@ -66,7 +60,6 @@ export type ContextUnitDraft = {
   title: string;
   content: string;
   entities?: ContextEntityRef[];
-  relations?: ContextRelationRef[];
   time?: ContextTimeInfo;
   emotion?: ContextEmotion | null;
   meaning?: string | null;
@@ -88,7 +81,6 @@ export type ContextUnit = {
   title: string;
   content: string;
   entities: ContextEntityRef[];
-  relations: ContextRelationRef[];
   time?: ContextTimeInfo;
   emotion?: ContextEmotion;
   meaning?: string;

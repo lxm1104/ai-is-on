@@ -970,36 +970,10 @@ export function listEntitiesForUnit(contextUnitId: string): ContextUnitEntityRow
     .all(contextUnitId) as ContextUnitEntityRow[];
 }
 
-// -------- context_relations --------
-
-export type ContextRelationRow = {
-  id: string;
-  from_entity_id: string;
-  to_entity_id: string;
-  relation_type: string;
-  context_unit_id: string | null;
-  confidence: number;
-  valid_from: string | null;
-  valid_until: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-export function insertContextRelation(row: ContextRelationRow) {
-  db.prepare(
-    `INSERT INTO context_relations
-     (id, from_entity_id, to_entity_id, relation_type, context_unit_id, confidence,
-      valid_from, valid_until, created_at, updated_at)
-     VALUES (@id, @from_entity_id, @to_entity_id, @relation_type, @context_unit_id, @confidence,
-             @valid_from, @valid_until, @created_at, @updated_at)`
-  ).run(row);
-}
-
-export function listContextRelations(limit = 200): ContextRelationRow[] {
-  return db
-    .prepare(`SELECT * FROM context_relations ORDER BY updated_at DESC LIMIT ?`)
-    .all(limit) as ContextRelationRow[];
-}
+// -------- context_relations: REMOVED in MVP14 Phase 1c --------
+// 物理表 CREATE TABLE 保留在上方 schema（零行无害；DROP 需写迁移）。
+// 应用层无 caller。"关系" 走 ContextUnit.kind='relationship'，参见
+// apps/server/src/context/relationshipsService.ts 与 cooccurrenceService.ts。
 
 // -------- context_links --------
 

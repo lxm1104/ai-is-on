@@ -22,9 +22,7 @@ process.env.SQLITE_PATH = path.join(tmpDir, 'test.sqlite');
 process.env.COLLECTOR_ENABLED = 'false';
 
 const { db, insertEntityAlias } = await import('../src/db.js');
-const { upsertContextUnit, listAllRelations } = await import(
-  '../src/context/contextStore.js'
-);
+const { upsertContextUnit } = await import('../src/context/contextStore.js');
 const { resolveOrCreateEntity } = await import('../src/context/entityResolver.js');
 const { listRelationships, classifySource } = await import(
   '../src/context/relationshipsService.js'
@@ -196,9 +194,12 @@ test('classifySource 单元逻辑直测', () => {
   );
 });
 
-test('listAllRelations 旧函数仍可调（Phase 1c 才删）', () => {
-  // 兼容性 smoke：不抛、返回数组
-  const items = listAllRelations(10);
-  assert.ok(Array.isArray(items));
-  assert.equal(items.length, 0); // 表是空的
+test('Phase 1c 已删 listAllRelations / context_relations 应用层 — 物理表保留', () => {
+  // SQL 表仍存在（CREATE TABLE 没动），但应用层零 caller
+  const row = db
+    .prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='context_relations'`
+    )
+    .get() as { name?: string } | undefined;
+  assert.equal(row?.name, 'context_relations', '物理表 schema 应保留');
 });

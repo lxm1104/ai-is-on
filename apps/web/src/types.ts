@@ -106,21 +106,8 @@ export type ContextEntity = {
   updated_at: string;
 };
 
-/**
- * @deprecated MVP14 Phase 1a：context_relations 表零写入零读入；
- * 仅 ContextPanel 的旧 Relations Tab 在用，Phase 1c 一并删除。
- * 新代码请用 RelationshipItem。
- */
-export type ContextRelation = {
-  id: string;
-  from_entity_id: string;
-  to_entity_id: string;
-  relation_type: string;
-  context_unit_id: string | null;
-  confidence: number;
-  created_at: string;
-  updated_at: string;
-};
+// REMOVED in MVP14 Phase 1c: ContextRelation (旧 context_relations 表)。
+// 用 RelationshipItem / CooccurrenceItem 替代。
 
 // MVP14 Phase 1a · explicit relationships read model
 export type RelationshipSource =
