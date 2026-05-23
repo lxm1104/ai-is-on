@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react';
 import type {
   ContextEntity,
   ContextUnit,
+  CooccurrenceItem,
   RelationshipItem,
   RelationshipSource,
 } from '../types';
 import {
   fetchContextEntities,
   fetchContextUnits,
+  fetchCooccurrences,
   fetchRelationships,
 } from '../lib/api';
 
@@ -35,6 +37,7 @@ export function ContextPanel() {
   const [units, setUnits] = useState<ContextUnit[]>([]);
   const [entities, setEntities] = useState<ContextEntity[]>([]);
   const [relationships, setRelationships] = useState<RelationshipItem[]>([]);
+  const [cooccurrences, setCooccurrences] = useState<CooccurrenceItem[]>([]);
   const [kindFilter, setKindFilter] = useState<string>('');
   const [actFilter, setActFilter] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -45,7 +48,7 @@ export function ContextPanel() {
     setLoading(true);
     setError(null);
     try {
-      const [u, e, r] = await Promise.all([
+      const [u, e, r, c] = await Promise.all([
         fetchContextUnits({
           kind: kindFilter || undefined,
           actionability: actFilter || undefined,
@@ -53,10 +56,12 @@ export function ContextPanel() {
         }),
         fetchContextEntities(),
         fetchRelationships(),
+        fetchCooccurrences(),
       ]);
       setUnits(u);
       setEntities(e);
       setRelationships(r);
+      setCooccurrences(c);
       setLastLoadedAt(Date.now());
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -150,7 +155,7 @@ export function ContextPanel() {
             <EntitiesList entities={entities} />
           )}
           {tab === 'relationships' && (
-            <RelationshipsList items={relationships} />
+            <RelationshipsList items={relationships} cooccurrences={cooccurrences} />
           )}
         </div>
       )}
@@ -234,8 +239,16 @@ const SOURCE_LABEL: Record<RelationshipSource, string> = {
   other: '其他',
 };
 
-function RelationshipsList({ items }: { items: RelationshipItem[] }) {
-  if (items.length === 0) {
+function RelationshipsList({
+  items,
+  cooccurrences,
+}: {
+  items: RelationshipItem[];
+  cooccurrences: CooccurrenceItem[];
+}) {
+  const [showCooccur, setShowCooccur] = useState(true);
+
+  if (items.length === 0 && cooccurrences.length === 0) {
     return (
       <div className="ctx-panel__empty">
         还没有沉淀关系。在 Work Map 添加协作者，或等待消息沉淀。
@@ -243,29 +256,84 @@ function RelationshipsList({ items }: { items: RelationshipItem[] }) {
     );
   }
   return (
-    <ul className="ctx-relationships">
-      {items.map((r) => (
-        <li key={r.id} className="ctx-relationship">
-          <div className="ctx-relationship__head">
-            {r.persons.length === 0 ? (
-              <span className="ctx-relationship__title">{r.title}</span>
-            ) : (
-              r.persons.map((p) => (
-                <span key={p.id} className="ctx-ent-chip">
-                  person:{p.name}
-                </span>
-              ))
-            )}
-            <span className={`ctx-relationship__source ctx-relationship__source--${r.source}`}>
-              {SOURCE_LABEL[r.source] ?? r.source}
-            </span>
+    <div className="ctx-relationships-wrap">
+      <div className="ctx-relationships-section">
+        <div className="ctx-relationships-section__title">
+          ✦ Explicit relationships ({items.length})
+        </div>
+        {items.length === 0 ? (
+          <div className="ctx-panel__empty" style={{ fontSize: 12 }}>
+            还没有沉淀关系。在 Work Map 添加协作者，或等待消息沉淀。
           </div>
-          <div className="ctx-relationship__summary">{r.summary}</div>
-          <div className="ctx-relationship__foot">
-            updated {new Date(r.updatedAt).toLocaleString()}
-          </div>
-        </li>
-      ))}
-    </ul>
+        ) : (
+          <ul className="ctx-relationships">
+            {items.map((r) => (
+              <li key={r.id} className="ctx-relationship">
+                <div className="ctx-relationship__head">
+                  {r.persons.length === 0 ? (
+                    <span className="ctx-relationship__title">{r.title}</span>
+                  ) : (
+                    r.persons.map((p) => (
+                      <span key={p.id} className="ctx-ent-chip">
+                        person:{p.name}
+                      </span>
+                    ))
+                  )}
+                  <span
+                    className={`ctx-relationship__source ctx-relationship__source--${r.source}`}
+                  >
+                    {SOURCE_LABEL[r.source] ?? r.source}
+                  </span>
+                </div>
+                <div className="ctx-relationship__summary">{r.summary}</div>
+                <div className="ctx-relationship__foot">
+                  updated {new Date(r.updatedAt).toLocaleString()}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="ctx-relationships-section">
+        <button
+          type="button"
+          className="ctx-relationships-section__title ctx-relationships-section__title--toggle"
+          onClick={() => setShowCooccur((v) => !v)}
+          title="entity 共现是推测信号，不是事实关系"
+        >
+          {showCooccur ? '▾' : '▸'} ◌ Observed together ({cooccurrences.length})
+        </button>
+        {showCooccur && (
+          cooccurrences.length === 0 ? (
+            <div className="ctx-panel__empty" style={{ fontSize: 12 }}>
+              暂无 entity 共现信号。
+            </div>
+          ) : (
+            <ul className="ctx-cooccurrences">
+              {cooccurrences.map((c) => (
+                <li
+                  key={`${c.left.id}::${c.right.id}`}
+                  className="ctx-cooccurrence"
+                  title={`evidence: ${c.evidenceUnit.title}`}
+                >
+                  <span className="ctx-ent-chip">
+                    {c.left.type}:{c.left.name}
+                  </span>
+                  <span className="ctx-cooccurrence__op">↔</span>
+                  <span className="ctx-ent-chip">
+                    {c.right.type}:{c.right.name}
+                  </span>
+                  <span className="ctx-cooccurrence__count">×{c.count}</span>
+                  <span className="ctx-cooccurrence__when">
+                    {new Date(c.lastSeenAt).toLocaleDateString()}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )
+        )}
+      </div>
+    </div>
   );
 }

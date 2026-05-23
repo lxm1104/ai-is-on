@@ -4,6 +4,7 @@ import type {
   ContextEntity,
   ContextRelation,
   ContextUnit,
+  CooccurrenceItem,
   RelationshipItem,
   SignalCard,
 } from '../types';
@@ -183,6 +184,20 @@ export async function fetchRelationships(limit = 100): Promise<RelationshipItem[
   if (!r.ok) throw new Error(`context/relationships ${r.status}`);
   const j = await r.json();
   return (j.items ?? []) as RelationshipItem[];
+}
+
+export async function fetchCooccurrences(opts: {
+  limit?: number;
+  minCount?: number;
+} = {}): Promise<CooccurrenceItem[]> {
+  const limit = opts.limit ?? 50;
+  const minCount = opts.minCount ?? 2;
+  const r = await fetch(
+    `/api/context/relationships/cooccurrences?limit=${limit}&minCount=${minCount}`
+  );
+  if (!r.ok) throw new Error(`context/relationships/cooccurrences ${r.status}`);
+  const j = await r.json();
+  return (j.items ?? []) as CooccurrenceItem[];
 }
 
 export type ActiveContextSnapshot = {

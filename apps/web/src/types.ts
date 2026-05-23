@@ -145,6 +145,21 @@ export type RelationshipItem = {
   updatedAt: string;
 };
 
+// MVP14 Phase 1b · co-occurrence read model
+export type CooccurrenceEndpoint = {
+  id: string;
+  type: string;
+  name: string;
+};
+
+export type CooccurrenceItem = {
+  left: CooccurrenceEndpoint;
+  right: CooccurrenceEndpoint;
+  count: number;
+  lastSeenAt: string;
+  evidenceUnit: { id: string; title: string };
+};
+
 export type ServerEvent =
   | { type: 'runtime_status'; status: RuntimeStatus }
   | { type: 'message_added'; message: ChatMessage }

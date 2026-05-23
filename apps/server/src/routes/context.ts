@@ -10,6 +10,7 @@ import {
 } from '../context/contextStore.js';
 import { buildActiveContext } from '../context/activeContext.js';
 import { listRelationships } from '../context/relationshipsService.js';
+import { listCooccurrences } from '../context/cooccurrenceService.js';
 
 export const contextRouter = Router();
 
@@ -53,6 +54,15 @@ contextRouter.get('/context/relations', (_req, res) => {
 contextRouter.get('/context/relationships', (req, res) => {
   const limit = clampInt(req.query.limit, 100, 1, 500);
   const items = listRelationships({ limit });
+  res.json({ items });
+});
+
+// MVP14 Phase 1b: entity 共现推测信号（"Observed together"）。与 explicit
+// relationships 严格分区。详见 apps/server/src/context/cooccurrenceService.ts。
+contextRouter.get('/context/relationships/cooccurrences', (req, res) => {
+  const limit = clampInt(req.query.limit, 50, 1, 200);
+  const minCount = clampInt(req.query.minCount, 2, 1, 100);
+  const items = listCooccurrences({ limit, minCount });
   res.json({ items });
 });
 
