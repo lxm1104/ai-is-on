@@ -1,12 +1,17 @@
 import { useEffect, useState } from 'react';
-import type { ContextEntity, ContextRelation, ContextUnit } from '../types';
+import type {
+  ContextEntity,
+  ContextUnit,
+  RelationshipItem,
+  RelationshipSource,
+} from '../types';
 import {
   fetchContextEntities,
-  fetchContextRelations,
   fetchContextUnits,
+  fetchRelationships,
 } from '../lib/api';
 
-type Tab = 'units' | 'entities' | 'relations';
+type Tab = 'units' | 'entities' | 'relationships';
 
 const KIND_OPTIONS = [
   'event',
@@ -29,7 +34,7 @@ export function ContextPanel() {
   const [tab, setTab] = useState<Tab>('units');
   const [units, setUnits] = useState<ContextUnit[]>([]);
   const [entities, setEntities] = useState<ContextEntity[]>([]);
-  const [relations, setRelations] = useState<ContextRelation[]>([]);
+  const [relationships, setRelationships] = useState<RelationshipItem[]>([]);
   const [kindFilter, setKindFilter] = useState<string>('');
   const [actFilter, setActFilter] = useState<string>('');
   const [loading, setLoading] = useState(false);
@@ -47,11 +52,11 @@ export function ContextPanel() {
           limit: 100,
         }),
         fetchContextEntities(),
-        fetchContextRelations(),
+        fetchRelationships(),
       ]);
       setUnits(u);
       setEntities(e);
-      setRelations(r);
+      setRelationships(r);
       setLastLoadedAt(Date.now());
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -78,7 +83,7 @@ export function ContextPanel() {
         <span className="ctx-panel__chev">{open ? '▾' : '▸'}</span>
         {open && (
           <span className="ctx-panel__counts">
-            {units.length} units · {entities.length} entities · {relations.length} rels
+            {units.length} units · {entities.length} entities · {relationships.length} relationships
           </span>
         )}
       </button>
@@ -98,10 +103,10 @@ export function ContextPanel() {
               Entities ({entities.length})
             </button>
             <button
-              className={`ctx-panel__tab ${tab === 'relations' ? 'is-on' : ''}`}
-              onClick={() => setTab('relations')}
+              className={`ctx-panel__tab ${tab === 'relationships' ? 'is-on' : ''}`}
+              onClick={() => setTab('relationships')}
             >
-              Relations ({relations.length})
+              Relationships ({relationships.length})
             </button>
             <button
               className="ctx-panel__refresh btn btn--ghost"
@@ -144,8 +149,8 @@ export function ContextPanel() {
           {tab === 'entities' && (
             <EntitiesList entities={entities} />
           )}
-          {tab === 'relations' && (
-            <RelationsList relations={relations} entities={entities} />
+          {tab === 'relationships' && (
+            <RelationshipsList items={relationships} />
           )}
         </div>
       )}
@@ -220,30 +225,47 @@ function EntitiesList({ entities }: { entities: ContextEntity[] }) {
   );
 }
 
-function RelationsList({
-  relations,
-  entities,
-}: {
-  relations: ContextRelation[];
-  entities: ContextEntity[];
-}) {
-  const byId = new Map(entities.map((e) => [e.id, e]));
-  if (relations.length === 0) {
-    return <div className="ctx-panel__empty">还没有 relation。</div>;
+const SOURCE_LABEL: Record<RelationshipSource, string> = {
+  work_map: 'Work Map',
+  extracted_from_event: '从消息抽取',
+  manual: '手工',
+  system: '系统',
+  agent: 'Agent',
+  other: '其他',
+};
+
+function RelationshipsList({ items }: { items: RelationshipItem[] }) {
+  if (items.length === 0) {
+    return (
+      <div className="ctx-panel__empty">
+        还没有沉淀关系。在 Work Map 添加协作者，或等待消息沉淀。
+      </div>
+    );
   }
   return (
-    <ul className="ctx-relations">
-      {relations.map((r) => {
-        const from = byId.get(r.from_entity_id);
-        const to = byId.get(r.to_entity_id);
-        return (
-          <li key={r.id} className="ctx-rel">
-            <span>{from ? `${from.type}:${from.name}` : r.from_entity_id}</span>
-            <span className="ctx-rel__arrow">— {r.relation_type} →</span>
-            <span>{to ? `${to.type}:${to.name}` : r.to_entity_id}</span>
-          </li>
-        );
-      })}
+    <ul className="ctx-relationships">
+      {items.map((r) => (
+        <li key={r.id} className="ctx-relationship">
+          <div className="ctx-relationship__head">
+            {r.persons.length === 0 ? (
+              <span className="ctx-relationship__title">{r.title}</span>
+            ) : (
+              r.persons.map((p) => (
+                <span key={p.id} className="ctx-ent-chip">
+                  person:{p.name}
+                </span>
+              ))
+            )}
+            <span className={`ctx-relationship__source ctx-relationship__source--${r.source}`}>
+              {SOURCE_LABEL[r.source] ?? r.source}
+            </span>
+          </div>
+          <div className="ctx-relationship__summary">{r.summary}</div>
+          <div className="ctx-relationship__foot">
+            updated {new Date(r.updatedAt).toLocaleString()}
+          </div>
+        </li>
+      ))}
     </ul>
   );
 }

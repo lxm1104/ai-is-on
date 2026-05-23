@@ -4,6 +4,7 @@ import type {
   ContextEntity,
   ContextRelation,
   ContextUnit,
+  RelationshipItem,
   SignalCard,
 } from '../types';
 
@@ -166,11 +167,22 @@ export async function fetchContextEntities(): Promise<ContextEntity[]> {
   return (j.items ?? []) as ContextEntity[];
 }
 
+/**
+ * @deprecated MVP14 Phase 1a：旧 /api/context/relations 永远返回空。
+ * 用 fetchRelationships() 替代。Phase 1c 会一并删 route + 此函数。
+ */
 export async function fetchContextRelations(): Promise<ContextRelation[]> {
   const r = await fetch('/api/context/relations');
   if (!r.ok) throw new Error(`context/relations ${r.status}`);
   const j = await r.json();
   return (j.items ?? []) as ContextRelation[];
+}
+
+export async function fetchRelationships(limit = 100): Promise<RelationshipItem[]> {
+  const r = await fetch(`/api/context/relationships?limit=${limit}`);
+  if (!r.ok) throw new Error(`context/relationships ${r.status}`);
+  const j = await r.json();
+  return (j.items ?? []) as RelationshipItem[];
 }
 
 export type ActiveContextSnapshot = {

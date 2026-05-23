@@ -9,6 +9,7 @@ import {
   listLinksFor,
 } from '../context/contextStore.js';
 import { buildActiveContext } from '../context/activeContext.js';
+import { listRelationships } from '../context/relationshipsService.js';
 
 export const contextRouter = Router();
 
@@ -36,8 +37,22 @@ contextRouter.get('/context/entities', (_req, res) => {
   res.json({ items });
 });
 
+// DEPRECATED MVP14 Phase 1a: use /api/context/relationships
+// 这张表零写入；Phase 1c 一并删除 route + 类型 + 闭环代码。保留 1 个 commit
+// 周期是为了未发现的外部 caller。
 contextRouter.get('/context/relations', (_req, res) => {
+  console.warn(
+    '[deprecated] GET /api/context/relations -> use GET /api/context/relationships'
+  );
   const items = listAllRelations(500);
+  res.json({ items });
+});
+
+// MVP14 Phase 1a: explicit relationships read model（kind='relationship' units
+// 的 enriched 视图）。详见 apps/server/src/context/relationshipsService.ts。
+contextRouter.get('/context/relationships', (req, res) => {
+  const limit = clampInt(req.query.limit, 100, 1, 500);
+  const items = listRelationships({ limit });
   res.json({ items });
 });
 
