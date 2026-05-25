@@ -69,9 +69,8 @@ export function evaluateUnit(unit: ContextUnit, now: number): TriggerDraft[] {
   if (unit.kind === 'event') {
     const mp = checkMeetingPrepare(unit, now);
     if (mp) drafts.push(mp);
-    // MVP11.0-b：评论 attention 也走 event kind，但靠 semanticTags 路由
-    const dc = checkDocCommentAttention(unit, now);
-    if (dc) drafts.push(dc);
+    // MVP14 Step3.5：docCommentAgent 已删，doc_comment_attention 不再派单。
+    // 文档评论由 enrichment 写为 context_units，由 attention engine 全局推理是否露出。
     // MVP11.1：会议纪要 ready
     const ma = checkMeetingArtifactReady(unit);
     if (ma) drafts.push(ma);
@@ -106,41 +105,9 @@ function checkMeetingArtifactReady(unit: ContextUnit): TriggerDraft | null {
   };
 }
 
-/**
- * MVP11.0-b doc_comment_attention：
- * - 只看 semanticTags.signal_kind ∈ {doc_comment, doc_comment_reply}
- * - 排除 author_is_self
- * - 必须 is_at_me 或 on_authoritative_doc
- * idempotency：以 contextUnitId + day-bucket，同一天对同一 unit 至多 1 次。
- */
-function checkDocCommentAttention(unit: ContextUnit, now: number): TriggerDraft | null {
-  const { tags } = decodeSemanticTags(unit.meaning);
-  const kind = tags.signal_kind;
-  if (kind !== 'doc_comment' && kind !== 'doc_comment_reply') return null;
-  if (tags.author_is_self === true) return null;
-  if (tags.is_at_me !== true && tags.on_authoritative_doc !== true) return null;
-
-  const docEnt = unit.entities.find((e) => e.type === 'doc');
-  const authorEnt = unit.entities.find((e) => e.role === 'author');
-  const dayBucket = new Date(now).toISOString().slice(0, 10);
-  const reasoning =
-    tags.is_at_me === true
-      ? `${authorEnt?.name ?? '某人'} 在文档评论 @ 你`
-      : `权威文档收到 ${authorEnt?.name ?? '某人'} 的评论`;
-  return {
-    triggerType: 'doc_comment_attention',
-    contextUnitId: unit.id,
-    dueAtBucket: dayBucket,
-    reasoning,
-    payload: {
-      signalKind: kind,
-      docUrl: docEnt?.name,
-      authorName: authorEnt?.name,
-      isAtMe: tags.is_at_me === true,
-      onAuthoritativeDoc: tags.on_authoritative_doc === true,
-    },
-  };
-}
+// MVP14 Step3.5：checkDocCommentAttention 已删除 — docCommentAgent 不再注册。
+// 评论事件本身仍由 enrichment 落成 context_units（kind=event with semanticTags），
+// attention engine 在 packet 里看到，按需推到顶部。
 
 function checkCommitmentDue(unit: ContextUnit, now: number): TriggerDraft | null {
   const dueIso = unit.time?.dueAt;

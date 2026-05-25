@@ -8,10 +8,15 @@ export type AuditAction =
   | 'rule_learned'
   | 'rule_deactivated'
   | 'auto_resolved'
-  | 'correction_applied'        // MVP10.0
-  | 'correction_reverted'       // MVP10.0
-  | 'action_items_confirmed'    // MVP11.1
-  | 'action_items_declined';    // MVP11.1
+  | 'correction_applied'                // MVP10.0
+  | 'correction_reverted'               // MVP10.0
+  | 'action_items_confirmed'            // MVP11.1
+  | 'action_items_declined'             // MVP11.1
+  // MVP14 Step 4：attention 反馈通道
+  | 'attention_dismissed_with_learn'
+  | 'attention_space_corrected'
+  | 'attention_entity_demoted'
+  | 'attention_preference_added';
 
 export function writeAudit(input: {
   action: AuditAction;

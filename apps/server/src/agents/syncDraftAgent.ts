@@ -18,7 +18,7 @@ import type { AgentHandler } from './agentRegistry.js';
  * which require explicit user action.
  */
 
-const SYNC_DRAFT_SYSTEM_PROMPT = `你正在为用户起草一段简短的飞书消息草稿，目的是同步一个团队信息差。
+export const SYNC_DRAFT_SYSTEM_PROMPT = `你正在为用户起草一段简短的飞书消息草稿，目的是同步一个团队信息差。
 
 输入：一个 divergence finding，描述了"团队约定了什么，但相关文档/状态没跟上"。
 
@@ -74,6 +74,7 @@ export const syncDraftHandler: AgentHandler = async ({
   let parsed: SyncDraftResult;
   try {
     const r = await runOneShot(userMessage, {
+      agentName: 'aiisn-sync-draft',
       systemPrompt: SYNC_DRAFT_SYSTEM_PROMPT,
       timeoutMs: 90_000,
     });

@@ -1,11 +1,17 @@
 import { Router } from 'express';
-import { applyCardAction, listCards } from '../cards/cardsService.js';
+import { applyCardAction } from '../cards/cardsService.js';
 import { projectCardContext } from '../cards/contextProjection.js';
+import { listLiveAttentionItems } from '../attention/attentionStore.js';
+import { projectAttentionItemToCard } from '../attention/attentionProjection.js';
 
 export const cardsRouter = Router();
 
+// MVP14 Step 3: /api/cards 现在统一返回 L2 attention 投影的 cards。
+// 老的 cards 表（source_kind='triage' 或 'agent_run'）不再露给前端；
+// applyCardAction 仍兼容老 cards 表的 id（专项 agent 的卡走老路）。
 cardsRouter.get('/cards', (_req, res) => {
-  res.json({ cards: listCards() });
+  const cards = listLiveAttentionItems(100).map(projectAttentionItemToCard);
+  res.json({ cards });
 });
 
 cardsRouter.post('/cards/:id/action', async (req, res) => {

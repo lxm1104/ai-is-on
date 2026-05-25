@@ -30,13 +30,16 @@ export const config = {
   port: envInt('PORT', 8787),
   webOrigin: envStr('WEB_ORIGIN', 'http://127.0.0.1:5173'),
   sqlitePath: path.resolve(REPO_ROOT, envStr('SQLITE_PATH', 'data/ai-is-on.sqlite')),
-  claudeCli: envStr(
-    'CLAUDE_CODE_CLI',
-    '/Users/xinming/MyProject/claude-code-research/package/cli.js'
+  opencodeBin: envStr('OPENCODE_BIN', 'opencode'),
+  opencodeModel: envStr('OPENCODE_MODEL', 'zai-coding-plan/glm-5.1'),
+  opencodeFallbackModel: envStr(
+    'OPENCODE_FALLBACK_MODEL',
+    'zai-coding-plan/glm-5-turbo'
   ),
-  claudeTools: envStr('CLAUDE_TOOLS', 'Bash,WebSearch,WebFetch'),
-  claudeAllowedTools: envStr('CLAUDE_ALLOWED_TOOLS', 'Bash(lark-cli:*)'),
-  claudeUseBare: envBool('CLAUDE_USE_BARE', false),
+  opencodeAgentDir: path.resolve(
+    REPO_ROOT,
+    envStr('OPENCODE_AGENT_DIR', '.opencode/agent')
+  ),
   speechMaxSeconds: envInt('SPEECH_MAX_SECONDS', 60),
   ffmpegBin: envStr('FFMPEG_BIN', 'ffmpeg'),
   larkCliBin: envStr('LARK_CLI_BIN', 'lark-cli'),

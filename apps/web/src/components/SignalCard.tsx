@@ -3,6 +3,7 @@ import type { CardAction, ContextUnit, SignalCard as SignalCardT } from '../type
 import {
   fetchCardContext,
   postActionItemsConfirm,
+  postAttentionFeedback,
   postCardCorrection,
   postContextFeedback,
   type CorrectionApplyResult,
@@ -71,7 +72,7 @@ export function SignalCardView(props: {
   const [ctxErr, setCtxErr] = useState<string | null>(null);
   const [fbOpen, setFbOpen] = useState(false);
   const [fbSent, setFbSent] = useState<string | null>(null);
-  // MVP10.0 inline correction state
+  // MVP10.0 inline correction state（针对老 cards 表的卡片）
   const [corrType, setCorrType] = useState<'wrong_priority' | 'wrong_meaning' | null>(null);
   const [corrPriority, setCorrPriority] = useState<'P0' | 'P1' | 'P2' | 'P3'>('P2');
   const [corrLearnRule, setCorrLearnRule] = useState(false);
@@ -80,6 +81,46 @@ export function SignalCardView(props: {
   const [corrApplied, setCorrApplied] = useState<CorrectionApplyResult | null>(null);
   const [corrBusy, setCorrBusy] = useState(false);
   const [corrErr, setCorrErr] = useState<string | null>(null);
+
+  // MVP14 Step 4 attention feedback state
+  const isAttention = card.source === 'agent' && card.sourceKind === 'agent_run';
+  const [attnFbBusy, setAttnFbBusy] = useState<string | null>(null);
+  const [attnFbDone, setAttnFbDone] = useState<string | null>(null);
+  const [attnFbErr, setAttnFbErr] = useState<string | null>(null);
+  const [prefMode, setPrefMode] = useState(false);
+  const [prefText, setPrefText] = useState('');
+
+  async function submitAttentionFeedback(
+    type: 'not_relevant' | 'add_preference',
+    payload: Record<string, unknown>
+  ) {
+    setAttnFbBusy(type);
+    setAttnFbErr(null);
+    try {
+      const r = await postAttentionFeedback({
+        attentionId: card.id,
+        type,
+        payload,
+        confirm: true,
+      });
+      if (r.applied) {
+        setAttnFbDone(type);
+        // not_relevant 后卡片会被 dismissed，下一轮 WS attention_updated 会刷
+        setTimeout(() => {
+          setAttnFbDone(null);
+          setFbOpen(false);
+          setPrefMode(false);
+          setPrefText('');
+        }, 1200);
+      } else {
+        setAttnFbErr('未生效');
+      }
+    } catch (e) {
+      setAttnFbErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAttnFbBusy(null);
+    }
+  }
 
   async function ensureCtxLoaded() {
     if (ctxUnits !== null) return;
@@ -300,7 +341,7 @@ export function SignalCardView(props: {
             >
               {fbOpen ? '收起' : '理解错了？'}
             </button>
-            {fbOpen && !corrType && (
+            {fbOpen && !corrType && !isAttention && (
               <div className="card__ctx-fb-options">
                 {fbSent ? (
                   <span className="card__ctx-fb-done">已记下，谢谢。</span>
@@ -316,6 +357,70 @@ export function SignalCardView(props: {
                     </button>
                   ))
                 )}
+              </div>
+            )}
+            {fbOpen && isAttention && (
+              <div className="card__ctx-fb-options card__ctx-fb-attn">
+                {attnFbDone ? (
+                  <span className="card__ctx-fb-done">
+                    {attnFbDone === 'not_relevant'
+                      ? '已忽略并降低相关实体权重，下次 attention 会刷新。'
+                      : '偏好已加入 Work Map，下次推理会带上。'}
+                  </span>
+                ) : !prefMode ? (
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn--ghost card__ctx-fb-chip"
+                      disabled={!!attnFbBusy}
+                      onClick={() => void submitAttentionFeedback('not_relevant', {})}
+                    >
+                      {attnFbBusy === 'not_relevant' ? '…' : '这条没用'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--ghost card__ctx-fb-chip"
+                      onClick={() => setPrefMode(true)}
+                    >
+                      我以后不想看这类
+                    </button>
+                  </>
+                ) : (
+                  <div className="correction-inline" style={{ width: '100%' }}>
+                    <textarea
+                      rows={2}
+                      className="correction-inline__textarea"
+                      placeholder='告诉 attention 引擎你的偏好，例如"我不关心 docComment 类的提醒"'
+                      value={prefText}
+                      onChange={(e) => setPrefText(e.target.value)}
+                    />
+                    <div className="correction-inline__actions">
+                      <button
+                        type="button"
+                        className="btn btn--primary"
+                        disabled={!!attnFbBusy || !prefText.trim()}
+                        onClick={() =>
+                          void submitAttentionFeedback('add_preference', {
+                            text: prefText.trim(),
+                          })
+                        }
+                      >
+                        {attnFbBusy === 'add_preference' ? '…' : '加入 Work Map'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn--ghost"
+                        onClick={() => {
+                          setPrefMode(false);
+                          setPrefText('');
+                        }}
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {attnFbErr && <div className="card__ctx-fb-err">{attnFbErr}</div>}
               </div>
             )}
             {corrType === 'wrong_priority' && (

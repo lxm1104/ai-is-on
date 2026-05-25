@@ -451,7 +451,7 @@ function collectRelatedContext(focal: ContextUnit, now: number, cap: number): Co
   return scored.slice(0, cap).map((x) => x.u);
 }
 
-function collectStakeholders(
+export function collectStakeholders(
   focal: ContextUnit | null,
   cap: number
 ): StakeholderInPacket[] {
@@ -563,4 +563,376 @@ export function recommendHandling(p: AgentContextPacket): {
   const hasCritical = p.spaces?.some((s) => s.priority === 'critical');
   if (hasCritical) return { handling: 'notify', reason: '关联 Space 有临近 deadline' };
   return { handling: 'notify', reason: 'default' };
+}
+
+// --------------------------------------------------------------------------
+// MVP14 Step 1: Global packet for Attention Engine
+//
+// 与 assembleAgentContextPacket 的差别：
+// - 不针对单个 focalUnit；面向 "用户全局视图"
+// - 不需要 trigger / agentRunId；由 attentionEngine 自己分配
+// - 复用同一批 helper（scoreContextUnit / collectStakeholders / computeSpacePriority）
+// - 输出 inputHash，attentionEngine 用它做 cache / supersede
+// --------------------------------------------------------------------------
+
+import { createHash } from 'node:crypto';
+import { getCurrentWorkMap } from '../bootstrap/workMapService.js';
+import { listActiveBoundaryRules } from '../boundary/boundaryStore.js';
+import type { BoundaryRule } from '../boundary/BoundaryRule.js';
+import { listRecentAgentProposalCards } from '../db.js';
+
+export type GlobalSpaceInPacket = SpaceInPacket & {
+  /** 关联到该 Space 的 active commitment 标题（去重，cap 5） */
+  commitmentTitles: string[];
+  /** 关联到该 Space 的 active goal 标题（cap 3） */
+  goalTitles: string[];
+};
+
+export type GlobalBoundaryRuleInPacket = {
+  id: string;
+  description: string;       // condition_json 渲染成一行
+  allowedAction: string;
+  autonomy: string;
+  scope: string;
+};
+
+/**
+ * MVP14 Step3.5：专项 agent（commitment / prepareMeeting / recapActionItems / caring / dailyDigest / syncDraft）
+ * 的卡片提案。attention engine 把它们当作高质量"候选信号"输入，由 LLM 全局综合：
+ * - 已被其他信号覆盖的 → 忽略
+ * - 跟 packet 内其他信号能合并的 → 综合成一条 attention item
+ * - 独立且有价值的 → 直接采纳为 attention item
+ */
+export type AgentProposalInPacket = {
+  id: string;
+  agentType: string;             // e.g. 'prepare_meeting', 'track_commitment'
+  priority: 'P0' | 'P1' | 'P2' | 'P3';
+  title: string;
+  summary: string;
+  suggestedAction?: string;
+  createdAt: string;
+};
+
+export type GlobalContextPacket = {
+  packetAssemblerVersion: number;
+  generatedAt: string;
+  bootstrapped: boolean;
+  subject: SubjectInPacket | null;
+  spaces: GlobalSpaceInPacket[];
+  goals: ContextUnit[];
+  commitments: ContextUnit[];
+  uncertainties: ContextUnit[];
+  recentEvents: ContextUnit[];
+  topActive: ContextUnit[];
+  stakeholders: StakeholderInPacket[];
+  preferences: string[];
+  boundaryRules: GlobalBoundaryRuleInPacket[];
+  agentProposals: AgentProposalInPacket[];     // MVP14 Step3.5
+  tokenEstimate: number;
+  /** 稳定的 input 摘要 hash，attentionEngine 用它做 idempotency cache */
+  inputHash: string;
+};
+
+const GLOBAL_SLICE_CAPS = {
+  spaces: 8,
+  goals: 6,
+  commitments: 10,
+  uncertainties: 6,
+  recentEvents: 20,
+  topActive: 15,
+  stakeholders: 8,
+  preferences: 10,
+  boundaryRules: 10,
+  agentProposals: 12,
+} as const;
+
+const GLOBAL_RECENT_EVENT_WINDOW_MS = 24 * 3600_000;
+const AGENT_PROPOSAL_WINDOW_MS = 24 * 3600_000;
+
+export type AssembleGlobalInput = {
+  now?: number;
+  recentEventWindowMs?: number;
+  budgetTokens?: number;
+};
+
+export function assembleGlobalContextPacket(
+  opts: AssembleGlobalInput = {}
+): GlobalContextPacket {
+  const now = opts.now ?? Date.now();
+  const recentWindow = opts.recentEventWindowMs ?? GLOBAL_RECENT_EVENT_WINDOW_MS;
+  const bootstrapped = !!getSetting('bootstrap_completed_at');
+
+  // -------- 1) 用 workMapService 拿结构化骨干 --------
+  const wm = getCurrentWorkMap();
+  const subject: SubjectInPacket | null = bootstrapped
+    ? buildSubjectSlice()
+    : null;
+
+  // -------- 2) 拉一次活跃 units 做分桶 --------
+  const allActive = listActiveContextUnits({ limit: 500 });
+
+  // commitments：取全部 kind='commitment' 而非仅 workMap 内的，按 score+due 排
+  const commitments = allActive
+    .filter((u) => u.kind === 'commitment')
+    .map((u) => ({ u, s: scoreContextUnit(u, now) }))
+    .sort((a, b) => b.s - a.s)
+    .slice(0, GLOBAL_SLICE_CAPS.commitments)
+    .map((x) => x.u);
+
+  const goals = allActive
+    .filter((u) => u.kind === 'goal')
+    .map((u) => ({ u, s: scoreContextUnit(u, now) }))
+    .sort((a, b) => b.s - a.s)
+    .slice(0, GLOBAL_SLICE_CAPS.goals)
+    .map((x) => x.u);
+
+  const uncertainties = allActive
+    .filter((u) => u.kind === 'uncertainty')
+    .map((u) => ({ u, s: scoreContextUnit(u, now) }))
+    .sort((a, b) => b.s - a.s)
+    .slice(0, GLOBAL_SLICE_CAPS.uncertainties)
+    .map((x) => x.u);
+
+  const recentEvents = allActive
+    .filter((u) => u.kind === 'event')
+    .filter((u) => {
+      const t = new Date(u.updatedAt).getTime();
+      return Number.isFinite(t) && now - t <= recentWindow;
+    })
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, GLOBAL_SLICE_CAPS.recentEvents);
+
+  // topActive：非以上 kind 的高分活跃 unit
+  const PRIMARY_KINDS = new Set<ContextUnit['kind']>([
+    'commitment',
+    'goal',
+    'uncertainty',
+    'event',
+  ]);
+  const topActive = allActive
+    .filter((u) => !PRIMARY_KINDS.has(u.kind))
+    .map((u) => ({ u, s: scoreContextUnit(u, now) }))
+    .sort((a, b) => b.s - a.s)
+    .slice(0, GLOBAL_SLICE_CAPS.topActive)
+    .map((x) => x.u);
+
+  // -------- 3) Spaces：复用 workMap 列出的项目 spaces + 优先级/承诺/目标 --------
+  const spaces: GlobalSpaceInPacket[] = [];
+  for (const s of wm.spaces.slice(0, GLOBAL_SLICE_CAPS.spaces)) {
+    const links = listSpaceLinks(s.id);
+    const priority = computeSpacePriority(links, now);
+    const docs = collectSpaceDocs(links);
+    const commitmentTitles: string[] = [];
+    const goalTitles: string[] = [];
+    for (const l of links) {
+      if (l.target_type !== 'context_unit') continue;
+      const u = getContextUnitById(l.target_id);
+      if (!u || u.status !== 'active') continue;
+      if (u.kind === 'commitment' && commitmentTitles.length < 5) {
+        commitmentTitles.push(u.title);
+      } else if (u.kind === 'goal' && goalTitles.length < 3) {
+        goalTitles.push(u.title);
+      }
+    }
+    spaces.push({
+      id: s.id,
+      name: s.name,
+      type: 'project',
+      priority,
+      docs,
+      commitmentTitles,
+      goalTitles,
+    });
+  }
+  spaces.sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority));
+
+  // -------- 4) Stakeholders（focal=null，纯走 work_map relationships） --------
+  const stakeholders = collectStakeholders(null, GLOBAL_SLICE_CAPS.stakeholders);
+
+  // -------- 5) Preferences：直接拿 workMap 的 title --------
+  const preferences = wm.preferences
+    .map((u) => u.title)
+    .slice(0, GLOBAL_SLICE_CAPS.preferences);
+
+  // -------- 6) Boundary rules：取全部 active，渲染一行人话 --------
+  const boundaryRules = listActiveBoundaryRules()
+    .slice(0, GLOBAL_SLICE_CAPS.boundaryRules)
+    .map((r): GlobalBoundaryRuleInPacket => ({
+      id: r.id,
+      description: describeBoundaryRule(r),
+      allowedAction: r.allowedAction,
+      autonomy: r.autonomy,
+      scope: r.scope,
+    }));
+
+  // -------- 6.5) Agent proposals：近 24h 专项 agent 写的待处理卡 --------
+  const agentProposals: AgentProposalInPacket[] = listRecentAgentProposalCards(
+    AGENT_PROPOSAL_WINDOW_MS,
+    GLOBAL_SLICE_CAPS.agentProposals
+  ).map((c) => ({
+    id: c.id,
+    // 旧 cards.source_kind 没拆 agentType 列；从 source_ref_id 或 reason 反推太弱，
+    // 这里就用 c.source 来标识（专项 agent 写卡时 source='agent'，未来可扩展专门列）。
+    agentType: c.source ?? 'agent',
+    priority: c.priority as AgentProposalInPacket['priority'],
+    title: c.title,
+    summary: c.summary,
+    suggestedAction: c.suggested_action ?? undefined,
+    createdAt: c.created_at,
+  }));
+
+  // -------- 7) tokenEstimate 粗估（仅供调试，不参与 hash） --------
+  const tokenEstimate = estimateGlobalPacketTokens({
+    subject,
+    spaces,
+    goals,
+    commitments,
+    uncertainties,
+    recentEvents,
+    topActive,
+    stakeholders,
+    preferences,
+    boundaryRules,
+    agentProposals,
+  });
+
+  // -------- 8) inputHash --------
+  // 设计：稳定地反映 "本次 input 与上次相比是否实质变化"。
+  // 不放 generatedAt / tokenEstimate / score；放每个 unit 的 (id, updatedAt) 与
+  // boundary 的 condition 描述、preferences 文本、stakeholders 名字。
+  const hashSeed = {
+    bootstrapped,
+    subject: subject
+      ? {
+          role: subject.roleTitle ?? '',
+          team: subject.teamName ?? '',
+          resp: [...subject.responsibilities].sort(),
+          pref: [...subject.preferences].sort(),
+        }
+      : null,
+    spaces: spaces
+      .map((s) => ({
+        id: s.id,
+        priority: s.priority,
+        commitmentTitles: [...s.commitmentTitles].sort(),
+        goalTitles: [...s.goalTitles].sort(),
+        docs: [...s.docs.map((d) => d.id)].sort(),
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+    goals: unitFingerprints(goals),
+    commitments: unitFingerprints(commitments),
+    uncertainties: unitFingerprints(uncertainties),
+    recentEvents: unitFingerprints(recentEvents),
+    topActive: unitFingerprints(topActive),
+    stakeholders: stakeholders.map((s) => s.name).sort(),
+    preferences: [...preferences].sort(),
+    boundaryRules: boundaryRules
+      .map((r) => ({ id: r.id, d: r.description, a: r.allowedAction }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+    agentProposals: agentProposals
+      .map((p) => ({ id: p.id, p: p.priority, t: p.title }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
+  };
+  const inputHash = createHash('sha1')
+    .update(JSON.stringify(hashSeed))
+    .digest('hex');
+
+  return {
+    packetAssemblerVersion: PACKET_ASSEMBLER_VERSION,
+    generatedAt: new Date(now).toISOString(),
+    bootstrapped,
+    subject,
+    spaces,
+    goals,
+    commitments,
+    uncertainties,
+    recentEvents,
+    topActive,
+    stakeholders,
+    preferences,
+    boundaryRules,
+    agentProposals,
+    tokenEstimate,
+    inputHash,
+  };
+}
+
+// --------------------------------------------------------------------------
+// helpers for global packet
+// --------------------------------------------------------------------------
+
+function unitFingerprints(
+  us: ContextUnit[]
+): Array<{ id: string; u: string }> {
+  return us
+    .map((u) => ({ id: u.id, u: u.updatedAt }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function estimateGlobalPacketTokens(input: {
+  subject: SubjectInPacket | null;
+  spaces: GlobalSpaceInPacket[];
+  goals: ContextUnit[];
+  commitments: ContextUnit[];
+  uncertainties: ContextUnit[];
+  recentEvents: ContextUnit[];
+  topActive: ContextUnit[];
+  stakeholders: StakeholderInPacket[];
+  preferences: string[];
+  boundaryRules: GlobalBoundaryRuleInPacket[];
+  agentProposals: AgentProposalInPacket[];
+}): number {
+  let chars = 0;
+  if (input.subject) {
+    chars += (input.subject.roleTitle?.length ?? 0) +
+      (input.subject.teamName?.length ?? 0) +
+      input.subject.responsibilities.reduce((a, s) => a + s.length, 0) +
+      input.subject.preferences.reduce((a, s) => a + s.length, 0);
+  }
+  for (const s of input.spaces) {
+    chars += s.name.length +
+      s.commitmentTitles.reduce((a, t) => a + t.length, 0) +
+      s.goalTitles.reduce((a, t) => a + t.length, 0);
+  }
+  const unitChars = (u: ContextUnit) =>
+    (u.title?.length ?? 0) + (u.content?.length ?? 0) / 2;
+  for (const u of [
+    ...input.goals,
+    ...input.commitments,
+    ...input.uncertainties,
+    ...input.recentEvents,
+    ...input.topActive,
+  ]) {
+    chars += unitChars(u);
+  }
+  chars += input.stakeholders.reduce((a, s) => a + s.name.length, 0);
+  chars += input.preferences.reduce((a, s) => a + s.length, 0);
+  chars += input.boundaryRules.reduce((a, r) => a + r.description.length, 0);
+  chars += input.agentProposals.reduce(
+    (a, p) => a + p.title.length + (p.summary?.length ?? 0) / 2,
+    0
+  );
+  // 中文 ≈ 2 chars/token
+  return Math.ceil(chars / 2);
+}
+
+/**
+ * 把 BoundaryRule.condition 渲染成一行人话，给 LLM 当 hint。
+ * Evaluator 真正过的还是结构化 condition，这里只是文本摘要。
+ */
+function describeBoundaryRule(r: BoundaryRule): string {
+  const c = r.condition;
+  const parts: string[] = [];
+  if (c.source?.length) parts.push(`来源=${c.source.join('|')}`);
+  if (c.triggerType?.length) parts.push(`触发=${c.triggerType.join('|')}`);
+  if (c.priorityAtMost) parts.push(`P≤${c.priorityAtMost}`);
+  if (c.scope?.length) parts.push(`scope=${c.scope.join('|')}`);
+  if (c.kind?.length) parts.push(`kind=${c.kind.join('|')}`);
+  if (c.entityRef) {
+    parts.push(
+      `entity=${c.entityRef.type}${c.entityRef.nameLike ? `:${c.entityRef.nameLike}` : ''}`
+    );
+  }
+  const head = parts.length > 0 ? parts.join(' & ') : '<空条件>';
+  return `${head} → ${r.allowedAction}（${r.autonomy}）`;
 }

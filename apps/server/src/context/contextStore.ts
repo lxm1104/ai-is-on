@@ -60,10 +60,12 @@ export type UpsertResult = {
 
 // MVP3: lazy import to avoid circular require (triggerEvaluator → contextStore.getContextUnitById)
 // MVP8.0 §5.2：hook 签名扩成 (unit, changeContext?) 让 trigger 能把字段级 diff 带到 payload。
+// MVP14 Step1：支持多订阅者（triggerScheduler + attentionEngine 都要挂）。
+// 注册顺序即调用顺序；某个 hook 抛错不影响其他 hook。
 type PushHook = (unit: ContextUnit, changeContext?: ChangeContext) => void;
-let pushHook: PushHook | null = null;
+const pushHooks: PushHook[] = [];
 export function registerUpsertHook(hook: PushHook) {
-  pushHook = hook;
+  pushHooks.push(hook);
 }
 
 function rowToUnit(row: ContextUnitRow, entities: ContextEntityRef[] = []): ContextUnit {
@@ -396,14 +398,15 @@ function filterRoutingEntities(entities: ContextEntityRef[]): ContextEntityRef[]
 }
 
 function invokeHook(unit: ContextUnit, changeContext?: ChangeContext) {
-  if (!pushHook) return;
-  try {
-    pushHook(unit, changeContext);
-  } catch (err) {
-    console.warn(
-      '[context] upsert hook failed:',
-      err instanceof Error ? err.message : String(err)
-    );
+  for (const hook of pushHooks) {
+    try {
+      hook(unit, changeContext);
+    } catch (err) {
+      console.warn(
+        '[context] upsert hook failed:',
+        err instanceof Error ? err.message : String(err)
+      );
+    }
   }
 }
 

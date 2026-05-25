@@ -89,4 +89,5 @@ export type ServerEvent =
   | { type: 'card_created'; card: SignalCard }
   | { type: 'card_updated'; card: SignalCard }
   | { type: 'collector_status'; collector: CollectorStatus }
+  | { type: 'attention_updated'; generation: number; itemsEmitted: number }
   | { type: 'error'; message: string };

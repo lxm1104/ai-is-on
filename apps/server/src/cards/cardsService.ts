@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import {
   type ActionProposalRow,
   type CardRow,
-  type EventRow,
   getCard,
   insertCard,
   insertUserRule,
@@ -26,7 +25,15 @@ import type {
   CardStatus,
   SignalCard,
 } from '../claude/protocol.js';
-import type { TriageItem } from '../triage/parseTriage.js';
+import {
+  getAttentionItem,
+  updateAttentionItemStatus,
+} from '../attention/attentionStore.js';
+import {
+  defaultAttentionActions,
+  projectAttentionItemToCard,
+} from '../attention/attentionProjection.js';
+import { buildRichAskAgentPrompt } from '../attention/askAgentPrompt.js';
 
 export function rowToCard(row: CardRow): SignalCard {
   let actions: CardAction[] = [];
@@ -80,63 +87,11 @@ function defaultActionsForSource(source: string): CardAction[] {
   return [askAgent, ack, snooze, auto, dismiss];
 }
 
-export function createCardsFromTriage(ev: EventRow, item: TriageItem, triageId: string) {
-  // MVP8.1 §5.4: 升级 caller 透传更多字段给 boundary，让规则能匹配 kind / scope。
-  // 'event' kind 来自最小 ContextUnit；scope 走 default 'work'（calendar/im 默认 work）。
-  const candidate: CardCandidate = {
-    priority: item.priority,
-    source: ev.source,
-    kind: 'event',
-    scope: 'work',
-  };
-  const decision = evaluateCard(candidate);
-  if (decision.decision === 'block') {
-    writeAudit({
-      action: 'card_blocked',
-      reason: decision.reason,
-      ruleId: decision.matchedRule.id,
-      payload: { eventId: ev.id, triageId, title: item.title, priority: item.priority },
-    });
-    return;
-  }
-
-  const now = new Date().toISOString();
-  const id = randomUUID();
-  const actions = item.cardActions?.length
-    ? item.cardActions
-    : defaultActionsForSource(ev.source);
-  const status: SignalCard['status'] = decision.decision === 'soften' ? 'batched' : 'new';
-  const row: CardRow = {
-    id,
-    triage_id: triageId,
-    priority: item.priority,
-    source: ev.source,
-    title: item.title || ev.title || ev.text.slice(0, 30),
-    summary: item.summary,
-    reason: item.reason,
-    suggested_action: item.suggestedAction ?? null,
-    draft_reply: item.draftReply ?? null,
-    status,
-    actions_json: JSON.stringify(actions),
-    raw_event_id: ev.id,
-    source_url: ev.url,
-    source_kind: 'triage',
-    source_ref_id: triageId,
-    created_at: now,
-    updated_at: now,
-  };
-  insertCard(row);
-  if (decision.decision === 'soften') {
-    writeAudit({
-      action: 'card_softened',
-      reason: decision.reason,
-      cardId: id,
-      ruleId: decision.matchedRule.id,
-      payload: { priority: item.priority, source: ev.source },
-    });
-  }
-  broadcast({ type: 'card_created', card: rowToCard(row) });
-}
+// MVP14 Step 3: createCardsFromTriage 已下线。
+// 旧的"per-event triage → cards"链路被 L2 attention engine 全局推理取代。
+// 专项 agent（commitmentAgent / prepareMeeting / recapActionItems 等）仍可通过
+// 下方的 createCardFromProposal 写卡（agent_run source_kind），但默认前端只看
+// attention 投影；这些 agent 产物未来若要走 attention，会在 Step 5 改造。
 
 export type ProposalCardInput = {
   proposal: ActionProposalRow;
@@ -232,6 +187,13 @@ export async function applyCardAction(
   actionId: string,
   opts?: { extraPrompt?: string }
 ): Promise<CardActionResult> {
+  // MVP14 Step 2: 同一个 id 命名空间下，先看是不是 AttentionItem。
+  // 命中则走 attention 分支；不命中再走原 cards 表。
+  const attn = getAttentionItem(cardId);
+  if (attn) {
+    return applyAttentionAction(attn, actionId, opts);
+  }
+
   const row = getCard(cardId);
   if (!row) return { ok: false, error: 'card not found' };
 
@@ -321,6 +283,64 @@ export async function applyCardAction(
   const updated = updateCardStatus(cardId, newStatus, now);
   if (!updated) return { ok: false, error: 'update failed' };
   const card = rowToCard(updated);
+  broadcast({ type: 'card_updated', card });
+  return { ok: true, card };
+}
+
+// MVP14 Step 2: attention item 的动作分支（独立于 cards 表）。
+// - ack / mark_done → updateAttentionItemStatus('acted')
+// - dismiss → updateAttentionItemStatus('dismissed')
+// - ask_agent → recordUserMessage + claudeRuntime.sendUserMessage，然后标 acted
+// - open_source → 仅返回当前项（前端打开链接，状态不变）
+// - 不支持 snooze / auto_henceforth（attention 走 TTL 与 supersede，不学 boundary rule）
+async function applyAttentionAction(
+  attn: ReturnType<typeof getAttentionItem> & object,
+  actionId: string,
+  opts?: { extraPrompt?: string }
+): Promise<CardActionResult> {
+  const actions = defaultAttentionActions(attn);
+  const action = actions.find((a) => a.id === actionId);
+  if (!action) return { ok: false, error: `unknown action ${actionId}` };
+
+  const now = new Date().toISOString();
+
+  if (action.kind === 'ask_agent' || action.kind === 'draft_reply') {
+    // Step 3 修：action 触发时实时展开 signal/space/entity 真实内容，让右侧 Claude 不再看光秃秃的 id。
+    const userPrompt = opts?.extraPrompt?.trim();
+    const rich = buildRichAskAgentPrompt(attn);
+    // 若用户在前端额外打了字，把它附在 rich prompt 后面（用户输入优先表达，但仍带 context）
+    const prompt = userPrompt
+      ? `${rich}\n\n【用户补充】${userPrompt}`
+      : rich;
+    recordUserMessage(prompt);
+    try {
+      await claudeRuntime.sendUserMessage(prompt, { skipContext: true });
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+    const updated = updateAttentionItemStatus(attn.id, 'acted', now);
+    if (!updated) return { ok: false, error: 'update failed' };
+    const card = projectAttentionItemToCard(updated);
+    broadcast({ type: 'card_updated', card });
+    return { ok: true, card };
+  }
+
+  if (action.kind === 'open_source') {
+    // 不改状态，前端通过 sourceUrl 自己打开
+    const card = projectAttentionItemToCard(attn);
+    return { ok: true, card };
+  }
+
+  // ack / mark_done → 'acted'；dismiss → 'dismissed'；snooze 当 ack 用（保守）
+  const newAttnStatus =
+    action.kind === 'dismiss'
+      ? 'dismissed'
+      : action.kind === 'mark_done' || action.kind === 'ack' || action.kind === 'snooze'
+        ? 'acted'
+        : 'acted';
+  const updated = updateAttentionItemStatus(attn.id, newAttnStatus, now);
+  if (!updated) return { ok: false, error: 'update failed' };
+  const card = projectAttentionItemToCard(updated);
   broadcast({ type: 'card_updated', card });
   return { ok: true, card };
 }

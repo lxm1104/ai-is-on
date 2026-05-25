@@ -8,9 +8,10 @@ import { SpacesPanel } from './components/SpacesPanel';
 import { RulesPanel } from './components/RulesPanel';
 import { WorkMapPanel } from './components/WorkMapPanel';
 import {
-  fetchCards,
+  fetchAttentionCards,
   fetchCollectors,
   fetchMessages,
+  interruptRuntime,
   postCardAction,
   restartRuntime,
   runCollectorsOnce,
@@ -79,7 +80,7 @@ export function App() {
   }
 
   useEffect(() => {
-    Promise.allSettled([fetchMessages(), fetchCards(), fetchCollectors()]).then(
+    Promise.allSettled([fetchMessages(), fetchAttentionCards(), fetchCollectors()]).then(
       ([m, c, col]) => {
         if (m.status === 'fulfilled') {
           seenIds.current = new Set(m.value.map((r) => r.id));
@@ -101,14 +102,18 @@ export function App() {
         case 'message_updated':
           applyMessage(e.message, 'update');
           return;
-        case 'card_created':
-          applyCard(e.card, 'add');
-          return;
         case 'card_updated':
+          // MVP14 Step 3: 现在只有 attention 流，所有 card_updated 都来自 attention 路由
           applyCard(e.card, 'update');
           return;
         case 'collector_status':
           applyCollector(e.collector);
+          return;
+        case 'attention_updated':
+          // 新 tick 完成，重新拉取整个 live 列表
+          fetchAttentionCards()
+            .then((cs) => setCards(cs))
+            .catch(() => {});
           return;
         case 'error':
           setTopError(e.message);
@@ -141,6 +146,15 @@ export function App() {
     setTopError(null);
     try {
       await restartRuntime();
+    } catch (err) {
+      setTopError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function onInterrupt() {
+    setTopError(null);
+    try {
+      await interruptRuntime();
     } catch (err) {
       setTopError(err instanceof Error ? err.message : String(err));
     }
@@ -221,7 +235,12 @@ export function App() {
         </aside>
         <section className="pane pane--chat">
           <MessageList messages={messages} thinking={thinking} />
-          <Composer onSend={onSend} disabled={sending || status === 'stopped'} />
+          <Composer
+            onSend={onSend}
+            disabled={sending || status === 'stopped'}
+            thinking={thinking || status === 'busy'}
+            onInterrupt={onInterrupt}
+          />
         </section>
       </main>
     </div>

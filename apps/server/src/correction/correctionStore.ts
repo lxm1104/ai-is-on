@@ -18,7 +18,7 @@ import {
 export type WriteJournalInput = {
   feedbackId: string;
   correctionType: string;
-  targetKind: 'context_unit' | 'boundary_rule' | 'entity_alias';
+  targetKind: 'context_unit' | 'boundary_rule' | 'entity_alias' | 'attention_item';
   targetId: string;
   forwardPatch: Record<string, unknown>;
   inversePatch: Record<string, unknown> | null;

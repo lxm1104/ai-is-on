@@ -277,16 +277,15 @@ export async function generateWorkMapDraft(
     rawText = await opts.llmHook(userMessage, WORK_MAP_DRAFT_SYSTEM_PROMPT);
   } else {
     const shot = await runOneShot(userMessage, {
+      agentName: 'aiisn-work-map',
       systemPrompt: WORK_MAP_DRAFT_SYSTEM_PROMPT,
       timeoutMs: 120_000,
     });
     rawText = shot.text;
     const raw = shot.raw as Record<string, unknown> | null;
-    // Claude Code CLI 在 result JSON 里把模型 id 放在 modelUsage 的 key 上（值是 usage 统计）。
-    // 例：{"modelUsage": {"claude-opus-4-6[1m]": {...}}}
-    if (raw && typeof raw.modelUsage === 'object' && raw.modelUsage !== null) {
-      const keys = Object.keys(raw.modelUsage as Record<string, unknown>);
-      if (keys.length > 0) modelId = keys[0];
+    // opencode runOneShot 在 raw 里直接给出 model id（例: "zai-coding-plan/glm-5.1"）
+    if (raw && typeof raw.model === 'string') {
+      modelId = raw.model;
     }
   }
 

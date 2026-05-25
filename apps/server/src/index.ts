@@ -4,6 +4,7 @@ import http from 'node:http';
 import { config } from './config.js';
 import { attachWebSocket } from './ws.js';
 import { claudeRuntime } from './claude/ClaudeRuntime.js';
+import { syncOpencodeAgents } from './opencode/agents.js';
 import { startMessageBus } from './messageBus.js';
 import { chatRouter } from './routes/chat.js';
 import { runtimeRouter } from './routes/runtime.js';
@@ -23,8 +24,10 @@ import { correctionRouter } from './routes/correction.js';
 import { actionItemsRouter } from './routes/actionItems.js';
 import { resolveRouter } from './routes/resolve.js';
 import { adminSuggestionRouter } from './routes/adminSuggestion.js';
+import { attentionRouter } from './routes/attention.js';
 import { startCollectorScheduler, stopCollectorScheduler } from './collectors/scheduler.js';
 import { startTriggerScheduler, stopTriggerScheduler } from './triggers/triggerScheduler.js';
+import { startAttentionScheduler, stopAttentionScheduler } from './attention/attentionEngine.js';
 import { bootstrapAgents } from './agents/index.js';
 import { migrateUserRulesIfNeeded } from './boundary/migration.js';
 
@@ -54,6 +57,7 @@ app.use('/api', correctionRouter);
 app.use('/api', actionItemsRouter);
 app.use('/api', resolveRouter);
 app.use('/api', adminSuggestionRouter);
+app.use('/api', attentionRouter);
 
 const server = http.createServer(app);
 attachWebSocket(server);
@@ -62,14 +66,23 @@ startMessageBus();
 
 server.listen(config.port, '127.0.0.1', () => {
   console.log(`[server] listening on http://127.0.0.1:${config.port}`);
+  try {
+    syncOpencodeAgents();
+    console.log('[server] opencode agents synced');
+  } catch (err) {
+    console.error('[server] failed to sync opencode agents:', err);
+  }
   claudeRuntime
     .start()
-    .then(() => console.log('[server] claude runtime started'))
-    .catch((err) => console.error('[server] failed to start claude runtime:', err));
+    .then(() => console.log('[server] opencode chat runtime ready'))
+    .catch((err) =>
+      console.error('[server] failed to start chat runtime:', err)
+    );
   migrateUserRulesIfNeeded();
   bootstrapAgents();
   startCollectorScheduler();
   startTriggerScheduler();
+  startAttentionScheduler();
 });
 
 const shutdown = async (signal: string) => {
@@ -79,6 +92,9 @@ const shutdown = async (signal: string) => {
   } catch {}
   try {
     stopTriggerScheduler();
+  } catch {}
+  try {
+    stopAttentionScheduler();
   } catch {}
   try {
     await claudeRuntime.stop();

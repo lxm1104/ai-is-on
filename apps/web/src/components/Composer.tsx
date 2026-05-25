@@ -20,6 +20,8 @@ const QUICK_PROMPTS = [
 export function Composer(props: {
   onSend: (text: string) => void;
   disabled?: boolean;
+  thinking?: boolean;
+  onInterrupt?: () => void;
 }) {
   const [text, setText] = useState('');
   const [voiceState, setVoiceState] = useState<VoiceInputState>('idle');
@@ -176,14 +178,25 @@ export function Composer(props: {
           rows={2}
           disabled={props.disabled}
         />
-        <button
-          type="button"
-          className="btn btn--primary"
-          onClick={submit}
-          disabled={props.disabled || !text.trim()}
-        >
-          发送
-        </button>
+        {props.thinking && props.onInterrupt ? (
+          <button
+            type="button"
+            className="btn btn--stop"
+            onClick={() => props.onInterrupt?.()}
+            title="停止当前回应"
+          >
+            ⏹ 停止
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="btn btn--primary"
+            onClick={submit}
+            disabled={props.disabled || !text.trim()}
+          >
+            发送
+          </button>
+        )}
       </div>
     </div>
   );

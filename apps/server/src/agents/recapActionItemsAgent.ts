@@ -15,7 +15,7 @@ import type { CardAction } from '../claude/protocol.js';
  * controller 读出 actionItems 后再做 upsertContextUnit。
  */
 
-const RECAP_SYSTEM_PROMPT = `你正在读一段刚结束的会议的 AI 纪要。任务：抽出最多 5 条「明确的行动项 / 待办」，并给出可选的会议主旨 + 关键决策 + 未决问题。
+export const RECAP_SYSTEM_PROMPT = `你正在读一段刚结束的会议的 AI 纪要。任务：抽出最多 5 条「明确的行动项 / 待办」，并给出可选的会议主旨 + 关键决策 + 未决问题。
 
 铁律：
 1. action item 的 owner 必须明确（"我" / 某人姓名 / "待定"）。模糊就标 "待定"。
@@ -101,6 +101,7 @@ export const recapActionItemsHandler: AgentHandler = async ({
       ? await llmStub(userMsg, RECAP_SYSTEM_PROMPT)
       : (
           await runOneShot(userMsg, {
+            agentName: 'aiisn-recap',
             systemPrompt: RECAP_SYSTEM_PROMPT,
             timeoutMs: RECAP_TIMEOUT_MS,
           })

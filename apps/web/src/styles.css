@@ -666,6 +666,8 @@ body { background: var(--bg); color: var(--text); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn--primary { background: var(--accent); border-color: var(--accent); color: white; }
 .btn--primary:hover:not(:disabled) { background: var(--accent-strong); }
+.btn--stop { background: #ef4444; border-color: #ef4444; color: white; }
+.btn--stop:hover:not(:disabled) { background: #dc2626; }
 .btn--ghost { background: transparent; padding: 4px 10px; font-size: 12px; min-width: 0; }
 .btn--mic { font-size: 16px; min-width: 48px; padding: 0; }
 .btn--mic-on { background: var(--warn); color: #18181b; border-color: var(--warn); }
@@ -919,6 +921,8 @@ body { background: var(--bg); color: var(--text); }
 }
 .card__ctx-fb-chip { font-size: 11px; padding: 2px 8px; }
 .card__ctx-fb-done { color: var(--accent); font-size: 11px; }
+.card__ctx-fb-err { color: #ef4444; font-size: 11px; margin-top: 4px; }
+.card__ctx-fb-attn { flex-direction: row; align-items: flex-start; }
 
 .status-bar__active-ctx {
   font-size: 11px;
@@ -1240,3 +1244,4 @@ body { background: var(--bg); color: var(--text); }
   border-radius: 4px;
   font-weight: 500;
 }
+

@@ -5,6 +5,7 @@ import { getMyOpenId } from '../util/identity.js';
 import { listContextEntities, listEventsBySourceSince } from '../db.js';
 import { mergeDocIdentity } from '../context/entityResolver.js';
 import { sanitizeExcerpt } from '../bootstrap/workMapDraftPrompt.js';
+import { resolveDoc, resolveUser } from '../util/nameResolver.js';
 import type { Collector, RawSignal } from './types.js';
 import type { ContextEntityRef } from '../context/ContextUnit.js';
 
@@ -177,24 +178,43 @@ function buildReplyId(reply: ReplyItem, commentId: string): string {
     .slice(0, 16);
 }
 
-function shortUser(openId: string): string {
+function shortUserFallback(openId: string): string {
   if (!openId) return '某人';
   return `用户${openId.slice(-6)}`;
 }
 
-function commentDocTitle(ident: DocIdent): string {
-  // 评论卡片标题里要带 doc 名字。MVP 简化：直接用 token 短前缀。
-  return `文档 ${ident.token.slice(0, 6)}…`;
+/**
+ * Resolve open_id → 真实姓名（飞书 lark-cli contact 查询，带 24h cache）。
+ * 失败兜底回 "用户XXXXXX" 短前缀。
+ */
+async function resolveAuthorName(openId: string): Promise<string> {
+  if (!openId) return '某人';
+  const name = await resolveUser(openId);
+  return name && name.trim() ? name.trim() : shortUserFallback(openId);
 }
 
-function emitOne(opts: {
+function shortDocFallback(token: string): string {
+  return `文档 ${token.slice(0, 6)}…`;
+}
+
+/**
+ * Resolve doc URL → 文档真实标题（lark-cli drive +inspect，带 24h cache）。
+ * 失败兜底回 "文档 XXXXXX…"。
+ */
+async function resolveDocTitle(ident: DocIdent): Promise<string> {
+  const info = await resolveDoc(ident.url);
+  if (info?.title && info.title.trim()) return info.title.trim();
+  return shortDocFallback(ident.token);
+}
+
+async function emitOne(opts: {
   ident: DocIdent;
   commentId: string;
   reply: ReplyItem;
   isRoot: boolean;
   isAuthoritative: boolean;
   myOpenId: string;
-}): RawSignal | null {
+}): Promise<RawSignal | null> {
   const { ident, commentId, reply, isRoot, isAuthoritative, myOpenId } = opts;
   const { text, mentionedOpenIds } = extractReplyText(reply);
   if (!text && !mentionedOpenIds.length) return null;
@@ -208,10 +228,19 @@ function emitOne(opts: {
   const authorOpenId = reply.user_id ?? '';
   const isAtMe = !!myOpenId && mentionedOpenIds.includes(myOpenId);
   const authorIsSelf = !!myOpenId && authorOpenId === myOpenId;
-  const authorName = shortUser(authorOpenId);
+
+  // 并发拉真实姓名 + 文档名（都带 24h cache + in-flight dedup，热数据零成本）
+  const [authorName, docTitle, mentionNames] = await Promise.all([
+    resolveAuthorName(authorOpenId),
+    resolveDocTitle(ident),
+    Promise.all(
+      mentionedOpenIds
+        .filter((mid) => mid !== authorOpenId)
+        .map(async (mid) => ({ openId: mid, name: await resolveAuthorName(mid) }))
+    ),
+  ]);
 
   const sanitized = sanitizeExcerpt(text) || text.slice(0, 200);
-  const docTitle = commentDocTitle(ident);
   const title = isRoot
     ? `${authorName}在「${docTitle}」评论`
     : `${authorName}在「${docTitle}」的评论里回复`;
@@ -232,13 +261,12 @@ function emitOne(opts: {
       aliases: [authorOpenId],
     });
   }
-  for (const mid of mentionedOpenIds) {
-    if (mid === authorOpenId) continue;
+  for (const { openId, name } of mentionNames) {
     entities.push({
       type: 'person',
-      name: shortUser(mid),
+      name,
       role: 'mention',
-      aliases: [mid],
+      aliases: [openId],
     });
   }
 
@@ -385,7 +413,7 @@ export const driveCommentCollector: Collector = {
         const replies = c.reply_list?.replies ?? [];
         for (let i = 0; i < replies.length; i++) {
           if (emitted >= perDocCap) break;
-          const sig = emitOne({
+          const sig = await emitOne({
             ident,
             commentId,
             reply: replies[i],

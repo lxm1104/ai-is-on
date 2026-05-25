@@ -10,7 +10,6 @@ import { prepareMeetingHandler } from './prepareMeetingAgent.js';
 import { caringHandler } from './caringAgent.js';
 import { syncDraftHandler } from './syncDraftAgent.js';
 import { dailyDigestHandler } from './dailyDigestAgent.js';
-import { docCommentHandler } from './docCommentAgent.js';
 import { recapActionItemsHandler } from './recapActionItemsAgent.js';
 
 let bootstrapped = false;
@@ -60,13 +59,6 @@ export function bootstrapAgents() {
     slices: ['boundary'],
   });
 
-  // MVP11.0-b：文档评论 attention，零 LLM，只读 focalUnit + boundary
-  registerAgent('doc_comment', {
-    handler: docCommentHandler,
-    packetSliceVersion: 1,
-    slices: ['focalUnit', 'boundary', 'subject'],
-  });
-
   // MVP11.1：会议纪要抽 action items，调 LLM，写 ask 卡片
   registerAgent('recap_action_items', {
     handler: recapActionItemsHandler,
@@ -74,7 +66,11 @@ export function bootstrapAgents() {
     slices: ['focalUnit', 'spaces', 'goals', 'stakeholders', 'subject', 'boundary'],
   });
 
+  // MVP14 Step3.5：docCommentAgent 已删除。文档评论由 enrichment 写成
+  // context_units（kind=event with semanticTags），由 attention engine 在 packet
+  // 里看到，按需提到顶部，不再单独出 doc-only 卡片。
+
   console.log(
-    '[agents] registered (all sliced): track_commitment, prepare_meeting, sync_draft, caring, daily_digest, doc_comment, recap_action_items'
+    '[agents] registered: track_commitment, prepare_meeting, sync_draft, caring, daily_digest, recap_action_items'
   );
 }

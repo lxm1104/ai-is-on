@@ -76,8 +76,8 @@ export function selectAgentForTrigger(triggerType: string): string | null {
       return 'sync_draft';
     case 'daily_digest_due':
       return 'daily_digest';
-    case 'doc_comment_attention':
-      return 'doc_comment';
+    // doc_comment_attention 派单已废 — docCommentAgent 删除（MVP14 Step3.5）。
+    // trigger 仍可能被写出来，但无 agent 接管时 AgentRunQueue 会跳过。
     case 'meeting_artifact_ready':
       return 'recap_action_items';
     default:

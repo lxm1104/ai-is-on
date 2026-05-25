@@ -48,6 +48,7 @@ export const caringHandler: AgentHandler = async ({ trigger, agentRunId }) => {
   let parsed: CaringResult;
   try {
     const r = await runOneShot(userMessage, {
+      agentName: 'aiisn-caring',
       systemPrompt: CARING_SYSTEM_PROMPT,
       timeoutMs: CARING_TIMEOUT_MS,
     });

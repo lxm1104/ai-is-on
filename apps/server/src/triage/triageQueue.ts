@@ -1,16 +1,20 @@
+// MVP14 Step 3: 原 triage→cards 流水线已下线。
+// 这个文件保留 contextUpdates 的提取链路（"context enrichment"）：
+//   raw event → LLM 抽 contextUpdates → 写 context_units (kind=state/goal/commitment/...)
+// L2 Attention engine 完全依赖这条富化链给 packet 喂料；没有它 commitments/uncertainties 会枯竭。
+// 已删：insertTriageResult / createCardsFromTriage。triage_results、cards(source_kind='triage') 两表不再被写入。
+//
+// 文件名暂保留为 triageQueue.ts（rename 影响面大，留作下一轮清理）。
 import { config } from '../config.js';
 import {
   type EventRow,
-  insertTriageResult,
   listActiveUserRules,
   markEventContextExtracted,
   markEventProcessed,
 } from '../db.js';
-import { randomUUID } from 'node:crypto';
 import { buildTriageUserMessage } from './triagePrompt.js';
 import { runTriageOnce } from './backgroundRuntime.js';
 import { parseTriageResult, type TriageItem } from './parseTriage.js';
-import { createCardsFromTriage } from '../cards/cardsService.js';
 import {
   findEventContextUnitId,
   linkContextUnits,
@@ -148,28 +152,10 @@ async function processBatch(events: EventRow[]) {
   for (const ev of events) markEventProcessed(ev.id, new Date().toISOString());
 }
 
+// MVP14 Step 3: 只保留 contextUpdates 落库，不再写 triage_results / cards。
+// LLM 输出里的 priority/title/summary/reason/cardActions 字段在 enrichment 链路里被丢弃；
+// "现在该看什么、为什么"现在由 attentionEngine 全局推理产出。
 function persistOne(ev: EventRow, item: TriageItem) {
-  const triageId = randomUUID();
-  const now = new Date().toISOString();
-  insertTriageResult({
-    id: triageId,
-    event_id: ev.id,
-    priority: item.priority,
-    title: item.title,
-    summary: item.summary,
-    reason: item.reason,
-    suggested_action: item.suggestedAction ?? null,
-    draft_reply: item.draftReply ?? null,
-    confidence: item.confidence,
-    raw_json: JSON.stringify(item),
-    created_at: now,
-  });
-  if (item.relevant && item.shouldCreateCard) {
-    createCardsFromTriage(ev, item, triageId);
-  }
-
-  // MVP2.1: 把 LLM 提取的 contextUpdates 落进 context_units，并用 context_links{updates}
-  // 关联到 collector 提前写的那条 kind=event ContextUnit，便于"为什么相关"溯源。
   try {
     persistContextUpdates(ev, item);
   } catch (err) {

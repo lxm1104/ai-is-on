@@ -395,6 +395,8 @@ ensureColumn('cards', 'source_url', 'TEXT');
 // MVP2: cards 多来源（triage / agent_run / manual），保留 triage_id 兼容
 ensureColumn('cards', 'source_kind', "TEXT NOT NULL DEFAULT 'triage'");
 ensureColumn('cards', 'source_ref_id', 'TEXT');
+// MVP14 Step 3: 老 triage→cards 流水线下线后，旧 cards 行降为归档（暂不删表，便于回溯）
+ensureColumn('cards', 'archived_at', 'TEXT');
 // MVP2: events 加 context_extracted_at（与 processed_at 解耦）
 ensureColumn('events', 'context_extracted_at', 'TEXT');
 
@@ -487,6 +489,55 @@ CREATE INDEX IF NOT EXISTS idx_cssf_target
   ON context_space_suggestion_feedback(target_type, target_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_cssf_reason
   ON context_space_suggestion_feedback(reason_code);
+
+-- ============ MVP14 Attention Engine (Step 1) ============
+-- L2 注意力推理引擎的输出 + 审计。
+-- attention_items：LLM 全局推理产出的 "现在该关注什么" 列表。
+-- attention_engine_runs：每次 tick 的审计行（含 input_hash cache）。
+CREATE TABLE IF NOT EXISTS attention_items (
+  id TEXT PRIMARY KEY,
+  generation INTEGER NOT NULL,                  -- engine run 计数器，绑定到 attention_engine_runs.generation
+  llm_run_id TEXT,                              -- 对应 attention_engine_runs.id
+  input_hash TEXT NOT NULL,                     -- 用于 dedupe / supersede
+  priority TEXT NOT NULL,                       -- 'P0' | 'P1' | 'P2' | 'P3'
+  title TEXT NOT NULL,
+  why TEXT NOT NULL,                            -- LLM 给的 "why this matters now"
+  suggested_action TEXT,
+  signal_ids_json TEXT NOT NULL DEFAULT '[]',   -- 关联的 events / context_units id
+  related_entity_ids_json TEXT NOT NULL DEFAULT '[]',
+  related_space_ids_json TEXT NOT NULL DEFAULT '[]',
+  recommended_agent TEXT,                       -- 可选 'prepareMeeting' | 'commitmentDigest' | ...
+  status TEXT NOT NULL DEFAULT 'live',          -- 'live' | 'acted' | 'dismissed' | 'superseded' | 'expired'
+  expires_at TEXT,
+  source_kind TEXT NOT NULL DEFAULT 'attention',
+  raw_json TEXT NOT NULL,                       -- 完整 LLM 原始 item，留底审计
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_attention_status ON attention_items(status);
+CREATE INDEX IF NOT EXISTS idx_attention_input_hash ON attention_items(input_hash);
+CREATE INDEX IF NOT EXISTS idx_attention_generation ON attention_items(generation);
+CREATE INDEX IF NOT EXISTS idx_attention_expires_at ON attention_items(expires_at);
+
+CREATE TABLE IF NOT EXISTS attention_engine_runs (
+  id TEXT PRIMARY KEY,
+  generation INTEGER NOT NULL,
+  trigger TEXT NOT NULL,                        -- 'tick' | 'manual' | 'upsert_hook'
+  input_hash TEXT NOT NULL,
+  input_summary_json TEXT NOT NULL,             -- packet 形状摘要（counts 等），便于审计
+  prompt_version TEXT NOT NULL,
+  model_id TEXT,
+  status TEXT NOT NULL,                         -- 'ok' | 'failed' | 'cache_hit' | 'skipped_no_change'
+  output_text TEXT,                             -- LLM 原始返回
+  error TEXT,
+  items_emitted INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT NOT NULL,
+  completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_aer_input_hash
+  ON attention_engine_runs(input_hash, started_at);
+CREATE INDEX IF NOT EXISTS idx_aer_status ON attention_engine_runs(status);
+CREATE INDEX IF NOT EXISTS idx_aer_generation ON attention_engine_runs(generation);
 `);
 
 // MVP3 迁移：旧的 idempotency 索引是 partial (WHERE status='pending')，
@@ -695,6 +746,27 @@ export function getCard(id: string): CardRow | null {
   return (
     (db.prepare(`SELECT * FROM cards WHERE id = ?`).get(id) as CardRow | undefined) ?? null
   );
+}
+
+/**
+ * MVP14 Step3.5: 拉近 windowMs 毫秒内 status='new' 的 agent_run 卡，
+ * 喂给 attention engine 的 packet（让 LLM 看到专项 agent 的建议作为高质量信号）。
+ */
+export function listRecentAgentProposalCards(
+  windowMs: number,
+  limit = 20
+): CardRow[] {
+  const since = new Date(Date.now() - windowMs).toISOString();
+  return db
+    .prepare(
+      `SELECT * FROM cards
+       WHERE source_kind = 'agent_run' AND status = 'new' AND created_at >= ?
+       ORDER BY
+         CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
+         created_at DESC
+       LIMIT ?`
+    )
+    .all(since, limit) as CardRow[];
 }
 
 export function listOpenCards(limit = 100): CardRow[] {
@@ -1990,4 +2062,203 @@ export function listSuggestionFeedbackForCalibration(
        ORDER BY created_at DESC`
     )
     .all(cutoff) as ContextSpaceSuggestionFeedbackRow[];
+}
+
+// -------- MVP14 Attention Engine (Step 1) --------
+
+export type AttentionItemRow = {
+  id: string;
+  generation: number;
+  llm_run_id: string | null;
+  input_hash: string;
+  priority: string;                // 'P0'..'P3'
+  title: string;
+  why: string;
+  suggested_action: string | null;
+  signal_ids_json: string;
+  related_entity_ids_json: string;
+  related_space_ids_json: string;
+  recommended_agent: string | null;
+  status: string;                  // 'live' | 'acted' | 'dismissed' | 'superseded' | 'expired'
+  expires_at: string | null;
+  source_kind: string;
+  raw_json: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export function insertAttentionItem(row: AttentionItemRow): void {
+  db.prepare(
+    `INSERT INTO attention_items
+       (id, generation, llm_run_id, input_hash, priority, title, why, suggested_action,
+        signal_ids_json, related_entity_ids_json, related_space_ids_json,
+        recommended_agent, status, expires_at, source_kind, raw_json,
+        created_at, updated_at)
+     VALUES
+       (@id, @generation, @llm_run_id, @input_hash, @priority, @title, @why, @suggested_action,
+        @signal_ids_json, @related_entity_ids_json, @related_space_ids_json,
+        @recommended_agent, @status, @expires_at, @source_kind, @raw_json,
+        @created_at, @updated_at)`
+  ).run(row);
+}
+
+export function getAttentionItem(id: string): AttentionItemRow | null {
+  return (
+    (db
+      .prepare(`SELECT * FROM attention_items WHERE id = ?`)
+      .get(id) as AttentionItemRow | undefined) ?? null
+  );
+}
+
+export function listLiveAttentionItems(limit = 100): AttentionItemRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM attention_items
+       WHERE status = 'live'
+       ORDER BY
+         CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2' THEN 2 ELSE 3 END,
+         created_at DESC
+       LIMIT ?`
+    )
+    .all(limit) as AttentionItemRow[];
+}
+
+export function updateAttentionItemStatus(
+  id: string,
+  status: string,
+  updatedAt: string
+): AttentionItemRow | null {
+  db.prepare(
+    `UPDATE attention_items SET status = ?, updated_at = ? WHERE id = ?`
+  ).run(status, updatedAt, id);
+  return getAttentionItem(id);
+}
+
+/**
+ * 把同 input_hash 的旧 live 项标 superseded。
+ * 在每次成功 run 后、插入新 items 前调用，保证幂等重跑不会双倍出货。
+ */
+export function markAttentionItemsSupersededByHash(
+  inputHash: string,
+  updatedAt: string
+): number {
+  const r = db
+    .prepare(
+      `UPDATE attention_items
+         SET status = 'superseded', updated_at = ?
+       WHERE input_hash = ? AND status = 'live'`
+    )
+    .run(updatedAt, inputHash);
+  return r.changes;
+}
+
+/**
+ * TTL 兜底：把 created_at < beforeIso 的 live 项标 'expired'。
+ * 防 LLM 漏写 supersedeIds 导致跨 hash 的旧 item 永久堆积。
+ */
+export function markAttentionItemsExpired(
+  beforeIso: string,
+  updatedAt: string
+): number {
+  const r = db
+    .prepare(
+      `UPDATE attention_items
+         SET status = 'expired', updated_at = ?
+       WHERE status = 'live' AND created_at < ?`
+    )
+    .run(updatedAt, beforeIso);
+  return r.changes;
+}
+
+export type AttentionEngineRunRow = {
+  id: string;
+  generation: number;
+  trigger: string;                 // 'tick' | 'manual' | 'upsert_hook'
+  input_hash: string;
+  input_summary_json: string;
+  prompt_version: string;
+  model_id: string | null;
+  status: string;                  // 'ok' | 'failed' | 'cache_hit' | 'skipped_no_change'
+  output_text: string | null;
+  error: string | null;
+  items_emitted: number;
+  started_at: string;
+  completed_at: string | null;
+};
+
+export function insertAttentionEngineRun(row: AttentionEngineRunRow): void {
+  db.prepare(
+    `INSERT INTO attention_engine_runs
+       (id, generation, trigger, input_hash, input_summary_json, prompt_version,
+        model_id, status, output_text, error, items_emitted, started_at, completed_at)
+     VALUES
+       (@id, @generation, @trigger, @input_hash, @input_summary_json, @prompt_version,
+        @model_id, @status, @output_text, @error, @items_emitted, @started_at, @completed_at)`
+  ).run(row);
+}
+
+export function updateAttentionEngineRun(
+  id: string,
+  patch: Partial<
+    Pick<
+      AttentionEngineRunRow,
+      | 'status'
+      | 'output_text'
+      | 'error'
+      | 'items_emitted'
+      | 'model_id'
+      | 'completed_at'
+    >
+  >
+): void {
+  const fields: string[] = [];
+  const params: Record<string, unknown> = { id };
+  for (const [k, v] of Object.entries(patch)) {
+    fields.push(`${k} = @${k}`);
+    params[k] = v ?? null;
+  }
+  if (fields.length === 0) return;
+  db.prepare(
+    `UPDATE attention_engine_runs SET ${fields.join(', ')} WHERE id = @id`
+  ).run(params);
+}
+
+/**
+ * 找 TTL 内（以分钟计）同 input_hash 且 status='ok' 的最新一条 run。
+ * 用于跳过短时间内的重复推理（节省 LLM 成本）。
+ */
+export function findRecentAttentionRunByInputHash(
+  inputHash: string,
+  ttlMinutes: number
+): AttentionEngineRunRow | null {
+  const cutoff = new Date(Date.now() - ttlMinutes * 60_000).toISOString();
+  const row = db
+    .prepare(
+      `SELECT * FROM attention_engine_runs
+       WHERE input_hash = ? AND status = 'ok' AND completed_at IS NOT NULL
+         AND completed_at >= ?
+       ORDER BY completed_at DESC
+       LIMIT 1`
+    )
+    .get(inputHash, cutoff) as AttentionEngineRunRow | undefined;
+  return row ?? null;
+}
+
+export function getLastAttentionEngineRun(): AttentionEngineRunRow | null {
+  return (
+    (db
+      .prepare(
+        `SELECT * FROM attention_engine_runs ORDER BY started_at DESC LIMIT 1`
+      )
+      .get() as AttentionEngineRunRow | undefined) ?? null
+  );
+}
+
+export function nextAttentionGeneration(): number {
+  const row = db
+    .prepare(
+      `SELECT COALESCE(MAX(generation), 0) AS max_gen FROM attention_engine_runs`
+    )
+    .get() as { max_gen: number };
+  return (row?.max_gen ?? 0) + 1;
 }

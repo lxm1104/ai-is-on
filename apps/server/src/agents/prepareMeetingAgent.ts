@@ -11,7 +11,7 @@ import type { AgentHandler } from './agentRegistry.js';
 import type { ContextUnit } from '../context/ContextUnit.js';
 import type { AgentContextPacket } from '../context/agentContextAssembler.js';
 
-const PREPARE_MEETING_SYSTEM_PROMPT = `你正在为用户准备一个即将开始的会议。你会收到：
+export const PREPARE_MEETING_SYSTEM_PROMPT = `你正在为用户准备一个即将开始的会议。你会收到：
 1. 会议本身（标题、时间、参会人）
 2. 该会议关联的上下文：相关承诺、最近相关消息、相关项目状态
 3. 用户的 Work Map 信息（角色 / 项目 / 权威文档 / stakeholders）
@@ -54,6 +54,7 @@ export const prepareMeetingHandler: AgentHandler = async ({
   let parsed: PrepareMeetingResult;
   try {
     const r = await runOneShot(userMessage, {
+      agentName: 'aiisn-prepare-meeting',
       systemPrompt: PREPARE_MEETING_SYSTEM_PROMPT,
       timeoutMs: PREPARE_MEETING_TIMEOUT_MS,
     });

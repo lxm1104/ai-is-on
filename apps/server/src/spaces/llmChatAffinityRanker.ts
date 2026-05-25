@@ -84,6 +84,7 @@ export const defaultRankerRunner: RankerRunner = (
   timeoutMs
 ) =>
   runOneShot(userMessage, {
+    agentName: 'aiisn-ranker',
     systemPrompt,
     timeoutMs,
   });

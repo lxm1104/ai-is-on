@@ -71,6 +71,47 @@ export async function restartRuntime(): Promise<void> {
   if (!r.ok) throw new Error(`restart ${r.status}`);
 }
 
+// MVP14: 中断当前 Claude turn（用户点 "停止" 按钮时）
+export async function interruptRuntime(): Promise<{ ok: boolean; method: string }> {
+  const r = await fetch('/api/runtime/interrupt', { method: 'POST' });
+  if (!r.ok) throw new Error(`interrupt ${r.status}`);
+  return (await r.json()) as { ok: boolean; method: string };
+}
+
+// MVP14 Step 4：attention 反馈通道（影响 L1，下次 tick 生效）
+export type AttentionFeedbackType =
+  | 'not_relevant'
+  | 'wrong_space'
+  | 'demote_entity'
+  | 'add_preference';
+
+export type AttentionFeedbackResult = {
+  applied: boolean;
+  tier: 'low' | 'medium' | 'high';
+  requiresConfirm: boolean;
+  journal?: { id: string; correction_type: string; target_kind: string };
+  preview: Record<string, unknown>;
+};
+
+export async function postAttentionFeedback(input: {
+  attentionId: string;
+  type: AttentionFeedbackType;
+  payload: Record<string, unknown>;
+  confirm?: boolean;
+}): Promise<AttentionFeedbackResult> {
+  const r = await fetch(
+    `/api/attention/${encodeURIComponent(input.attentionId)}/feedback`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: input.type, payload: input.payload, confirm: input.confirm }),
+    }
+  );
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `attention feedback ${r.status}`);
+  return j as AttentionFeedbackResult;
+}
+
 export async function transcribeAudio(
   blob: Blob,
   filename = 'recording.webm'
@@ -83,11 +124,13 @@ export async function transcribeAudio(
   return j.text as string;
 }
 
-export async function fetchCards(): Promise<SignalCard[]> {
-  const r = await fetch('/api/cards');
-  if (!r.ok) throw new Error(`cards ${r.status}`);
+// MVP14 Step 3: 唯一的卡片来源 — L2 attention engine 投影。
+// /api/cards 服务端已统一改为代理 attention 投影；/api/attention/cards 是同语义新名字。
+export async function fetchAttentionCards(): Promise<SignalCard[]> {
+  const r = await fetch('/api/attention/cards');
+  if (!r.ok) throw new Error(`attention/cards ${r.status}`);
   const j = await r.json();
-  return j.cards ?? [];
+  return (j.cards ?? []) as SignalCard[];
 }
 
 // MVP11.1：会议 ask 卡片专用确认通道
