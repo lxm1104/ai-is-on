@@ -27,6 +27,16 @@ contextUpdates 提取规则：
 8. entities：每条 contextUpdate 列出涉及的人/项目/文档/任务，type 用 'person' | 'project' | 'doc' | 'task' | 'org'，name 用规范化的名字。
 9. mergeHint：≤20 字 canonical 短语，描述这条 context 的语义核心。相同语义在多源出现时应给出相同 mergeHint（例如"周三前补 MVP2 方案"两次出现都用同一 mergeHint）。
 10. confidence ∈ [0,1]，对自己的提取打分。
+11. （MVP16-A）IM 信号 text 字段可能包含双向对话，每行前缀为「我」或对方姓名。
+    提取 commitment / state 时区分谁在向谁承诺：
+    - 若对方提出请求且「我」已在同一段文本中明确回应（如"已发"/"在弄了"/
+      "好的，今天发"），不要生成"对方催促我做 X"的 commitment；应改为提取
+      「我」侧的 commitment（entities.actor 是"我"）或 action_result
+      （kind=action_result，content 描述已发生的事）。
+    - 若「我」尚未回应，按原规则提取对方的 commitment / 催促语义。
+    - mergeHint 仍以"做某事"为核心，不要把"我没回"或"对方在催"放进 mergeHint。
+    - 隐私边界：「我」侧消息**仅用于状态判断与语义合并**，不要把「我」说过的
+      私人内容原文写进 contextUpdate.content，避免长期沉淀私人语料。
 
 输出 schema：
 {

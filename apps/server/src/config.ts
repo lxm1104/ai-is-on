@@ -65,6 +65,18 @@ export const config = {
   imChatListMaxPages: envInt('IM_CHAT_LIST_MAX_PAGES', 5),
   // 并发拉取 chat 数（避免一次起几十个 lark-cli 进程）
   imChatFetchConcurrency: envInt('IM_CHAT_FETCH_CONCURRENCY', 4),
+  // MVP16-A: master switch for ingesting me-side IM messages.
+  //   true (default) → me-side msgs flow into events/raw_json, downstream uses is_me.
+  //   false → all me-side msgs filtered in prepareMessages (回退到 MVP16-A 之前行为).
+  imIncludeMyMessages: envBool('IM_INCLUDE_MY_MESSAGES', true),
+  // MVP16-A: independent toggle for the extra messages-search --sender=me group fetch.
+  //   Lark's chat-messages-list / messages-search(group) do NOT return me-side by default,
+  //   so groups need a separate explicit search call. Set false to keep A-1 running
+  //   without A-2 (single-chat 双向 only).
+  imEnableMyGroupFetch: envBool('IM_ENABLE_MY_GROUP_FETCH', true),
+  // MVP16-A: page-limit for the my-group messages-search call. page-size = 50,
+  // so default 5 = 250 msgs/scan upper bound (well within a 3-minute window).
+  imMyGroupMessagesPageLimit: envInt('IM_MY_GROUP_MESSAGES_PAGE_LIMIT', 5),
   // MVP11.0-b drive comment collector
   driveCommentEnabled: envBool('DRIVE_COMMENT_COLLECTOR_ENABLED', true),
   driveCommentIntervalMs: envInt('DRIVE_COMMENT_COLLECTOR_INTERVAL_MS', 300_000),

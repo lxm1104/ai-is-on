@@ -9,7 +9,7 @@ import type { Collector, RawSignal } from './types.js';
 
 // ---------- types ----------
 
-type ImMessage = {
+export type ImMessage = {
   message_id?: string;
   chat_id?: string;
   chat_name?: string; // only present from messages-search
@@ -20,6 +20,15 @@ type ImMessage = {
   sender?: { id?: string; id_type?: string; name?: string; sender_type?: string };
   message_app_link?: string;
   deleted?: boolean;
+  // MVP16-A: Lark embeds replies inside a parent message via .thread_replies[].
+  // Type declared so we can recurse safely; runtime check `Array.isArray` still needed.
+  thread_id?: string;
+  thread_replies?: ImMessage[];
+  // MVP16-A: collector-internal, derived from sender.id === myOpenId. Not from Lark.
+  // Persisted into events.raw_json so downstream can re-derive without re-resolving identity.
+  // Also annotated on `message_position` to support stable tiebreak sort.
+  is_me?: boolean;
+  message_position?: string;
 };
 
 type ChatListChat = {
@@ -67,13 +76,96 @@ function isAtMe(msg: ImMessage, myOpenId: string): boolean {
   return c.includes(myOpenId) || c.includes('@_all');
 }
 
-function isWanted(msg: ImMessage, myOpenId: string): boolean {
+function isWanted(msg: ImMessage): boolean {
   if (!msg.message_id) return false;
   if (msg.deleted) return false;
   if (msg.msg_type === 'system') return false;
-  // exclude my own messages
-  if (msg.sender?.id === myOpenId) return false;
+  // MVP16-A: me-side messages no longer filtered here. Downstream uses `is_me`
+  // to distinguish (set by tagSelf). The hard kill switch IM_INCLUDE_MY_MESSAGES
+  // is applied in prepareMessages.
   return true;
+}
+
+// MVP16-A: Lark hangs in-thread replies under a parent message's .thread_replies.
+// Semantically they're sequential utterances of the same conversation — flatten
+// them so downstream rendering, is_me tagging and sort all treat them equally.
+export function flattenThreadReplies(msgs: ImMessage[]): ImMessage[] {
+  const out: ImMessage[] = [];
+  for (const m of msgs) {
+    out.push(m);
+    if (Array.isArray(m.thread_replies) && m.thread_replies.length > 0) {
+      for (const r of m.thread_replies) {
+        // Inherit parent context fields the API sometimes omits on replies.
+        if (!r.chat_id) r.chat_id = m.chat_id;
+        if (!r.thread_id) r.thread_id = m.thread_id;
+        out.push(r);
+      }
+    }
+  }
+  return out;
+}
+
+// MVP16-A: derive is_me purely from sender.id. Mutates msgs in place because the
+// flag travels into events.raw_json via the same object references.
+export function tagSelf(msgs: ImMessage[], myOpenId: string): void {
+  for (const m of msgs) {
+    m.is_me = m.sender?.id === myOpenId;
+  }
+}
+
+// MVP16-A: create_time is local-tz to-the-minute, so multiple messages in the
+// same minute compare as equal. Use message_position (Lark's global ascending
+// sequence number) as tiebreaker so me→peer→me→peer ordering stays correct.
+export function sortMessagesStably(msgs: ImMessage[]): ImMessage[] {
+  return [...msgs].sort((a, b) => {
+    const ta = a.create_time ?? '';
+    const tb = b.create_time ?? '';
+    if (ta !== tb) return ta.localeCompare(tb);
+    const pa = Number(a.message_position ?? 0);
+    const pb = Number(b.message_position ?? 0);
+    return pa - pb;
+  });
+}
+
+// MVP16-A: single pipeline that callers compose with their fetch step:
+//   1) flatten thread_replies into a single sequence
+//   2) tag is_me on every msg (including former replies)
+//   3) stable sort by (create_time, message_position)
+//   4) honour IM_INCLUDE_MY_MESSAGES kill switch (drops me-side entirely)
+//   5) apply isWanted (deleted / system / no id)
+export function prepareMessages(rawMsgs: ImMessage[], myOpenId: string): ImMessage[] {
+  const flat = flattenThreadReplies(rawMsgs);
+  tagSelf(flat, myOpenId);
+  const sorted = sortMessagesStably(flat);
+  if (!config.imIncludeMyMessages) {
+    return sorted.filter((m) => !m.is_me).filter(isWanted);
+  }
+  return sorted.filter(isWanted);
+}
+
+// MVP16-A: render label as "我" for me-side, otherwise sender name (or id fallback).
+function senderLabel(m: ImMessage): string {
+  if (m.is_me) return '我';
+  return m.sender?.name || m.sender?.id || '?';
+}
+
+// MVP16-A: merge two streams of messages keeping first occurrence per message_id.
+// Used in A-2 to fold the my-group messages (from messages-search --sender=me)
+// into the peer-only chat-messages-list results. message_id is Lark's globally
+// unique stable id, so dedup is straightforward.
+export function mergeMessagesByMessageId(
+  ...streams: ImMessage[][]
+): ImMessage[] {
+  const seen = new Set<string>();
+  const out: ImMessage[] = [];
+  for (const stream of streams) {
+    for (const m of stream) {
+      if (!m.message_id || seen.has(m.message_id)) continue;
+      seen.add(m.message_id);
+      out.push(m);
+    }
+  }
+  return out;
 }
 
 function shortHash(input: string): string {
@@ -120,11 +212,14 @@ function senderEntity(sender?: ImMessage['sender']): ContextEntityRef | null {
 }
 
 // MVP12：聚合消息的发送者 entities —— 机器人合并、人去重 cap 8。
+// MVP16-A: skip me-side messages so user does not become an actor entity in
+// signals about themselves.
 function aggregateSenderEntities(msgs: ImMessage[]): ContextEntityRef[] {
   const out: ContextEntityRef[] = [];
   const seenPersonName = new Set<string>();
   let seenBot = false;
   for (const m of msgs) {
+    if (m.is_me) continue;
     const e = senderEntity(m.sender);
     if (!e) continue;
     if (e.type === 'app') {
@@ -182,8 +277,9 @@ function derivePeerChatName(msgs: ImMessage[], chatId: string): string {
 function summarizeOne(msg: ImMessage, chatName: string): string {
   const lines: string[] = [];
   if (chatName) lines.push(`会话：${chatName}`);
-  const sender = msg.sender?.name || msg.sender?.id || '未知发送者';
-  lines.push(`发送者：${sender}（${msg.sender?.sender_type ?? '?'}）`);
+  // MVP16-A: explicit me/peer label so LLM can read conversation direction.
+  const senderTypeLabel = msg.is_me ? 'me' : (msg.sender?.sender_type ?? '?');
+  lines.push(`发送者：${senderLabel(msg)}（${senderTypeLabel}）`);
   if (msg.create_time) lines.push(`时间：${msg.create_time}`);
   const content = (msg.content ?? '').trim();
   if (content) {
@@ -192,7 +288,60 @@ function summarizeOne(msg: ImMessage, chatName: string): string {
   return lines.join('\n');
 }
 
-function summarizeAggregate(
+// MVP16-A hotfix: for a single-message signal (one peer msg, peerCount < threshold),
+// render the message inline with the full chat dialog so Triage can see whether
+// the user already responded. Without this, kind='p2p'/'group_message' signals
+// only carry the lone peer message text and the LLM cannot tell that a reply
+// has happened.
+//
+// Differences from summarizeAggregate:
+//   - The focused message is called out with a "★" pointer so the LLM knows
+//     which line the signal is "about".
+//   - chatMsgs is the full sorted chat sequence (含 me 侧), msg is one item of it.
+export function summarizeOneWithContext(
+  msg: ImMessage,
+  chatMsgs: ImMessage[],
+  chatName: string
+): string {
+  const lines: string[] = [];
+  if (chatName) lines.push(`会话：${chatName}`);
+  lines.push(`焦点消息：${senderLabel(msg)} @ ${msg.create_time ?? '?'}`);
+  lines.push('---');
+  // Render up to SUMMARY_TAIL_MAX of the surrounding context, anchored on `msg`.
+  // For a long chat we still want to see what came right before/after the focus
+  // message — so center the window on the focus index rather than taking only
+  // first+tail.
+  const focusIdx = chatMsgs.findIndex((m) => m.message_id === msg.message_id);
+  let windowMsgs: ImMessage[];
+  if (chatMsgs.length <= SUMMARY_TAIL_MAX) {
+    windowMsgs = chatMsgs;
+  } else if (focusIdx < 0) {
+    // Defensive: focus not found (shouldn't happen) → fall back to tail.
+    windowMsgs = chatMsgs.slice(-SUMMARY_TAIL_MAX);
+  } else {
+    // Centered window: ~half before, ~half after the focus.
+    const half = Math.floor(SUMMARY_TAIL_MAX / 2);
+    const lo = Math.max(0, focusIdx - half);
+    const hi = Math.min(chatMsgs.length, lo + SUMMARY_TAIL_MAX);
+    windowMsgs = chatMsgs.slice(lo, hi);
+  }
+  for (const m of windowMsgs) {
+    const isFocus = m.message_id === msg.message_id;
+    const content = (m.content ?? '').replace(/\s+/g, ' ').trim();
+    const short = content.length > 120 ? content.slice(0, 120) + '…' : content;
+    const prefix = isFocus ? '★' : '-';
+    lines.push(`${prefix} [${m.create_time ?? '?'}] ${senderLabel(m)}: ${short}`);
+  }
+  return lines.join('\n');
+}
+
+// MVP16-A: first+tail snapshot strategy.
+//   - For dialogues bigger than TAIL_MAX, show first message (sets opening
+//     context) + ellipsis + last (TAIL_MAX-1) messages. Avoids losing the
+//     opening turn when the conversation is long.
+//   - Per-line cap 120 chars keeps total under ~2KB even with full TAIL_MAX.
+export const SUMMARY_TAIL_MAX = 12;
+export function summarizeAggregate(
   chatName: string,
   msgs: ImMessage[],
   windowStart: string
@@ -201,13 +350,23 @@ function summarizeAggregate(
   lines.push(`会话：${chatName}`);
   lines.push(`自 ${windowStart} 以来新增 ${msgs.length} 条消息`);
   lines.push('---');
-  // Show the most recent 5 previews
-  const previews = msgs.slice(-5);
+  type Preview = ImMessage | { __ellipsis: true; skipped: number };
+  const previews: Preview[] =
+    msgs.length <= SUMMARY_TAIL_MAX
+      ? msgs
+      : [
+          msgs[0],
+          { __ellipsis: true, skipped: msgs.length - SUMMARY_TAIL_MAX },
+          ...msgs.slice(-(SUMMARY_TAIL_MAX - 1)),
+        ];
   for (const m of previews) {
-    const sender = m.sender?.name || m.sender?.id || '?';
+    if ('__ellipsis' in m) {
+      lines.push(`- ……（中间省略 ${m.skipped} 条）……`);
+      continue;
+    }
     const content = (m.content ?? '').replace(/\s+/g, ' ').trim();
     const short = content.length > 120 ? content.slice(0, 120) + '…' : content;
-    lines.push(`- [${m.create_time ?? '?'}] ${sender}: ${short}`);
+    lines.push(`- [${m.create_time ?? '?'}] ${senderLabel(m)}: ${short}`);
   }
   return lines.join('\n');
 }
@@ -336,6 +495,53 @@ async function listP2pMessages(startLocal: string, endLocal: string): Promise<Im
   return resp.ok && resp.data?.messages ? resp.data.messages : [];
 }
 
+// MVP16-A: fetch the user's own messages sent into group chats in [start, end].
+// Background:
+//   - `chat-messages-list --chat-id <group>` and `messages-search --chat-type
+//     group` both omit me-side messages by default (verified empirically against
+//     a known active group).
+//   - Only `messages-search --sender=<me>` returns them, and it returns them
+//     with the same enriched fields (message_id / message_position / sender /
+//     content / chat_id) so they can be merged into the per-chat lists with
+//     just a dedup on message_id.
+// This is a single call per scan tick — we group results by chat_id below.
+async function listMyGroupMessages(
+  startLocal: string,
+  endLocal: string,
+  myOpenId: string
+): Promise<ImMessage[]> {
+  const args: string[] = [
+    'im',
+    '+messages-search',
+    '--as',
+    'user',
+    '--chat-type',
+    'group',
+    '--sender',
+    myOpenId,
+    '--start',
+    startLocal,
+    '--end',
+    endLocal,
+    '--page-all',
+    '--page-limit',
+    String(config.imMyGroupMessagesPageLimit),
+    '--format',
+    'json',
+  ];
+  try {
+    const resp = await runLarkCliJson<MessagesSearchResp>(args);
+    return resp.ok && resp.data?.messages ? resp.data.messages : [];
+  } catch (err) {
+    // Soft-fail: if the my-group call breaks, the peer-only path still works.
+    // Next tick will retry. Log for ops visibility.
+    console.warn(
+      `[im] listMyGroupMessages failed (peer-only group fetch continues): ${err instanceof Error ? err.message : String(err)}`
+    );
+    return [];
+  }
+}
+
 // ---------- main collector ----------
 
 export const imCollector: Collector = {
@@ -363,18 +569,58 @@ export const imCollector: Collector = {
     // ---- groups ----
     const groups = await listAllGroups();
     type ChatHit = { chat: ChatListChat; msgs: ImMessage[] };
-    const perChat: ChatHit[] = (
+
+    // Step 1: fetch peer-side messages per group (defer filtering until merge).
+    const perChatPeer: ChatHit[] = (
       await fetchInParallel(
         groups,
         async (chat) => {
           if (!chat.chat_id) return { chat, msgs: [] };
           const msgs = await listMessagesInChat(chat.chat_id, sinceIso, now.toISOString());
-          const filtered = msgs.filter((m) => isWanted(m, myOpenId));
-          return { chat, msgs: filtered };
+          return { chat, msgs };
         },
         config.imChatFetchConcurrency
       )
-    ).filter((x): x is ChatHit => !!x && x.msgs.length > 0);
+    ).filter((x): x is ChatHit => !!x);
+
+    // Step 2: fetch all my-group msgs in one call (A-2), bucket by chat_id.
+    // Independent toggle imEnableMyGroupFetch lets us land A-1 alone.
+    const myGroupMsgs =
+      config.imIncludeMyMessages && config.imEnableMyGroupFetch
+        ? await listMyGroupMessages(startLocal, endLocal, myOpenId)
+        : [];
+    const myMsgsByChat = new Map<string, ImMessage[]>();
+    for (const m of myGroupMsgs) {
+      if (!m.chat_id) continue;
+      const arr = myMsgsByChat.get(m.chat_id) ?? [];
+      arr.push(m);
+      myMsgsByChat.set(m.chat_id, arr);
+    }
+
+    // Step 3: union of chat_ids (peer-side ∪ my-side), merge dedup by message_id,
+    // then run prepareMessages on the merged list (flatten/tag/sort/filter).
+    const allGroupChatIds = new Set<string>();
+    for (const x of perChatPeer) {
+      if (x.chat?.chat_id) allGroupChatIds.add(x.chat.chat_id);
+    }
+    for (const cid of myMsgsByChat.keys()) allGroupChatIds.add(cid);
+
+    const perChat: ChatHit[] = [];
+    for (const chatId of allGroupChatIds) {
+      const peerHit = perChatPeer.find((x) => x.chat?.chat_id === chatId);
+      const peerMsgsRaw = peerHit?.msgs ?? [];
+      const meMsgsRaw = myMsgsByChat.get(chatId) ?? [];
+      const merged = mergeMessagesByMessageId(peerMsgsRaw, meMsgsRaw);
+      // Prefer the chat object from chat-list (carries name, external, owner_id),
+      // fall back to a minimal stub built from chat_name on the my-msg side.
+      const chat: ChatListChat = peerHit?.chat ?? {
+        chat_id: chatId,
+        name: meMsgsRaw[0]?.chat_name,
+      };
+      const prepared = prepareMessages(merged, myOpenId);
+      if (prepared.length === 0) continue;
+      perChat.push({ chat, msgs: prepared });
+    }
 
     // Sort chats by latest message time desc so important first
     perChat.sort((a, b) => {
@@ -391,9 +637,13 @@ export const imCollector: Collector = {
           : '未知群';
       const chatId = chat.chat_id ?? '';
       const chatEnt = chatId ? chatEntity(chatId, chat.name) : null;
-      if (msgs.length >= config.imAggregateThreshold) {
+      // MVP16-A: burst triggered by peer-only count so a chat where the user is
+      // doing all the talking doesn't fabricate a "群里很热闹" signal.
+      const peerMsgs = msgs.filter((m) => !m.is_me);
+      if (peerMsgs.length >= config.imAggregateThreshold) {
         // aggregated signal: one per chat per window
         const lastMsgId = msgs[msgs.length - 1]?.message_id ?? '';
+        const lastPeer = peerMsgs[peerMsgs.length - 1];
         const text = summarizeAggregate(chatName, msgs, startLocal);
         const entities: ContextEntityRef[] = [];
         if (chatEnt) entities.push(chatEnt);
@@ -402,12 +652,14 @@ export const imCollector: Collector = {
         signals.push({
           source: 'im',
           sourceId: `chat:${chat.chat_id}:agg:${sinceIso}`,
-          kind: msgs.some((m) => isAtMe(m, myOpenId)) ? 'group_burst_at_me' : 'group_burst',
+          // at_me classification looks at peer msgs only — if @我 came from me
+          // (in a self-mention edge case) it shouldn't count.
+          kind: peerMsgs.some((m) => isAtMe(m, myOpenId)) ? 'group_burst_at_me' : 'group_burst',
           occurredAt: parseCreateTime(msgs[msgs.length - 1]?.create_time),
           title: `${chatName} · 新增 ${msgs.length} 条`,
           text,
           actor: undefined,
-          url: msgs[msgs.length - 1]?.message_app_link,
+          url: lastPeer?.message_app_link ?? msgs[msgs.length - 1]?.message_app_link,
           raw: { chat, msgs },
           contentHash: shortHash(
             `agg|${chat.chat_id}|${msgs.length}|${lastMsgId}|${sinceIso}`
@@ -416,7 +668,11 @@ export const imCollector: Collector = {
         });
       } else {
         for (const m of msgs) {
-          const text = summarizeOne(m, chatName);
+          // MVP16-A: me-side single messages never become signals on their own.
+          if (m.is_me) continue;
+          // MVP16-A hotfix: render with surrounding chat context so Triage can
+          // see double-sided exchange even when only 1-2 peer msgs in window.
+          const text = summarizeOneWithContext(m, msgs, chatName);
           const entities: ContextEntityRef[] = [];
           if (chatEnt) entities.push(chatEnt);
           const se = senderEntity(m.sender);
@@ -431,7 +687,7 @@ export const imCollector: Collector = {
             text,
             actor: m.sender?.name ?? m.sender?.id,
             url: m.message_app_link,
-            raw: { chat, msg: m },
+            raw: { chat, msg: m, contextMsgs: msgs },
             contentHash: shortHash(`${m.message_id}|${m.content ?? ''}|${m.create_time ?? ''}`),
             entities: dedupEntities(entities),
           });
@@ -440,8 +696,12 @@ export const imCollector: Collector = {
     }
 
     // ---- p2p ----
-    const p2pMsgs = (await listP2pMessages(startLocal, endLocal)).filter((m) =>
-      isWanted(m, myOpenId)
+    // MVP16-A: pass through prepareMessages so me-side msgs get is_me tagged,
+    // thread_replies flattened, and stable sort applied. Lark's messages-search
+    // --chat-type p2p returns both sides by default — no extra call needed.
+    const p2pMsgs = prepareMessages(
+      await listP2pMessages(startLocal, endLocal),
+      myOpenId
     );
     // Group p2p messages by chat_id for aggregation
     const p2pByChat = new Map<string, ImMessage[]>();
@@ -452,11 +712,16 @@ export const imCollector: Collector = {
       p2pByChat.set(m.chat_id, arr);
     }
     for (const [chatId, msgs] of p2pByChat) {
-      msgs.sort((a, b) => (a.create_time ?? '').localeCompare(b.create_time ?? ''));
+      // msgs is already stably sorted by prepareMessages.
       const chatName = derivePeerChatName(msgs, chatId);
       const chatEnt = chatEntity(chatId, chatName);
-      if (msgs.length >= config.imAggregateThreshold) {
+      // MVP16-A: aggregation triggered by peer messages only — me-side messages
+      // provide context but do not signal "对方在密集表达". peerMsgs also drives
+      // actor/url so the card always points at the peer, never the user.
+      const peerMsgs = msgs.filter((m) => !m.is_me);
+      if (peerMsgs.length >= config.imAggregateThreshold) {
         const lastMsgId = msgs[msgs.length - 1]?.message_id ?? '';
+        const lastPeer = peerMsgs[peerMsgs.length - 1];
         const text = summarizeAggregate(chatName, msgs, startLocal);
         const entities: ContextEntityRef[] = [chatEnt];
         entities.push(...aggregateSenderEntities(msgs));
@@ -468,15 +733,24 @@ export const imCollector: Collector = {
           occurredAt: parseCreateTime(msgs[msgs.length - 1]?.create_time),
           title: `${chatName} · 新增 ${msgs.length} 条`,
           text,
-          actor: msgs[msgs.length - 1]?.sender?.name,
-          url: msgs[msgs.length - 1]?.message_app_link,
+          actor: lastPeer?.sender?.name,
+          url: lastPeer?.message_app_link,
           raw: { chatId, msgs },
           contentHash: shortHash(`p2p-agg|${chatId}|${msgs.length}|${lastMsgId}|${sinceIso}`),
           entities: dedupEntities(entities),
         });
       } else {
         for (const m of msgs) {
-          const text = summarizeOne(m, chatName);
+          // MVP16-A: skip me-side single messages — the user shouldn't get
+          // attention cards about themselves talking. peerMsgs.length=0 case
+          // is also covered: the burst branch above is skipped, and this loop
+          // produces zero signals.
+          if (m.is_me) continue;
+          // MVP16-A hotfix: render with surrounding double-sided context so
+          // Triage can see whether the user already responded to this message.
+          // raw.msg stays the single focused message; raw.contextMsgs carries
+          // the full chat slice for downstream replay if needed.
+          const text = summarizeOneWithContext(m, msgs, chatName);
           const entities: ContextEntityRef[] = [chatEnt];
           const se = senderEntity(m.sender);
           if (se) entities.push(se);
@@ -490,7 +764,7 @@ export const imCollector: Collector = {
             text,
             actor: m.sender?.name ?? m.sender?.id,
             url: m.message_app_link,
-            raw: { chatId, msg: m },
+            raw: { chatId, msg: m, contextMsgs: msgs },
             contentHash: shortHash(
               `${m.message_id}|${m.content ?? ''}|${m.create_time ?? ''}`
             ),

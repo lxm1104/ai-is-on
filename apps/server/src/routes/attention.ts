@@ -15,6 +15,7 @@ import {
   type AttentionFeedbackType,
 } from '../attention/attentionFeedback.js';
 import type { AttentionStatus } from '../attention/attentionTypes.js';
+import { resolveAttentionSignalDetails } from '../cards/contextProjection.js';
 
 export const attentionRouter = Router();
 
@@ -29,6 +30,19 @@ attentionRouter.get('/attention', (_req, res) => {
 attentionRouter.get('/attention/cards', (_req, res) => {
   const cards = listLiveAttentionItems(100).map(projectAttentionItemToCard);
   res.json({ cards });
+});
+
+// "查看原始信息"：把卡片的 signalIds 解开成可点击的原始信号列表
+// （events.url 优先；缺 url 时退化为标题/摘要）。
+attentionRouter.get('/attention/:id/signals', (req, res) => {
+  const id = req.params.id;
+  const item = getAttentionItem(id);
+  if (!item) {
+    res.status(404).json({ error: 'attention item not found' });
+    return;
+  }
+  const signals = resolveAttentionSignalDetails(item.signalIds);
+  res.json({ attentionId: id, signals });
 });
 
 attentionRouter.get('/attention/last-run', (_req, res) => {
