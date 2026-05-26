@@ -8,6 +8,10 @@ export type SendUserMessageOptions = {
   /** If true, do NOT prepend active context summary to the message. Used for
    *  card-action triggered internal prompts that already carry context. */
   skipContext?: boolean;
+  /** Topic-scoped chat session. New topics pass null/undefined; existing topics pass their stored session id. */
+  sessionId?: string | null;
+  topicId?: string;
+  onSessionId?: (sessionId: string) => void;
 };
 
 /**
@@ -21,7 +25,6 @@ export type SendUserMessageOptions = {
  */
 export class ClaudeRuntime extends EventEmitter {
   private status: RuntimeStatus = 'idle';
-  private sessionID: string | null = null;
   /** Currently running turn child (for interrupt). */
   private activeChild: ChildProcess | null = null;
 
@@ -48,7 +51,6 @@ export class ClaudeRuntime extends EventEmitter {
       } catch {}
       this.activeChild = null;
     }
-    this.sessionID = null;
     this.setStatus('stopped');
   }
 
@@ -121,7 +123,7 @@ export class ClaudeRuntime extends EventEmitter {
 
     this.setStatus('busy');
     try {
-      await this.runTurn(content, config.opencodeModel);
+      await this.runTurn(content, config.opencodeModel, opts);
     } catch (primaryErr) {
       const primaryMsg =
         primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
@@ -129,12 +131,13 @@ export class ClaudeRuntime extends EventEmitter {
         `[opencode chat] primary ${config.opencodeModel} failed, fallback：${primaryMsg.slice(0, 300)}`
       );
       try {
-        await this.runTurn(content, config.opencodeFallbackModel);
+        await this.runTurn(content, config.opencodeFallbackModel, opts);
       } catch (fallbackErr) {
         const fallbackMsg =
           fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
         this.emitEvent({
           type: 'runtime_error',
+          topicId: opts.topicId,
           error: `opencode 两次调用均失败。\n[primary]: ${primaryMsg}\n[fallback]: ${fallbackMsg}`,
         });
         this.setStatus('ready');
@@ -142,7 +145,7 @@ export class ClaudeRuntime extends EventEmitter {
     }
   }
 
-  private runTurn(content: string, model: string): Promise<void> {
+  private runTurn(content: string, model: string, opts: SendUserMessageOptions): Promise<void> {
     return new Promise((resolve, reject) => {
       const args = [
         'run',
@@ -153,8 +156,8 @@ export class ClaudeRuntime extends EventEmitter {
         '--format',
         'json',
       ];
-      if (this.sessionID) {
-        args.push('-s', this.sessionID);
+      if (opts.sessionId) {
+        args.push('-s', opts.sessionId);
       }
       args.push('--', content);
 
@@ -169,6 +172,7 @@ export class ClaudeRuntime extends EventEmitter {
       let stderrBuf = '';
       let interrupted = false;
       let lastTurnText = '';
+      let observedSessionId = opts.sessionId ?? null;
 
       const stdoutStream = child.stdout!;
       const stderrStream = child.stderr!;
@@ -189,7 +193,14 @@ export class ClaudeRuntime extends EventEmitter {
             process.stderr.write(`[opencode non-json] ${line}\n`);
             continue;
           }
-          const turnTextDelta = this.handleOpencodeEvent(json);
+          const turnTextDelta = this.handleOpencodeEvent(json, {
+            topicId: opts.topicId,
+            onSessionId: (sid) => {
+              if (observedSessionId === sid) return;
+              observedSessionId = sid;
+              opts.onSessionId?.(sid);
+            },
+          });
           if (turnTextDelta) lastTurnText += turnTextDelta;
         }
       });
@@ -213,6 +224,7 @@ export class ClaudeRuntime extends EventEmitter {
         if (code === 0 || interrupted) {
           this.emitEvent({
             type: 'turn_done',
+            topicId: opts.topicId,
             result: lastTurnText || undefined,
             raw: { model, exitCode: code, signal },
           });
@@ -243,20 +255,23 @@ export class ClaudeRuntime extends EventEmitter {
    *  - { type: "tool", part: { tool, state: { input, output, status } }, sessionID }
    *  - { type: "step_start" | "step_finish", ... }
    */
-  private handleOpencodeEvent(msg: unknown): string {
+  private handleOpencodeEvent(
+    msg: unknown,
+    opts: { topicId?: string; onSessionId?: (sessionId: string) => void }
+  ): string {
     if (!msg || typeof msg !== 'object') return '';
     const m = msg as Record<string, unknown>;
 
     const sid = m.sessionID;
-    if (typeof sid === 'string' && !this.sessionID) {
-      this.sessionID = sid;
+    if (typeof sid === 'string') {
+      opts.onSessionId?.(sid);
     }
 
     const t = m.type as string | undefined;
     const part = m.part as Record<string, unknown> | undefined;
 
     if (t === 'text' && part && typeof part.text === 'string') {
-      this.emitEvent({ type: 'assistant_text', text: part.text, raw: part });
+      this.emitEvent({ type: 'assistant_text', topicId: opts.topicId, text: part.text, raw: part });
       return part.text;
     }
 
@@ -269,6 +284,7 @@ export class ClaudeRuntime extends EventEmitter {
       if (status === 'running' || status === 'pending') {
         this.emitEvent({
           type: 'tool_start',
+          topicId: opts.topicId,
           toolName,
           input: state?.input,
           raw: part,
@@ -276,6 +292,7 @@ export class ClaudeRuntime extends EventEmitter {
       } else if (status === 'completed' || status === 'error') {
         this.emitEvent({
           type: 'tool_result',
+          topicId: opts.topicId,
           toolName,
           output: state?.output,
           isError: status === 'error',

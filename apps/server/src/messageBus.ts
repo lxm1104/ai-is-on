@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { claudeRuntime } from './claude/ClaudeRuntime.js';
-import { insertRuntimeMessage } from './db.js';
+import { insertRuntimeMessage, updateRuntimeMessage } from './db.js';
 import { broadcast } from './ws.js';
 import type { ChatMessage, RuntimeEvent } from './claude/protocol.js';
 
@@ -12,16 +12,20 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function messageText(msg: ChatMessage): string {
+  return msg.role === 'tool'
+    ? `${msg.toolName}: ${msg.summary}`
+    : msg.role === 'system'
+      ? msg.text
+      : msg.text;
+}
+
 function addMessage(msg: ChatMessage) {
   insertRuntimeMessage({
     id: msg.id,
+    topic_id: msg.topicId ?? null,
     role: msg.role,
-    text:
-      msg.role === 'tool'
-        ? `${msg.toolName}: ${msg.summary}`
-        : msg.role === 'system'
-          ? msg.text
-          : msg.text,
+    text: messageText(msg),
     raw_json: JSON.stringify(msg),
     created_at: msg.createdAt,
   });
@@ -29,6 +33,14 @@ function addMessage(msg: ChatMessage) {
 }
 
 function updateMessage(msg: ChatMessage) {
+  updateRuntimeMessage({
+    id: msg.id,
+    topic_id: msg.topicId ?? null,
+    role: msg.role,
+    text: messageText(msg),
+    raw_json: JSON.stringify(msg),
+    created_at: msg.createdAt,
+  });
   broadcast({ type: 'message_updated', message: msg });
 }
 
@@ -67,12 +79,12 @@ function summarizeToolOutput(output: unknown, isError: boolean): string {
   return (isError ? '[error] ' : '') + (text || '(empty)');
 }
 
-export function userMessage(text: string): ChatMessage {
-  return { id: randomUUID(), role: 'user', text, createdAt: nowIso() };
+export function userMessage(text: string, topicId?: string): ChatMessage {
+  return { id: randomUUID(), topicId, role: 'user', text, createdAt: nowIso() };
 }
 
-export function recordUserMessage(text: string) {
-  const msg = userMessage(text);
+export function recordUserMessage(text: string, topicId?: string) {
+  const msg = userMessage(text, topicId);
   addMessage(msg);
   return msg;
 }
@@ -87,6 +99,7 @@ export function startMessageBus() {
       case 'assistant_text': {
         addMessage({
           id: randomUUID(),
+          topicId: e.topicId,
           role: 'assistant',
           text: e.text,
           createdAt: nowIso(),
@@ -103,6 +116,7 @@ export function startMessageBus() {
         }
         addMessage({
           id,
+          topicId: e.topicId,
           role: 'tool',
           toolName: e.toolName,
           summary: summarizeToolInput(e.toolName, e.input),
@@ -125,6 +139,7 @@ export function startMessageBus() {
         const summary = summarizeToolOutput(e.output, e.isError);
         updateMessage({
           id,
+          topicId: e.topicId,
           role: 'tool',
           toolName,
           summary,
@@ -144,6 +159,7 @@ export function startMessageBus() {
       case 'runtime_error': {
         addMessage({
           id: randomUUID(),
+          topicId: e.topicId,
           role: 'system',
           text: e.error,
           level: 'error',

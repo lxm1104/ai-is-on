@@ -17,8 +17,7 @@ import type {
   Priority,
 } from '../boundary/BoundaryRule.js';
 import { broadcast } from '../ws.js';
-import { recordUserMessage } from '../messageBus.js';
-import { claudeRuntime } from '../claude/ClaudeRuntime.js';
+import { type ChatTopic, sendTopicMessage } from '../chat/chatTopics.js';
 import type {
   CardAction,
   CardActionKind,
@@ -180,7 +179,7 @@ export function listCards(): SignalCard[] {
   return listOpenCards(100).map(rowToCard);
 }
 
-export type CardActionResult = { ok: boolean; card?: SignalCard; error?: string };
+export type CardActionResult = { ok: boolean; card?: SignalCard; topic?: ChatTopic; error?: string };
 
 export async function applyCardAction(
   cardId: string,
@@ -270,11 +269,21 @@ export async function applyCardAction(
     // 优先级：用户输入 > action.prompt（agent 在生卡时填的）> buildDefaultPrompt 兜底。
     const userPrompt = opts?.extraPrompt?.trim();
     const prompt = userPrompt || action.prompt?.trim() || buildDefaultPrompt(row, action.kind);
-    recordUserMessage(prompt);
     try {
       // MVP2.2: 卡片动作的内部 prompt 已经把卡片自身 context 嵌进去了，
       // 不再额外 prepend active_context summary，避免重复并节省 token。
-      await claudeRuntime.sendUserMessage(prompt, { skipContext: true });
+      const topic = await sendTopicMessage({
+        text: prompt,
+        sourceKind: 'card',
+        sourceRefId: row.id,
+        title: row.title,
+        skipContext: true,
+      });
+      const updated = updateCardStatus(cardId, newStatus, now);
+      if (!updated) return { ok: false, error: 'update failed' };
+      const card = rowToCard(updated);
+      broadcast({ type: 'card_updated', card });
+      return { ok: true, card, topic };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
@@ -312,17 +321,22 @@ async function applyAttentionAction(
     const prompt = userPrompt
       ? `${rich}\n\n【用户补充】${userPrompt}`
       : rich;
-    recordUserMessage(prompt);
     try {
-      await claudeRuntime.sendUserMessage(prompt, { skipContext: true });
+      const topic = await sendTopicMessage({
+        text: prompt,
+        sourceKind: 'attention',
+        sourceRefId: attn.id,
+        title: attn.title,
+        skipContext: true,
+      });
+      const updated = updateAttentionItemStatus(attn.id, 'acted', now);
+      if (!updated) return { ok: false, error: 'update failed' };
+      const card = projectAttentionItemToCard(updated);
+      broadcast({ type: 'card_updated', card });
+      return { ok: true, card, topic };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
-    const updated = updateAttentionItemStatus(attn.id, 'acted', now);
-    if (!updated) return { ok: false, error: 'update failed' };
-    const card = projectAttentionItemToCard(updated);
-    broadcast({ type: 'card_updated', card });
-    return { ok: true, card };
   }
 
   if (action.kind === 'open_source') {

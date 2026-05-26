@@ -7,18 +7,19 @@ export type RuntimeStatus =
   | 'error';
 
 export type RuntimeEvent =
-  | { type: 'assistant_text'; text: string; raw: unknown }
-  | { type: 'tool_start'; toolName: string; input: unknown; raw: unknown }
-  | { type: 'tool_result'; toolName: string; output: unknown; isError: boolean; raw: unknown }
-  | { type: 'turn_done'; result?: string; raw: unknown }
-  | { type: 'system_info'; text: string; raw: unknown }
-  | { type: 'runtime_error'; error: string; raw?: unknown };
+  | { type: 'assistant_text'; topicId?: string; text: string; raw: unknown }
+  | { type: 'tool_start'; topicId?: string; toolName: string; input: unknown; raw: unknown }
+  | { type: 'tool_result'; topicId?: string; toolName: string; output: unknown; isError: boolean; raw: unknown }
+  | { type: 'turn_done'; topicId?: string; result?: string; raw: unknown }
+  | { type: 'system_info'; topicId?: string; text: string; raw: unknown }
+  | { type: 'runtime_error'; topicId?: string; error: string; raw?: unknown };
 
 export type ChatMessage =
-  | { id: string; role: 'user'; text: string; createdAt: string }
-  | { id: string; role: 'assistant'; text: string; createdAt: string }
+  | { id: string; topicId?: string; role: 'user'; text: string; createdAt: string }
+  | { id: string; topicId?: string; role: 'assistant'; text: string; createdAt: string }
   | {
       id: string;
+      topicId?: string;
       role: 'tool';
       toolName: string;
       summary: string;
@@ -27,6 +28,7 @@ export type ChatMessage =
     }
   | {
       id: string;
+      topicId?: string;
       role: 'system';
       text: string;
       level: 'info' | 'warn' | 'error';
@@ -86,6 +88,8 @@ export type ServerEvent =
   | { type: 'runtime_status'; status: RuntimeStatus }
   | { type: 'message_added'; message: ChatMessage }
   | { type: 'message_updated'; message: ChatMessage }
+  | { type: 'topic_created'; topic: unknown }
+  | { type: 'topic_updated'; topic: unknown }
   | { type: 'card_created'; card: SignalCard }
   | { type: 'card_updated'; card: SignalCard }
   | { type: 'collector_status'; collector: CollectorStatus }

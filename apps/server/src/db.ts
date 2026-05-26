@@ -11,11 +11,25 @@ db.pragma('journal_mode = WAL');
 db.exec(`
 CREATE TABLE IF NOT EXISTS runtime_messages (
   id TEXT PRIMARY KEY,
+  topic_id TEXT,
   role TEXT NOT NULL,
   text TEXT NOT NULL,
   raw_json TEXT,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS chat_topics (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  source_kind TEXT NOT NULL DEFAULT 'manual',
+  source_ref_id TEXT,
+  opencode_session_id TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_message_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_chat_topics_status_updated ON chat_topics(status, updated_at);
 
 CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
@@ -397,6 +411,21 @@ ensureColumn('cards', 'source_kind', "TEXT NOT NULL DEFAULT 'triage'");
 ensureColumn('cards', 'source_ref_id', 'TEXT');
 // MVP14 Step 3: 老 triage→cards 流水线下线后，旧 cards 行降为归档（暂不删表，便于回溯）
 ensureColumn('cards', 'archived_at', 'TEXT');
+// Topic 化聊天：老库 runtime_messages 没有 topic_id，保留为空，前端只展示选中 topic 的消息。
+ensureColumn('runtime_messages', 'topic_id', 'TEXT');
+db.exec(`CREATE INDEX IF NOT EXISTS idx_runtime_messages_topic ON runtime_messages(topic_id, created_at)`);
+const legacyRuntimeMessages = db
+  .prepare(`SELECT COUNT(*) AS count FROM runtime_messages WHERE topic_id IS NULL`)
+  .get() as { count: number };
+if (legacyRuntimeMessages.count > 0) {
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT OR IGNORE INTO chat_topics
+     (id, title, source_kind, source_ref_id, opencode_session_id, status, created_at, updated_at, last_message_at)
+     VALUES ('legacy-global-chat', '历史会话', 'legacy', NULL, NULL, 'active', ?, ?, ?)`
+  ).run(now, now, now);
+  db.prepare(`UPDATE runtime_messages SET topic_id = 'legacy-global-chat' WHERE topic_id IS NULL`).run();
+}
 // MVP2: events 加 context_extracted_at（与 processed_at 解耦）
 ensureColumn('events', 'context_extracted_at', 'TEXT');
 
@@ -578,6 +607,7 @@ ensureIdempotencyIndex();
 
 export type RuntimeMessageRow = {
   id: string;
+  topic_id: string | null;
   role: string;
   text: string;
   raw_json: string | null;
@@ -586,20 +616,99 @@ export type RuntimeMessageRow = {
 
 export function insertRuntimeMessage(row: RuntimeMessageRow) {
   db.prepare(
-    `INSERT INTO runtime_messages (id, role, text, raw_json, created_at)
-     VALUES (@id, @role, @text, @raw_json, @created_at)`
+    `INSERT INTO runtime_messages (id, topic_id, role, text, raw_json, created_at)
+     VALUES (@id, @topic_id, @role, @text, @raw_json, @created_at)`
   ).run(row);
 }
 
-export function listRuntimeMessages(limit = 200): RuntimeMessageRow[] {
+export function updateRuntimeMessage(row: RuntimeMessageRow) {
+  db.prepare(
+    `INSERT INTO runtime_messages (id, topic_id, role, text, raw_json, created_at)
+     VALUES (@id, @topic_id, @role, @text, @raw_json, @created_at)
+     ON CONFLICT(id) DO UPDATE SET
+       topic_id = excluded.topic_id,
+       role = excluded.role,
+       text = excluded.text,
+       raw_json = excluded.raw_json,
+       created_at = excluded.created_at`
+  ).run(row);
+}
+
+export function listRuntimeMessages(limit = 200, topicId?: string): RuntimeMessageRow[] {
+  if (topicId) {
+    return db
+      .prepare(
+        `SELECT id, topic_id, role, text, raw_json, created_at
+         FROM runtime_messages
+         WHERE topic_id = ?
+         ORDER BY created_at ASC
+         LIMIT ?`
+      )
+      .all(topicId, limit) as RuntimeMessageRow[];
+  }
   return db
     .prepare(
-      `SELECT id, role, text, raw_json, created_at
+      `SELECT id, topic_id, role, text, raw_json, created_at
        FROM runtime_messages
        ORDER BY created_at ASC
        LIMIT ?`
     )
     .all(limit) as RuntimeMessageRow[];
+}
+
+// -------- chat_topics --------
+
+export type ChatTopicRow = {
+  id: string;
+  title: string;
+  source_kind: string;
+  source_ref_id: string | null;
+  opencode_session_id: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  last_message_at: string | null;
+};
+
+export function insertChatTopic(row: ChatTopicRow) {
+  db.prepare(
+    `INSERT INTO chat_topics
+     (id, title, source_kind, source_ref_id, opencode_session_id, status, created_at, updated_at, last_message_at)
+     VALUES (@id, @title, @source_kind, @source_ref_id, @opencode_session_id, @status, @created_at, @updated_at, @last_message_at)`
+  ).run(row);
+}
+
+export function getChatTopic(id: string): ChatTopicRow | null {
+  return (
+    (db.prepare(`SELECT * FROM chat_topics WHERE id = ?`).get(id) as
+      | ChatTopicRow
+      | undefined) ?? null
+  );
+}
+
+export function listChatTopics(limit = 100): ChatTopicRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM chat_topics
+       WHERE status = 'active'
+       ORDER BY COALESCE(last_message_at, updated_at, created_at) DESC
+       LIMIT ?`
+    )
+    .all(limit) as ChatTopicRow[];
+}
+
+export function updateChatTopic(
+  id: string,
+  patch: Partial<Pick<ChatTopicRow, 'title' | 'opencode_session_id' | 'status' | 'updated_at' | 'last_message_at'>>
+) {
+  const sets: string[] = [];
+  const params: Record<string, unknown> = { id };
+  for (const [k, v] of Object.entries(patch)) {
+    sets.push(`${k} = @${k}`);
+    params[k] = v;
+  }
+  if (sets.length === 0) return;
+  db.prepare(`UPDATE chat_topics SET ${sets.join(', ')} WHERE id = @id`).run(params);
 }
 
 // -------- events --------

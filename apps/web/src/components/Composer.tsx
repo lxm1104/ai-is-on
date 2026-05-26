@@ -22,6 +22,8 @@ export function Composer(props: {
   disabled?: boolean;
   thinking?: boolean;
   onInterrupt?: () => void;
+  mode?: 'new' | 'reply';
+  topicTitle?: string;
 }) {
   const [text, setText] = useState('');
   const [voiceState, setVoiceState] = useState<VoiceInputState>('idle');
@@ -121,6 +123,11 @@ export function Composer(props: {
             : null;
 
   const scopeMeta = SCOPE_OPTIONS.find((s) => s.id === scope)!;
+  const mode = props.mode ?? 'new';
+  const placeholder =
+    mode === 'reply'
+      ? `回复当前话题：${props.topicTitle ?? ''}`
+      : '输入内容，创建一个新的 session';
 
   return (
     <div className="composer">
@@ -171,7 +178,7 @@ export function Composer(props: {
         <textarea
           ref={taRef}
           className="composer__textarea"
-          placeholder={'问我任何事，或者说"帮我看今天有什么必须处理"'}
+          placeholder={placeholder}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={onKeyDown}

@@ -29,7 +29,7 @@ cardsRouter.post('/cards/:id/action', async (req, res) => {
     res.status(400).json({ error: result.error });
     return;
   }
-  res.json({ card: result.card });
+  res.json({ card: result.card, topic: result.topic });
 });
 
 cardsRouter.get('/cards/:id/context', (req, res) => {

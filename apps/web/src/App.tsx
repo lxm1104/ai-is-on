@@ -11,6 +11,7 @@ import {
   fetchAttentionCards,
   fetchCollectors,
   fetchMessages,
+  fetchTopics,
   interruptRuntime,
   postCardAction,
   restartRuntime,
@@ -21,6 +22,7 @@ import {
 import { connectWs } from './lib/ws';
 import type {
   ChatMessage,
+  ChatTopic,
   CollectorStatus,
   RuntimeStatus,
   ServerEvent,
@@ -29,6 +31,8 @@ import type {
 
 export function App() {
   const [status, setStatus] = useState<RuntimeStatus>('starting');
+  const [topics, setTopics] = useState<ChatTopic[]>([]);
+  const [activeTopicId, setActiveTopicId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [cards, setCards] = useState<SignalCard[]>([]);
   const [collectors, setCollectors] = useState<CollectorStatus[]>([]);
@@ -37,6 +41,20 @@ export function App() {
   const [bootstrapCompletedAt, setBootstrapCompletedAt] = useState<string | null>(null);
   const [bootstrapBannerDismissed, setBootstrapBannerDismissed] = useState(false);
   const seenIds = useRef<Set<string>>(new Set());
+  const activeTopic = topics.find((t) => t.id === activeTopicId) ?? null;
+
+  function upsertTopic(topic: ChatTopic) {
+    setTopics((prev) => {
+      const idx = prev.findIndex((t) => t.id === topic.id);
+      const next = idx >= 0 ? prev.slice() : [topic, ...prev];
+      if (idx >= 0) next[idx] = { ...prev[idx], ...topic };
+      return next.sort((a, b) => {
+        const at = new Date(a.lastMessageAt ?? a.updatedAt ?? a.createdAt).getTime();
+        const bt = new Date(b.lastMessageAt ?? b.updatedAt ?? b.createdAt).getTime();
+        return bt - at;
+      });
+    });
+  }
 
   function applyMessage(m: ChatMessage, mode: 'add' | 'update') {
     setMessages((prev) => {
@@ -80,11 +98,10 @@ export function App() {
   }
 
   useEffect(() => {
-    Promise.allSettled([fetchMessages(), fetchAttentionCards(), fetchCollectors()]).then(
-      ([m, c, col]) => {
-        if (m.status === 'fulfilled') {
-          seenIds.current = new Set(m.value.map((r) => r.id));
-          setMessages(m.value);
+    Promise.allSettled([fetchTopics(), fetchAttentionCards(), fetchCollectors()]).then(
+      ([t, c, col]) => {
+        if (t.status === 'fulfilled') {
+          setTopics(t.value);
         }
         if (c.status === 'fulfilled') setCards(c.value);
         if (col.status === 'fulfilled') setCollectors(col.value);
@@ -97,10 +114,16 @@ export function App() {
           setStatus(e.status);
           return;
         case 'message_added':
-          applyMessage(e.message, 'add');
+          if (e.message.topicId === activeTopicId) applyMessage(e.message, 'add');
           return;
         case 'message_updated':
-          applyMessage(e.message, 'update');
+          if (e.message.topicId === activeTopicId) applyMessage(e.message, 'update');
+          return;
+        case 'topic_created':
+          upsertTopic(e.topic);
+          return;
+        case 'topic_updated':
+          upsertTopic(e.topic);
           return;
         case 'card_updated':
           // MVP14 Step 3: 现在只有 attention 流，所有 card_updated 都来自 attention 路由
@@ -121,7 +144,21 @@ export function App() {
       }
     });
     return () => client.close();
-  }, []);
+  }, [activeTopicId]);
+
+  useEffect(() => {
+    if (!activeTopicId) {
+      seenIds.current = new Set();
+      setMessages([]);
+      return;
+    }
+    fetchMessages(activeTopicId)
+      .then((ms) => {
+        seenIds.current = new Set(ms.map((r) => r.id));
+        setMessages(ms);
+      })
+      .catch((err) => setTopError(err instanceof Error ? err.message : String(err)));
+  }, [activeTopicId]);
 
   // re-render countdown
   const [, setTick] = useState(0);
@@ -134,7 +171,12 @@ export function App() {
     setSending(true);
     setTopError(null);
     try {
-      await sendChat(text);
+      const topic = await sendChat(text, { topicId: activeTopicId ?? undefined });
+      upsertTopic(topic);
+      setActiveTopicId(topic.id);
+      const ms = await fetchMessages(topic.id);
+      seenIds.current = new Set(ms.map((r) => r.id));
+      setMessages(ms);
     } catch (err) {
       setTopError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -166,7 +208,14 @@ export function App() {
     opts?: { extraPrompt?: string }
   ) {
     try {
-      await postCardAction(cardId, actionId, opts);
+      const result = await postCardAction(cardId, actionId, opts);
+      if (result.topic) {
+        upsertTopic(result.topic);
+        setActiveTopicId(result.topic.id);
+        const ms = await fetchMessages(result.topic.id);
+        seenIds.current = new Set(ms.map((r) => r.id));
+        setMessages(ms);
+      }
     } catch (err) {
       setTopError(err instanceof Error ? err.message : String(err));
       throw err;
@@ -234,17 +283,82 @@ export function App() {
           <ContextPanel />
         </aside>
         <section className="pane pane--chat">
+          <TopicHeader
+            topics={topics}
+            activeTopic={activeTopic}
+            onSelect={(id) => setActiveTopicId(id)}
+            onNew={() => setActiveTopicId(null)}
+          />
           <MessageList messages={messages} thinking={thinking} />
           <Composer
             onSend={onSend}
             disabled={sending || status === 'stopped'}
             thinking={thinking || status === 'busy'}
             onInterrupt={onInterrupt}
+            mode={activeTopic ? 'reply' : 'new'}
+            topicTitle={activeTopic?.title}
           />
         </section>
       </main>
     </div>
   );
+}
+
+function TopicHeader(props: {
+  topics: ChatTopic[];
+  activeTopic: ChatTopic | null;
+  onSelect: (id: string) => void;
+  onNew: () => void;
+}) {
+  return (
+    <div className="topicbar">
+      <div className="topicbar__main">
+        <div className="topicbar__label">
+          {props.activeTopic ? '正在继续话题' : '新会话入口'}
+        </div>
+        <div className="topicbar__title">
+          {props.activeTopic?.title ?? '直接输入会创建一个新的 session'}
+        </div>
+        {props.activeTopic && (
+          <div className="topicbar__meta">
+            来源：{sourceLabel(props.activeTopic.sourceKind)}
+          </div>
+        )}
+      </div>
+      <div className="topicbar__actions">
+        <select
+          className="topicbar__select"
+          value={props.activeTopic?.id ?? ''}
+          onChange={(e) => {
+            const id = e.target.value;
+            if (id) props.onSelect(id);
+            else props.onNew();
+          }}
+          title="选择已有话题继续对话"
+        >
+          <option value="">新建会话</option>
+          {props.topics.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.title}
+            </option>
+          ))}
+        </select>
+        {props.activeTopic && (
+          <button type="button" className="btn btn--ghost" onClick={props.onNew}>
+            新建会话
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function sourceLabel(kind: string): string {
+  if (kind === 'manual') return '右侧输入';
+  if (kind === 'card') return '卡片';
+  if (kind === 'attention') return '左侧面板';
+  if (kind === 'agent_run') return 'Agent 执行';
+  return kind;
 }
 
 function collectorErrorHint(cs: CollectorStatus[]): string | undefined {

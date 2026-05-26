@@ -1,5 +1,6 @@
 import type {
   ChatMessage,
+  ChatTopic,
   CollectorStatus,
   ContextEntity,
   ContextUnit,
@@ -8,23 +9,37 @@ import type {
   SignalCard,
 } from '../types';
 
-export async function fetchMessages(): Promise<ChatMessage[]> {
-  const r = await fetch('/api/messages');
+export async function fetchTopics(): Promise<ChatTopic[]> {
+  const r = await fetch('/api/topics');
+  if (!r.ok) throw new Error(`topics ${r.status}`);
+  const j = await r.json();
+  return j.topics ?? [];
+}
+
+export async function fetchMessages(topicId?: string): Promise<ChatMessage[]> {
+  const qs = new URLSearchParams();
+  if (topicId) qs.set('topicId', topicId);
+  const r = await fetch(`/api/messages${qs.toString() ? `?${qs}` : ''}`);
   if (!r.ok) throw new Error(`messages ${r.status}`);
   const j = await r.json();
   return j.messages ?? [];
 }
 
-export async function sendChat(text: string): Promise<void> {
+export async function sendChat(
+  text: string,
+  opts: { topicId?: string } = {}
+): Promise<ChatTopic> {
   const r = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, topicId: opts.topicId }),
   });
   if (!r.ok) {
     const j = await r.json().catch(() => ({}));
     throw new Error(j.error || `chat ${r.status}`);
   }
+  const j = await r.json();
+  return j.topic as ChatTopic;
 }
 
 export type ManualEventScope = 'personal' | 'work';
@@ -155,7 +170,7 @@ export async function postCardAction(
   cardId: string,
   actionId: string,
   opts?: { extraPrompt?: string }
-): Promise<SignalCard> {
+): Promise<{ card: SignalCard; topic?: ChatTopic }> {
   const body: Record<string, unknown> = { actionId };
   if (opts?.extraPrompt && opts.extraPrompt.trim()) {
     body.extraPrompt = opts.extraPrompt.trim();
@@ -167,7 +182,7 @@ export async function postCardAction(
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || `card action ${r.status}`);
-  return j.card as SignalCard;
+  return { card: j.card as SignalCard, topic: j.topic as ChatTopic | undefined };
 }
 
 export async function fetchCollectors(): Promise<CollectorStatus[]> {

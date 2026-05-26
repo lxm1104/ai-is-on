@@ -7,10 +7,11 @@ export type RuntimeStatus =
   | 'error';
 
 export type ChatMessage =
-  | { id: string; role: 'user'; text: string; createdAt: string }
-  | { id: string; role: 'assistant'; text: string; createdAt: string }
+  | { id: string; topicId?: string; role: 'user'; text: string; createdAt: string }
+  | { id: string; topicId?: string; role: 'assistant'; text: string; createdAt: string }
   | {
       id: string;
+      topicId?: string;
       role: 'tool';
       toolName: string;
       summary: string;
@@ -19,11 +20,24 @@ export type ChatMessage =
     }
   | {
       id: string;
+      topicId?: string;
       role: 'system';
       text: string;
       level: 'info' | 'warn' | 'error';
       createdAt: string;
     };
+
+export type ChatTopic = {
+  id: string;
+  title: string;
+  sourceKind: string;
+  sourceRefId?: string;
+  opencodeSessionId?: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  lastMessageAt?: string;
+};
 
 export type CardActionKind =
   | 'ack'
@@ -151,6 +165,8 @@ export type ServerEvent =
   | { type: 'runtime_status'; status: RuntimeStatus }
   | { type: 'message_added'; message: ChatMessage }
   | { type: 'message_updated'; message: ChatMessage }
+  | { type: 'topic_created'; topic: ChatTopic }
+  | { type: 'topic_updated'; topic: ChatTopic }
   | { type: 'card_created'; card: SignalCard }
   | { type: 'card_updated'; card: SignalCard }
   | { type: 'collector_status'; collector: CollectorStatus }

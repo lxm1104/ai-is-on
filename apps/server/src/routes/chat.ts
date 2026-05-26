@@ -1,12 +1,18 @@
 import { Router } from 'express';
-import { claudeRuntime } from '../claude/ClaudeRuntime.js';
 import { listRuntimeMessages } from '../db.js';
-import { recordUserMessage } from '../messageBus.js';
+import { listTopics, sendTopicMessage } from '../chat/chatTopics.js';
 
 export const chatRouter = Router();
 
-chatRouter.get('/messages', (_req, res) => {
-  const rows = listRuntimeMessages(500);
+chatRouter.get('/topics', (req, res) => {
+  const limit = clampInt(req.query.limit, 100, 1, 500);
+  res.json({ topics: listTopics(limit) });
+});
+
+chatRouter.get('/messages', (req, res) => {
+  const limit = clampInt(req.query.limit, 500, 1, 1000);
+  const topicId = typeof req.query.topicId === 'string' ? req.query.topicId : undefined;
+  const rows = listRuntimeMessages(limit, topicId);
   const messages = rows.map((r) => {
     if (r.raw_json) {
       try {
@@ -15,6 +21,7 @@ chatRouter.get('/messages', (_req, res) => {
     }
     return {
       id: r.id,
+      topicId: r.topic_id ?? undefined,
       role: r.role,
       text: r.text,
       createdAt: r.created_at,
@@ -25,15 +32,24 @@ chatRouter.get('/messages', (_req, res) => {
 
 chatRouter.post('/chat', async (req, res) => {
   const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+  const topicId =
+    typeof req.body?.topicId === 'string' && req.body.topicId.trim()
+      ? req.body.topicId.trim()
+      : undefined;
   if (!text) {
     res.status(400).json({ error: 'text is required' });
     return;
   }
   try {
-    recordUserMessage(text);
-    await claudeRuntime.sendUserMessage(text);
-    res.json({ ok: true });
+    const topic = await sendTopicMessage({ topicId, text, sourceKind: 'manual' });
+    res.json({ ok: true, topic });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
+
+function clampInt(v: unknown, fallback: number, min: number, max: number): number {
+  const n = typeof v === 'string' ? Number(v) : NaN;
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(n)));
+}
