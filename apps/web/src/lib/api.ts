@@ -185,6 +185,42 @@ export async function postCardAction(
   return { card: j.card as SignalCard, topic: j.topic as ChatTopic | undefined };
 }
 
+export type LarkTaskCreateResult = {
+  ok: boolean;
+  task: {
+    guid: string;
+    url?: string;
+    summary: string;
+  };
+  commitmentUnitId: string;
+  resultUnitId: string;
+  bindingId: string;
+  card?: SignalCard;
+  reused: boolean;
+};
+
+export async function postCardLarkTask(input: {
+  cardId: string;
+  summary?: string;
+  description?: string;
+  dueAt?: string;
+  tasklistId?: string;
+}): Promise<LarkTaskCreateResult> {
+  const body: Record<string, unknown> = { confirm: true };
+  if (input.summary?.trim()) body.summary = input.summary.trim();
+  if (input.description?.trim()) body.description = input.description.trim();
+  if (input.dueAt?.trim()) body.dueAt = input.dueAt.trim();
+  if (input.tasklistId?.trim()) body.tasklistId = input.tasklistId.trim();
+  const r = await fetch(`/api/cards/${encodeURIComponent(input.cardId)}/lark-task`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `lark-task ${r.status}`);
+  return j as LarkTaskCreateResult;
+}
+
 export async function fetchCollectors(): Promise<CollectorStatus[]> {
   const r = await fetch('/api/collectors');
   if (!r.ok) throw new Error(`collectors ${r.status}`);

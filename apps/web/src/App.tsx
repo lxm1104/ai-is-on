@@ -275,7 +275,6 @@ export function App() {
             collectorsHint={collectorsHint}
           />
           <WorkMapPanel
-            initialOpen={!bootstrapCompletedAt}
             onBootstrapChange={(t) => setBootstrapCompletedAt(t)}
           />
           <SpacesPanel />

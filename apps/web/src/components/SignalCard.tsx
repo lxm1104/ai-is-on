@@ -2,10 +2,12 @@ import { useState } from 'react';
 import type { CardAction, ContextUnit, SignalCard as SignalCardT } from '../types';
 import {
   fetchCardContext,
+  postCardLarkTask,
   postActionItemsConfirm,
   postAttentionFeedback,
   postCardCorrection,
   postContextFeedback,
+  type LarkTaskCreateResult,
   type CorrectionApplyResult,
 } from '../lib/api';
 import { ResolvedText } from './ResolvedText';
@@ -89,6 +91,8 @@ export function SignalCardView(props: {
   const [attnFbErr, setAttnFbErr] = useState<string | null>(null);
   const [prefMode, setPrefMode] = useState(false);
   const [prefText, setPrefText] = useState('');
+  const [taskBusy, setTaskBusy] = useState(false);
+  const [taskResult, setTaskResult] = useState<LarkTaskCreateResult | null>(null);
 
   async function submitAttentionFeedback(
     type: 'not_relevant' | 'add_preference',
@@ -237,6 +241,22 @@ export function SignalCardView(props: {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function createLarkTask() {
+    const ok = window.confirm(`确认把「${card.title}」加入飞书任务？`);
+    if (!ok) return;
+    setTaskBusy(true);
+    setErr(null);
+    setTaskResult(null);
+    try {
+      const result = await postCardLarkTask({ cardId: card.id });
+      setTaskResult(result);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTaskBusy(false);
     }
   }
 
@@ -530,6 +550,15 @@ export function SignalCardView(props: {
         )}
       </div>
       <footer className="card__actions">
+        <button
+          type="button"
+          className="btn btn--card btn--create-task"
+          onClick={() => void createLarkTask()}
+          disabled={!!busy || taskBusy}
+          title="创建飞书任务并回写 Context"
+        >
+          {taskBusy ? '…' : '加入任务'}
+        </button>
         {visibleActions.map((a) => {
           const isAsk = a.kind === 'ask_agent' || a.kind === 'draft_reply';
           if (!isAsk) {
@@ -568,6 +597,19 @@ export function SignalCardView(props: {
           );
         })}
       </footer>
+      {taskResult && (
+        <div className="card__task-done">
+          已加入飞书任务
+          {taskResult.task.url && (
+            <>
+              {' · '}
+              <a href={taskResult.task.url} target="_blank" rel="noreferrer">
+                打开任务 ↗
+              </a>
+            </>
+          )}
+        </div>
+      )}
       {err && <div className="card__err">{err}</div>}
     </article>
   );

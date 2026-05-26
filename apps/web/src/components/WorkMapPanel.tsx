@@ -48,11 +48,10 @@ function saveDraft(d: WorkMapDraft) {
 
 export type WorkMapPanelProps = {
   onBootstrapChange?: (completedAt: string | null) => void;
-  initialOpen?: boolean;
 };
 
-export function WorkMapPanel({ onBootstrapChange, initialOpen = false }: WorkMapPanelProps) {
-  const [open, setOpen] = useState(initialOpen);
+export function WorkMapPanel({ onBootstrapChange }: WorkMapPanelProps) {
+  const [open, setOpen] = useState(false);
   const [current, setCurrent] = useState<CurrentWorkMap | null>(null);
   const [draft, setDraft] = useState<WorkMapDraft>(() => loadDraft());
   const [busy, setBusy] = useState(false);

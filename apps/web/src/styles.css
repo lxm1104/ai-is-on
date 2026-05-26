@@ -419,6 +419,9 @@ body { background: var(--bg); color: var(--text); }
 .card__link:hover { text-decoration: underline; }
 .card__actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; align-items: center; }
 .card__err { font-size: 12px; color: var(--error); }
+.card__task-done { font-size: 12px; color: var(--ok); }
+.card__task-done a { color: var(--accent); text-decoration: none; }
+.card__task-done a:hover { text-decoration: underline; }
 .card__ask-inline { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; flex: 1 1 240px; min-width: 220px; }
 .card__ask-input {
   flex: 1 1 160px;
@@ -434,6 +437,8 @@ body { background: var(--bg); color: var(--text); }
 .card__ask-input::placeholder { color: var(--text-dim); }
 
 .btn--card { font-size: 12px; padding: 4px 10px; min-width: 0; }
+.btn--create-task { background: var(--panel-2); color: var(--text); }
+.btn--create-task:hover:not(:disabled) { border-color: var(--accent); }
 .btn--ask_agent { background: var(--accent); border-color: var(--accent); color: white; }
 .btn--ask_agent:hover:not(:disabled) { background: var(--accent-strong); }
 .btn--draft_reply { background: var(--accent); border-color: var(--accent); color: white; }
