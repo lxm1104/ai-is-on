@@ -26,6 +26,10 @@ import {
   getAttentionItem,
   updateAttentionItemStatus,
 } from './attentionStore.js';
+import {
+  type AttentionInteractionAction,
+  recordAttentionInteraction,
+} from './attentionInteractions.js';
 import type { AttentionItem } from './attentionTypes.js';
 import type { CorrectionJournalRow } from '../db.js';
 
@@ -50,6 +54,7 @@ export type ApplyFeedbackInput = {
   type: AttentionFeedbackType;
   payload: Record<string, unknown>;
   confirm?: boolean;
+  sourceAction?: AttentionInteractionAction;
 };
 
 const NOT_RELEVANT_ENTITY_DEMOTE_BY = 0.1;
@@ -94,6 +99,7 @@ function applyNotRelevant(attn: AttentionItem, input: ApplyFeedbackInput): Feedb
 
   const now = new Date().toISOString();
   updateAttentionItemStatus(attn.id, 'dismissed', now);
+  recordAttentionInteraction(attn, input.sourceAction ?? 'not_relevant', now);
 
   const demotedRecords: Array<{ entityId: string; prev: number; next: number; name: string }> = [];
   for (const eid of attn.relatedEntityIds) {

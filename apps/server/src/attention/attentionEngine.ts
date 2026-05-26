@@ -107,6 +107,7 @@ async function doRunAttentionTick(
     stakeholdersCount: packet.stakeholders.length,
     preferencesCount: packet.preferences.length,
     boundaryRulesCount: packet.boundaryRules.length,
+    attentionInteractionsCount: packet.attentionInteractions.length,
     liveAttentionCount: currentLive.length,
     tokenEstimate: packet.tokenEstimate,
   };
@@ -308,6 +309,7 @@ export function enqueueAttentionTickSoon(): void {
     debounceTimer = null;
     safeTick('upsert_hook');
   }, 10_000);
+  debounceTimer.unref?.();
 }
 
 export function startAttentionScheduler(): void {
@@ -344,6 +346,7 @@ function scheduleDebouncedTick(): void {
     debounceTimer = null;
     safeTick('upsert_hook');
   }, wait);
+  debounceTimer.unref?.();
 }
 
 function safeTick(trigger: AttentionRunTrigger): void {

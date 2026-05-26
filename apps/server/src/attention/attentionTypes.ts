@@ -79,6 +79,7 @@ export type AttentionInputSummary = {
   stakeholdersCount: number;
   preferencesCount: number;
   boundaryRulesCount: number;
+  attentionInteractionsCount: number;
   liveAttentionCount: number;    // 进入 packet 的 <currentAttention> 数量
   tokenEstimate: number;
 };

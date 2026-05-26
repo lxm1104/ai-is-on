@@ -41,7 +41,8 @@ export const ATTENTION_SYSTEM_PROMPT = `你是用户的「注意力管家」。
    c) **忽略**：proposal 内容已过期 / 跟 boundary rules 冲突 / 用户偏好不感兴趣。不要 emit。
 7. \`recommendedAgent\` 字段是可选的提示，仅在确实需要某个专项 agent 跟进时才填，取值范围：'prepareMeeting' | 'commitmentDigest' | 'recapActionItems' | 'caring' | 'syncDraft'；不确定就留空。
 8. 严格遵守用户的 \`<boundaryRules>\` 与 \`<preferences>\`：明确说"不要看 X" 的就不要让 X 出现在结果里；priority 推断要符合用户设定的上限。
-9. 整段输出必须是一个合法 JSON 对象（不要 Markdown、不要解释文字、不要代码块围栏）。
+9. 看 \`<recentAttentionInteractions>\`：ack/ask_agent/create_task 表示用户已经看过、交给 AI 处理或加入任务，短期不要重复输出同 signals/title 的 item，除非有新证据、deadline 临近或 priority 明显升级；dismiss/not_relevant 表示负反馈，不要再输出同类或同 signals item，除非存在明确 P0/P1 新证据。
+10. 整段输出必须是一个合法 JSON 对象（不要 Markdown、不要解释文字、不要代码块围栏）。
 
 输出 schema：
 {
@@ -141,6 +142,23 @@ export function buildAttentionUserMessage(
     blocks.push(`<boundaryRules>\n${lines}\n</boundaryRules>`);
   } else {
     blocks.push('<boundaryRules/>');
+  }
+
+  // recent attention interactions — 用户刚刚如何处理过 attention item
+  if (packet.attentionInteractions.length) {
+    const lines = packet.attentionInteractions
+      .map((i) => {
+        const signals = i.signalIds.length
+          ? ` (signals: ${i.signalIds.slice(0, 4).join(', ')})`
+          : '';
+        return `- [${i.action}] ${i.priority} ${i.title}${signals}`;
+      })
+      .join('\n');
+    blocks.push(
+      `<recentAttentionInteractions count="${packet.attentionInteractions.length}">\n${lines}\n</recentAttentionInteractions>`
+    );
+  } else {
+    blocks.push('<recentAttentionInteractions/>');
   }
 
   // agent proposals — 专项 agent 写的候选（commitment/meeting/recap/...）
