@@ -1,7 +1,7 @@
 ---
 description: "AI is ON recap action-items agent"
 mode: primary
-model: zai-coding-plan/glm-5.1
+model: zhipuai-coding-plan/glm-5.1
 permission:
   bash: allow
   edit: deny

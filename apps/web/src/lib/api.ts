@@ -319,6 +319,26 @@ export async function fetchCardContext(cardId: string): Promise<CardContextProje
   };
 }
 
+// "查看原始信息"：列出 attention 卡片背后的原始 signal（带飞书原文链接）
+export type AttentionSignalDetail = {
+  signalId: string;
+  kind: 'event' | 'context_unit' | 'card' | 'unknown';
+  source?: string;
+  title: string;
+  occurredAt?: string;
+  url?: string;
+  excerpt?: string;
+};
+
+export async function fetchAttentionSignals(
+  attentionId: string
+): Promise<AttentionSignalDetail[]> {
+  const r = await fetch(`/api/attention/${encodeURIComponent(attentionId)}/signals`);
+  if (!r.ok) throw new Error(`attention/${attentionId}/signals ${r.status}`);
+  const j = await r.json();
+  return (j.signals ?? []) as AttentionSignalDetail[];
+}
+
 export type ContextSpace = {
   id: string;
   type: 'project' | 'topic';
@@ -687,6 +707,23 @@ export type WorkMapWriteSummary = {
   bootstrapCompletedAt: string;
 };
 
+// MVP15 §4: 与服务端 PersonAttributes.orgRoleFromMe 对齐。'manager_of_me' /
+// 'report_of_me' 是 Phase A.5 预留的取值，当前不会被填，但保留以减少未来的 schema 变更。
+export type OrgRoleFromMe =
+  | 'peer_same_dept'
+  | 'same_business_cross_function'
+  | 'cross_dept'
+  | 'external'
+  | 'manager_of_me'
+  | 'report_of_me';
+
+// MVP15 §4 (revision): stakeholder 的组织关系打包成对象，含 role + 解析后的业务/职能
+export type StakeholderOrgInfo = {
+  role: OrgRoleFromMe;
+  business?: string;
+  functionLabel?: string;
+};
+
 export type CurrentWorkMap = {
   bootstrapCompletedAt: string | null;
   role: ContextUnit | null;
@@ -696,6 +733,11 @@ export type CurrentWorkMap = {
   risks: ContextUnit[];
   preferences: ContextUnit[];
   relationships: ContextUnit[];
+  /**
+   * MVP15 §4: 与 `relationships` 平行的 orgRole + 解析后业务/职能信息。key 为 person
+   * entity name。key 缺失代表"未连接飞书 / 不可判定"，前端不渲染 chip。
+   */
+  stakeholderOrgRoles: Record<string, StakeholderOrgInfo>;
   spaces: Array<{
     id: string;
     name: string;

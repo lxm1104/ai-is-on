@@ -65,6 +65,7 @@ export function resolveOrCreateEntity(
     confidence: 0.7,
     created_at: now,
     updated_at: now,
+    attributes_json: null, // MVP15: lark profile 由 larkOrgCollector 后填
   };
   try {
     insertContextEntity(row);

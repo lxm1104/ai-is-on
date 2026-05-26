@@ -4,6 +4,8 @@ import {
   fetchWorkMapCurrent,
   generateWorkMapDraft,
   type CurrentWorkMap,
+  type OrgRoleFromMe,
+  type StakeholderOrgInfo,
   type WorkMapDraft,
   type WorkMapDraftResponse,
   type WorkMapProjectDraft,
@@ -226,6 +228,7 @@ export function WorkMapPanel({ onBootstrapChange }: WorkMapPanelProps) {
           <StakeholdersEditor
             value={draft.stakeholders}
             onChange={(stakeholders) => setDraft({ ...draft, stakeholders })}
+            orgRoles={current?.stakeholderOrgRoles}
           />
           <StringListEditor
             label="工作偏好（preference）"
@@ -436,44 +439,51 @@ function DeadlinesEditor({
 function StakeholdersEditor({
   value,
   onChange,
+  orgRoles,
 }: {
   value: Array<{ name: string; note?: string }>;
   onChange: (v: Array<{ name: string; note?: string }>) => void;
+  // MVP15 §4: 服务端已确认 stakeholder 的 orgRole + 解析后 business/functionLabel；按 name 匹配 chip。
+  orgRoles?: Record<string, StakeholderOrgInfo>;
 }) {
   return (
     <section className="wm-section">
       <h4>关键相关人</h4>
-      {value.map((s, i) => (
-        <div key={i} className="wm-row">
-          <input
-            className="wm-input wm-input--short"
-            placeholder="姓名"
-            value={s.name}
-            onChange={(e) => {
-              const n = value.slice();
-              n[i] = { ...n[i], name: e.target.value };
-              onChange(n);
-            }}
-          />
-          <input
-            className="wm-input"
-            placeholder="备注（如：产品 lead）"
-            value={s.note ?? ''}
-            onChange={(e) => {
-              const n = value.slice();
-              n[i] = { ...n[i], note: e.target.value };
-              onChange(n);
-            }}
-          />
-          <button
-            type="button"
-            className="btn btn--ghost"
-            onClick={() => onChange(value.filter((_, j) => j !== i))}
-          >
-            ×
-          </button>
-        </div>
-      ))}
+      {value.map((s, i) => {
+        const info = s.name ? orgRoles?.[s.name] : undefined;
+        return (
+          <div key={i} className="wm-row">
+            <input
+              className="wm-input wm-input--short"
+              placeholder="姓名"
+              value={s.name}
+              onChange={(e) => {
+                const n = value.slice();
+                n[i] = { ...n[i], name: e.target.value };
+                onChange(n);
+              }}
+            />
+            <input
+              className="wm-input"
+              placeholder="备注（如：产品 lead）"
+              value={s.note ?? ''}
+              onChange={(e) => {
+                const n = value.slice();
+                n[i] = { ...n[i], note: e.target.value };
+                onChange(n);
+              }}
+            />
+            {info && <OrgRoleChip info={info} />}
+            <button
+              type="button"
+              className="btn btn--ghost"
+              onClick={() => onChange(value.filter((_, j) => j !== i))}
+            >
+              ×
+            </button>
+          </div>
+        );
+      })}
       <button
         type="button"
         className="btn btn--ghost"
@@ -482,6 +492,36 @@ function StakeholdersEditor({
         + 加相关人
       </button>
     </section>
+  );
+}
+
+// MVP15 §4: orgRole chip。read-only，含三种信息：
+//   - 角色类别（同部门 / 同业务跨职能 / 跨部门 / 外部 / 上级 / 下属）→ 颜色
+//   - business + functionLabel 作为二级信息，跟在主标签后面（如有）
+const ORG_ROLE_LABEL: Record<OrgRoleFromMe, { text: string; cls: string }> = {
+  peer_same_dept: { text: '同部门', cls: 'wm-chip--peer' },
+  same_business_cross_function: { text: '同业务', cls: 'wm-chip--same-biz' },
+  cross_dept: { text: '跨部门', cls: 'wm-chip--cross' },
+  external: { text: '外部', cls: 'wm-chip--ext' },
+  manager_of_me: { text: '上级', cls: 'wm-chip--manager' },
+  report_of_me: { text: '下属', cls: 'wm-chip--report' },
+};
+function OrgRoleChip({ info }: { info: StakeholderOrgInfo }) {
+  const meta = ORG_ROLE_LABEL[info.role];
+  if (!meta) return null;
+  // 二级信息：业务 / 职能；都有时拼成"Lark Base · Engineering"
+  const subParts: string[] = [];
+  if (info.business) subParts.push(info.business);
+  if (info.functionLabel) subParts.push(info.functionLabel);
+  const sub = subParts.length ? ` · ${subParts.join(' / ')}` : '';
+  return (
+    <span
+      className={`wm-chip ${meta.cls}`}
+      title={`飞书推断：${info.role}${info.business ? ` / business=${info.business}` : ''}${info.functionLabel ? ` / fn=${info.functionLabel}` : ''}`}
+    >
+      {meta.text}
+      {sub}
+    </span>
   );
 }
 

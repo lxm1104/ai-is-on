@@ -5,7 +5,13 @@
  * - generateDraft(...)：MVP7.1 才实现，MVP7.0 留个 stub 抛 NotImplemented
  */
 
-import { getSetting, listContextSpaces, listSpaceLinks } from '../db.js';
+import {
+  getContextEntityById,
+  getSetting,
+  listContextSpaces,
+  listPersonEntitiesWithOpenIdAlias,
+  listSpaceLinks,
+} from '../db.js';
 import { listActiveContextUnits } from '../context/contextStore.js';
 import { listActiveBoundaryRules } from '../boundary/boundaryStore.js';
 import { scoreContextUnit } from '../context/activeContext.js';
@@ -17,11 +23,24 @@ import type {
 } from './workMapTypes.js';
 import { writeWorkMap } from './workMapWriter.js';
 import {
+  parsePersonAttributesFromRow,
+  type OrgRoleFromMe,
+  type PersonAttributes,
+} from '../context/personAttributes.js';
+import { computeOrgRoleFromMe } from '../context/personOrgRole.js';
+import {
   WORK_MAP_DRAFT_SYSTEM_PROMPT,
   parseWorkMapDraft,
   sanitizeExcerpt,
 } from './workMapDraftPrompt.js';
 import { runOneShot } from '../triage/backgroundRuntime.js';
+
+// MVP15 §4: stakeholder 在组织里的关系信息（前端 chip + attention prompt 都消费这个结构）
+export type StakeholderOrgInfo = {
+  role: OrgRoleFromMe;
+  business?: string;
+  functionLabel?: string;
+};
 
 export type CurrentWorkMap = {
   bootstrapCompletedAt: string | null;
@@ -32,6 +51,11 @@ export type CurrentWorkMap = {
   risks: ContextUnit[];
   preferences: ContextUnit[];
   relationships: ContextUnit[];
+  /**
+   * MVP15 §4: 与 `relationships` 平行的 orgRole + 解析后业务/职能信息，key 为 person
+   * entity 的 name。缺失 = 未连接飞书 / 不可判定。前端用来渲染 stakeholder chip。
+   */
+  stakeholderOrgRoles: Record<string, StakeholderOrgInfo>;
   spaces: Array<{
     id: string;
     name: string;
@@ -83,6 +107,8 @@ export function getCurrentWorkMap(): CurrentWorkMap {
     (r) => r.source === 'manual'
   );
 
+  const stakeholderOrgRoles = computeStakeholderOrgRoles(relationships);
+
   return {
     bootstrapCompletedAt,
     role,
@@ -92,9 +118,57 @@ export function getCurrentWorkMap(): CurrentWorkMap {
     risks,
     preferences,
     relationships,
+    stakeholderOrgRoles,
     spaces,
     boundaryRules,
   };
+}
+
+/**
+ * MVP15 §4: 把"所有已知 person entity"映射到 orgRole（key=entity.name）。
+ *
+ * 关键设计变更（2026-05-26 dogfood 反馈）：
+ *   - 旧实现只覆盖**已确认 relationship** 的人 → 草稿阶段没法显示 chip
+ *   - 新实现覆盖**所有有 attributes_json 的 person entity**（≈ larkOrgCollector 同步过的）
+ *   - 这样 generateWorkMapDraft 出的草稿里只要某个名字匹配已知 entity，chip 就出来
+ *
+ * orgRole 在 read 时现算，**不依赖 attributes_json.orgRoleFromMe 是否预先写入**。
+ * 这是为了兼容这种情况：collector 同步某 person 时 self 还没缓存，导致 orgRoleFromMe
+ * 没写进 attrs；下次 self 同步成功后，无需重刷其他 entity 也能得到正确 orgRole。
+ *
+ * 入参 relationships 现在不需要——保留签名是为了减少调用方改动。
+ */
+function computeStakeholderOrgRoles(
+  _relationships: ContextUnit[]
+): Record<string, StakeholderOrgInfo> {
+  const out: Record<string, StakeholderOrgInfo> = {};
+  const self = loadSelfAttributes();
+  const selfId = getSetting('self_person_entity_id');
+  const candidates = listPersonEntitiesWithOpenIdAlias(500);
+  for (const row of candidates) {
+    // 跳过 self —— 自己不该是自己的 stakeholder
+    if (selfId && row.id === selfId) continue;
+    if (!row.attributes_json) continue;
+    const target = parsePersonAttributesFromRow(row);
+    if (!target) continue;
+    // 双保险：open_id 也对比
+    if (self && target.larkOpenId && target.larkOpenId === self.larkOpenId) continue;
+    const role = computeOrgRoleFromMe(self, target);
+    if (!role) continue;
+    const info: StakeholderOrgInfo = { role };
+    if (target.larkDeptBusiness) info.business = target.larkDeptBusiness;
+    if (target.larkDeptFunctionLabel) info.functionLabel = target.larkDeptFunctionLabel;
+    out[row.name] = info;
+  }
+  return out;
+}
+
+function loadSelfAttributes(): PersonAttributes | null {
+  const id = getSetting('self_person_entity_id');
+  if (!id) return null;
+  const row = getContextEntityById(id);
+  if (!row) return null;
+  return parsePersonAttributesFromRow(row);
 }
 
 export function confirmWorkMap(draft: WorkMapDraft): WorkMapWriteSummary {
@@ -290,6 +364,23 @@ export async function generateWorkMapDraft(
   }
 
   const draft = parseWorkMapDraft(rawText);
+
+  // MVP15 §4 (revision): 防御性过滤 self —— 即使 LLM 没遵守 prompt 把自己加进 stakeholders，
+  // 服务端也兜底剔除。按 self.larkLocalizedName 字符串相等比较（trim 后）。
+  const selfAttrs = loadSelfAttributes();
+  const selfName = selfAttrs?.larkLocalizedName?.trim();
+  if (selfName && draft.stakeholders.length > 0) {
+    const before = draft.stakeholders.length;
+    draft.stakeholders = draft.stakeholders.filter(
+      (s) => s.name.trim() !== selfName
+    );
+    if (draft.stakeholders.length < before) {
+      console.log(
+        `[workMapDraft] filtered self ('${selfName}') from stakeholders: ${before} → ${draft.stakeholders.length}`
+      );
+    }
+  }
+
   return {
     draft,
     tokenEstimate,

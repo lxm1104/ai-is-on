@@ -449,6 +449,26 @@ ensureColumn('boundary_rules', 'impact_scope', "TEXT NOT NULL DEFAULT 'self'");
 // （via='person'|'doc'|'chat_seed' ...）。upsertContextSpaceLinkBestHit cap 5 条 evidence。
 ensureColumn('context_space_links', 'reason_json', 'TEXT');
 
+// MVP15 §3.1 / §4: context_entities 加 attributes_json，承载 person 节点的 lark profile
+// （larkOpenId / larkDepartmentName / larkIsCrossTenant / larkSyncedAt 等）以及推断的
+// orgRoleFromMe。schema 与 parser 见 apps/server/src/context/personAttributes.ts。
+// 列长期 nullable —— 仅 person entity 写、其他 type 留 NULL。
+ensureColumn('context_entities', 'attributes_json', 'TEXT');
+
+// MVP15 §4 (revision): 部门名 → {business, function} 的解析缓存。表名不带 lark：
+// 解析逻辑跟产品/组织无关，将来接入其他 SaaS 通讯录也能复用。
+// 一个 unique dept_name 字符串解析一次，永久缓存（部门改名时手动失效）。
+db.exec(`
+CREATE TABLE IF NOT EXISTS org_department_taxonomy (
+  dept_name TEXT PRIMARY KEY,
+  business TEXT,                            -- "Lark Base" / "TikTok" / "懂车帝"；不可解析时 NULL
+  function_label TEXT,                      -- function_path 的第一段，方便 chip 直接展示
+  function_path_json TEXT,                  -- JSON 数组，例 ["Engineering","Infra","Performance"]
+  parsed_by TEXT NOT NULL DEFAULT 'llm',    -- 'llm' | 'manual' | 'rule'，预留多源覆盖
+  parsed_at TEXT NOT NULL
+);
+`);
+
 // MVP13 §3.1: Space intent + Work Map ref
 ensureColumn('context_spaces', 'intent_json', "TEXT NOT NULL DEFAULT '{}'");
 ensureColumn('context_spaces', 'work_map_ref_json', 'TEXT');
@@ -1141,13 +1161,90 @@ export type ContextEntityRow = {
   confidence: number;
   created_at: string;
   updated_at: string;
+  // MVP15: type='person' 时承载 PersonAttributes（含 lark profile + orgRoleFromMe），
+  // 其他 type 留 NULL。schema 见 apps/server/src/context/personAttributes.ts。
+  attributes_json: string | null;
 };
 
 export function insertContextEntity(row: ContextEntityRow) {
   db.prepare(
     `INSERT INTO context_entities
-     (id, type, name, aliases_json, source, confidence, created_at, updated_at)
-     VALUES (@id, @type, @name, @aliases_json, @source, @confidence, @created_at, @updated_at)`
+     (id, type, name, aliases_json, source, confidence, created_at, updated_at, attributes_json)
+     VALUES (@id, @type, @name, @aliases_json, @source, @confidence, @created_at, @updated_at, @attributes_json)`
+  ).run(row);
+}
+
+// MVP15: 给 person entity 写入 PersonAttributes JSON。仅更新 attributes_json + updated_at，
+// 不动 confidence / name / aliases。调用方负责序列化（用 personAttributes.serialize）。
+export function updateContextEntityAttributes(
+  entityId: string,
+  attributesJson: string | null,
+  updatedAt: string
+): void {
+  db.prepare(
+    `UPDATE context_entities SET attributes_json = ?, updated_at = ? WHERE id = ?`
+  ).run(attributesJson, updatedAt, entityId);
+}
+
+// MVP15: 列出有 open_id alias 的 person entity（aliases_json 里含 ou_ 前缀的项）。
+// larkOrgCollector 用来枚举可同步的人员。limit 后再由 collector 在 JS 层按 TTL 过滤。
+// 注意：aliases_json 是 JSON 字符串数组；SQL LIKE 是粗筛，最终匹配在 JS 里再确认。
+export function listPersonEntitiesWithOpenIdAlias(limit = 500): ContextEntityRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM context_entities
+        WHERE type = 'person'
+          AND aliases_json IS NOT NULL
+          AND aliases_json LIKE '%ou_%'
+        ORDER BY updated_at DESC
+        LIMIT ?`
+    )
+    .all(limit) as ContextEntityRow[];
+}
+
+// -------- MVP15 §4 (revision): org_department_taxonomy --------
+
+export type OrgDeptTaxonomyRow = {
+  dept_name: string;
+  business: string | null;
+  function_label: string | null;
+  function_path_json: string | null;
+  parsed_by: string;
+  parsed_at: string;
+};
+
+export function getDeptTaxonomy(deptName: string): OrgDeptTaxonomyRow | null {
+  return (
+    (db
+      .prepare(`SELECT * FROM org_department_taxonomy WHERE dept_name = ?`)
+      .get(deptName) as OrgDeptTaxonomyRow | undefined) ?? null
+  );
+}
+
+export function getDeptTaxonomiesBulk(deptNames: string[]): Map<string, OrgDeptTaxonomyRow> {
+  const out = new Map<string, OrgDeptTaxonomyRow>();
+  if (deptNames.length === 0) return out;
+  const placeholders = deptNames.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT * FROM org_department_taxonomy WHERE dept_name IN (${placeholders})`
+    )
+    .all(...deptNames) as OrgDeptTaxonomyRow[];
+  for (const r of rows) out.set(r.dept_name, r);
+  return out;
+}
+
+export function upsertDeptTaxonomy(row: OrgDeptTaxonomyRow): void {
+  db.prepare(
+    `INSERT INTO org_department_taxonomy
+       (dept_name, business, function_label, function_path_json, parsed_by, parsed_at)
+     VALUES (@dept_name, @business, @function_label, @function_path_json, @parsed_by, @parsed_at)
+     ON CONFLICT(dept_name) DO UPDATE SET
+       business = excluded.business,
+       function_label = excluded.function_label,
+       function_path_json = excluded.function_path_json,
+       parsed_by = excluded.parsed_by,
+       parsed_at = excluded.parsed_at`
   ).run(row);
 }
 

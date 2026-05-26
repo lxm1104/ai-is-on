@@ -22,6 +22,7 @@ import { PREPARE_MEETING_SYSTEM_PROMPT } from '../agents/prepareMeetingAgent.js'
 import { SYNC_DRAFT_SYSTEM_PROMPT } from '../agents/syncDraftAgent.js';
 import { RECAP_SYSTEM_PROMPT } from '../agents/recapActionItemsAgent.js';
 import { RANKER_SYSTEM_PROMPT } from '../spaces/llmChatAffinityRanker.js';
+import { DEPT_TAXONOMY_SYSTEM_PROMPT } from '../util/departmentTaxonomyPrompt.js';
 
 export type OpencodeAgentName =
   | 'aiisn-chat'
@@ -32,7 +33,8 @@ export type OpencodeAgentName =
   | 'aiisn-prepare-meeting'
   | 'aiisn-sync-draft'
   | 'aiisn-recap'
-  | 'aiisn-ranker';
+  | 'aiisn-ranker'
+  | 'aiisn-dept-taxonomy';
 
 type Permission = 'allow' | 'ask' | 'deny';
 type AgentDef = {
@@ -105,6 +107,12 @@ const AGENTS: readonly AgentDef[] = [
     description: 'AI is ON MVP13 chat_affinity LLM ranker',
     permission: READ_ONLY,
     prompt: RANKER_SYSTEM_PROMPT,
+  },
+  {
+    name: 'aiisn-dept-taxonomy',
+    description: 'AI is ON MVP15 部门名 → business + functionPath 解析',
+    permission: READ_ONLY,
+    prompt: DEPT_TAXONOMY_SYSTEM_PROMPT,
   },
 ];
 

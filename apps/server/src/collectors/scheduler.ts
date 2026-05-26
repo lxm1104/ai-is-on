@@ -12,6 +12,7 @@ import { imCollector } from './imCollector.js';
 import { driveCollector } from './driveCollector.js';
 import { driveCommentCollector } from './driveCommentCollector.js';
 import { meetingArtifactCollector } from './meetingArtifactCollector.js';
+import { larkOrgCollector } from './larkOrgCollector.js';
 import { enqueueEvents } from '../triage/triageQueue.js';
 import type { Collector } from './types.js';
 import { insertMinimalEventContextUnit } from '../context/contextStore.js';
@@ -60,6 +61,10 @@ export function startCollectorScheduler() {
   if (config.meetingArtifactEnabled) {
     scheduled.push({ collector: meetingArtifactCollector, running: false });
   }
+  // MVP15 §4: lark org info（self + 已存 person entity 的 attributes 刷新）
+  // 不挡其他 collector，无任何 feature flag —— 失败会自动 retry，permission_denied
+  // 自停一轮，对用户无负作用。
+  scheduled.push({ collector: larkOrgCollector, running: false });
 
   for (const s of scheduled) {
     // Kick off a first run after a short delay so server is fully up.
