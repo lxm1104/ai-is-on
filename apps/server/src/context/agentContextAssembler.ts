@@ -20,6 +20,8 @@ import {
   type ContextSpaceLinkRow,
   type ContextSpaceRow,
   type TriggerRow,
+  getContextEntityById,
+  getContextEntityByTypeName,
   getSetting,
   listSpaceLinks,
   listSpacesForTarget,
@@ -27,6 +29,12 @@ import {
 import { evaluateCard } from '../boundary/boundaryEvaluator.js';
 import type { Priority } from '../boundary/BoundaryRule.js';
 import { resolveOrCreateEntity } from './entityResolver.js';
+import {
+  parsePersonAttributesFromRow,
+  type OrgRoleFromMe,
+  type PersonAttributes,
+} from './personAttributes.js';
+import { computeOrgRoleFromMe } from './personOrgRole.js';
 
 export type PacketSlice =
   | 'subject'
@@ -54,6 +62,13 @@ export type StakeholderInPacket = {
   name: string;
   /** relationship ContextUnit 的 meaning，可选。 */
   note?: string;
+  // MVP15 §4: 由 larkOrgCollector 写入的 PersonAttributes.orgRoleFromMe 透出，
+  // attention prompt 据此调权（external 降一档、cross_dept 倾向 P2）。
+  // self 还没拉到飞书数据时返回 undefined（避免冒充判断）。
+  orgRole?: OrgRoleFromMe;
+  // MVP15 §4 (revision): 解析后的业务 / 职能，供 attention prompt 做更细判断。
+  business?: string;
+  functionLabel?: string;
 };
 
 export type SubjectInPacket = {
@@ -471,20 +486,70 @@ export function collectStakeholders(
     if (seen.has(personEntity.name)) continue;
     seen.add(personEntity.name);
     out.push({ name: personEntity.name, note: u.meaning });
-    if (out.length >= cap) return out;
+    if (out.length >= cap) break;
   }
   // 2) focal unit 的 person entities 兜底
-  if (focal) {
+  if (out.length < cap && focal) {
     for (const e of focal.entities) {
       if (e.type !== 'person') continue;
       if (STAKEHOLDER_NAME_DENY.has(e.name)) continue;
       if (seen.has(e.name)) continue;
       seen.add(e.name);
       out.push({ name: e.name });
-      if (out.length >= cap) return out;
+      if (out.length >= cap) break;
     }
   }
+  // 3) MVP15 §4: 给每个 stakeholder 推断 orgRoleFromMe。
+  // self attrs 在本次调用内复用一份；失败时 orgRole 留空——不冒充。
+  enrichStakeholdersWithOrgRole(out);
   return out;
+}
+
+function enrichStakeholdersWithOrgRole(items: StakeholderInPacket[]): void {
+  if (items.length === 0) return;
+  const self = getSelfPersonAttributesCached();
+  for (const item of items) {
+    const target = findPersonAttributesByName(item.name);
+    if (!target) continue;
+    const role = computeOrgRoleFromMe(self, target);
+    if (role) item.orgRole = role;
+    if (target.larkDeptBusiness) item.business = target.larkDeptBusiness;
+    if (target.larkDeptFunctionLabel) item.functionLabel = target.larkDeptFunctionLabel;
+  }
+}
+
+// ----------------------------------------------------------------------------
+// MVP15 §4: self / target PersonAttributes 解析（agentContextAssembler 内部专用）
+// ----------------------------------------------------------------------------
+const SELF_ENTITY_SETTING_KEY = 'self_person_entity_id';
+const SELF_ATTRS_CACHE_TTL_MS = 60_000;
+let _selfAttrsCache: { attrs: PersonAttributes | null; cachedAt: number } | null = null;
+
+function getSelfPersonAttributesCached(): PersonAttributes | null {
+  const now = Date.now();
+  if (_selfAttrsCache && now - _selfAttrsCache.cachedAt < SELF_ATTRS_CACHE_TTL_MS) {
+    return _selfAttrsCache.attrs;
+  }
+  const id = getSetting(SELF_ENTITY_SETTING_KEY);
+  let attrs: PersonAttributes | null = null;
+  if (id) {
+    const row = getContextEntityById(id);
+    if (row) attrs = parsePersonAttributesFromRow(row);
+  }
+  _selfAttrsCache = { attrs, cachedAt: now };
+  return attrs;
+}
+
+/**
+ * 按 entity.name 反查 person attributes。focal-unit / work_map relationship 把人名作为
+ * entity 名（也是当前 stakeholder slice 的标识），匹配 type='person' AND name=...。
+ * resolveAliased 不再加，因为 attributes 总写在 canonical id 上、collectStakeholders
+ * 已通过 name 去重。
+ */
+function findPersonAttributesByName(name: string): PersonAttributes | null {
+  const row = getContextEntityByTypeName('person', name);
+  if (!row) return null;
+  return parsePersonAttributesFromRow(row);
 }
 
 function collectLatestActionResult(focal: ContextUnit): ContextUnit | null {
@@ -645,7 +710,9 @@ const GLOBAL_SLICE_CAPS = {
   uncertainties: 6,
   recentEvents: 20,
   topActive: 15,
-  stakeholders: 8,
+  // MVP15 §4 (revision): 8 → 12。每行带 orgRole + biz + fn ~50 token，12 行 ~600 token，
+  // 仍在 packet 整体预算内。给 attention 看到更多协作者，特别是 same_business_cross_function 的同事。
+  stakeholders: 12,
   preferences: 10,
   boundaryRules: 10,
   attentionInteractions: 20,

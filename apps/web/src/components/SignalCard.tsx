@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import type { CardAction, ContextUnit, SignalCard as SignalCardT } from '../types';
 import {
+  fetchAttentionSignals,
   fetchCardContext,
   postCardLarkTask,
   postActionItemsConfirm,
   postAttentionFeedback,
   postCardCorrection,
   postContextFeedback,
+  type AttentionSignalDetail,
   type LarkTaskCreateResult,
   type CorrectionApplyResult,
 } from '../lib/api';
@@ -94,6 +96,34 @@ export function SignalCardView(props: {
   const [taskBusy, setTaskBusy] = useState(false);
   const [taskResult, setTaskResult] = useState<LarkTaskCreateResult | null>(null);
 
+  // "查看原始信息"：抽屉里列出 signalIds 对应的原始 events（含飞书原文 URL）
+  const [originOpen, setOriginOpen] = useState(false);
+  const [originList, setOriginList] = useState<AttentionSignalDetail[] | null>(null);
+  const [originErr, setOriginErr] = useState<string | null>(null);
+
+  async function ensureOriginLoaded() {
+    if (originList !== null) return;
+    try {
+      const list = await fetchAttentionSignals(card.id);
+      setOriginList(list);
+    } catch (e) {
+      setOriginErr(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function toggleOrigin() {
+    const next = !originOpen;
+    setOriginOpen(next);
+    if (next) await ensureOriginLoaded();
+  }
+
+  // "为什么相关"列表项尝试匹配到 originList 里的 url（两个面板共享底层 signalIds）
+  function urlForUnit(unitId: string): string | undefined {
+    if (!originList) return undefined;
+    const hit = originList.find((d) => d.signalId === unitId);
+    return hit?.url;
+  }
+
   async function submitAttentionFeedback(
     type: 'not_relevant' | 'add_preference',
     payload: Record<string, unknown>
@@ -131,6 +161,9 @@ export function SignalCardView(props: {
     try {
       const p = await fetchCardContext(card.id);
       setCtxUnits(p.relatedUnits);
+      // 同时把 originList 拉起来（attention 卡片二者共享 signalIds），
+      // 让"为什么相关"列表里的每项也能直接给出原文链接。
+      if (isAttention) void ensureOriginLoaded();
     } catch (e) {
       setCtxErr(e instanceof Error ? e.message : String(e));
     }
@@ -320,6 +353,57 @@ export function SignalCardView(props: {
           打开原文 ↗
         </a>
       )}
+      {isAttention && (
+        <div className="card__origin">
+          <button
+            type="button"
+            className="card__origin-toggle"
+            onClick={() => void toggleOrigin()}
+            aria-expanded={originOpen}
+          >
+            {originOpen ? '▾' : '▸'} 查看原始信息
+            {originList !== null && originList.length > 0 ? ` · ${originList.length}` : ''}
+          </button>
+          {originOpen && (
+            <div className="card__origin-body">
+              {originErr && <div className="card__origin-err">{originErr}</div>}
+              {originList === null && !originErr && (
+                <div className="card__origin-empty">加载中…</div>
+              )}
+              {originList !== null && originList.length === 0 && !originErr && (
+                <div className="card__origin-empty">未找到关联的原始信号。</div>
+              )}
+              {originList && originList.length > 0 && (
+                <ul className="card__origin-list">
+                  {originList.map((d) => (
+                    <li key={d.signalId} className="card__origin-item">
+                      <span className={`ctx-kind ctx-kind--${d.kind}`}>
+                        {d.source ?? d.kind}
+                      </span>
+                      <span className="card__origin-title">{d.title}</span>
+                      {d.occurredAt && (
+                        <span className="card__origin-time">{fmtTime(d.occurredAt)}</span>
+                      )}
+                      {d.url ? (
+                        <a
+                          className="card__origin-link"
+                          href={d.url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          打开 ↗
+                        </a>
+                      ) : (
+                        <span className="card__origin-nourl">无原文链接</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       <div className="card__ctx">
         <button
           type="button"
@@ -341,17 +425,30 @@ export function SignalCardView(props: {
             )}
             {ctxUnits && ctxUnits.length > 0 && (
               <ul className="card__ctx-list">
-                {ctxUnits.map((u) => (
-                  <li key={u.id} className="card__ctx-item">
-                    <span className={`ctx-kind ctx-kind--${u.kind}`}>{u.kind}</span>
-                    <span className="card__ctx-title">
-                      <ResolvedText text={u.title} />
-                    </span>
-                    {u.time?.dueAt && (
-                      <span className="card__ctx-due">due {fmtDate(u.time.dueAt)}</span>
-                    )}
-                  </li>
-                ))}
+                {ctxUnits.map((u) => {
+                  const link = urlForUnit(u.id);
+                  return (
+                    <li key={u.id} className="card__ctx-item">
+                      <span className={`ctx-kind ctx-kind--${u.kind}`}>{u.kind}</span>
+                      <span className="card__ctx-title">
+                        <ResolvedText text={u.title} />
+                      </span>
+                      {u.time?.dueAt && (
+                        <span className="card__ctx-due">due {fmtDate(u.time.dueAt)}</span>
+                      )}
+                      {link && (
+                        <a
+                          className="card__ctx-link"
+                          href={link}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          原文 ↗
+                        </a>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             )}
             <button

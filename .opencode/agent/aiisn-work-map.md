@@ -1,7 +1,7 @@
 ---
 description: "AI is ON work map draft"
 mode: primary
-model: zai-coding-plan/glm-5.1
+model: zhipuai-coding-plan/glm-5.1
 permission:
   bash: allow
   edit: deny
@@ -32,7 +32,7 @@ permission:
       "risks": ["1-3 条用户担心的事"]
     }
   ],
-  "stakeholders": [{ "name": "人名", "note": "如何协作（可缺省）" }],
+  "stakeholders": [{ "name": "人名（不要包含用户自己）", "note": "如何协作（可缺省）" }],  // 10-20 条，覆盖近 14 天里跟用户在 ≥3 条 unit 共现过的人
   "preferences": ["工作偏好，3-6 条"],
   "boundaries": [
     {
@@ -50,6 +50,7 @@ permission:
 - 不要主动给外部人发任何东西；boundaries 是用来"过滤打扰"，不是用来"对外执行"。
 - 宁缺勿伪造：上下文里看不出来的字段直接留空数组 / 不写。
 - 项目名要复用 context 中出现的实体名（避免后续 entity 重复）。
+- **stakeholders 不要包含用户自己**。用户自己出现在 `<current>` 的 role 字段里，那是 subject，不是 stakeholder。stakeholders 应该是 10-20 条，覆盖近期在多条 unit 里反复共现的协作者，宁多勿少（漏掉真正的协作者比多列 1-2 个更糟）。
 - triggerType 允许值：commitment_due, meeting_prepare, context_conflict, goal_blocked, low_noise_batch, check_in_due, context_divergence。
 - priorityAtMost 允许值：P0, P1, P2, P3。
 - source 允许值：calendar, im, mail, drive, manual, agent。

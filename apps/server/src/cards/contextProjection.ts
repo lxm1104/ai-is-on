@@ -1,4 +1,4 @@
-import { getCard, db } from '../db.js';
+import { getCard, db, type EventRow } from '../db.js';
 import {
   findEventContextUnitId,
   getContextUnitById,
@@ -131,4 +131,126 @@ export function projectCardContext(cardId: string): CardContextProjection {
     if (unit) out.push(unit);
   }
   return { cardId, eventContextUnitId: eventUnitId, relatedUnits: out };
+}
+
+/**
+ * MVP14 后续：给前端"查看原始信息"用。
+ * 把 attention_items.signal_ids_json 里的 id 解开成「人类可看的原始信号」列表，
+ * 关键是带上 events.url（飞书原文链接），让用户能跳出去看具体哪条记录有新进展。
+ *
+ * 兼容三种 id 来源（与 resolveAttentionSignals 一致）：
+ *   1) context_units.id  → 若 origin.kind='event'，回查 events 拿 url
+ *   2) cards.id          → raw_event_id 回查 events
+ *   3) events.id         → 直接查
+ *
+ * 去重：以最终落到的 events.id 或 context_unit.id 为 key。
+ */
+export type AttentionSignalDetail = {
+  signalId: string;            // 原始 signalIds 里的 id
+  kind: 'event' | 'context_unit' | 'card' | 'unknown';
+  source?: string;             // events.source: 'drive'|'im'|'mail'|'calendar'|...
+  title: string;
+  occurredAt?: string;         // ISO
+  url?: string;                // 飞书原文链接（events.url）
+  excerpt?: string;            // 内容预览，截断到 200 字符
+};
+
+function getEventRowById(id: string): EventRow | null {
+  const row = db.prepare(`SELECT * FROM events WHERE id = ?`).get(id) as
+    | EventRow
+    | undefined;
+  return row ?? null;
+}
+
+function eventRowToDetail(signalId: string, ev: EventRow): AttentionSignalDetail {
+  return {
+    signalId,
+    kind: 'event',
+    source: ev.source,
+    title: ev.title ?? ev.text.slice(0, 80) ?? '(无标题)',
+    occurredAt: ev.occurred_at,
+    url: ev.url ?? undefined,
+    excerpt: ev.text ? ev.text.slice(0, 200) : undefined,
+  };
+}
+
+function unitToDetail(
+  signalId: string,
+  unit: ContextUnit,
+  ev: EventRow | null
+): AttentionSignalDetail {
+  return {
+    signalId,
+    kind: ev ? 'event' : 'context_unit',
+    source: ev?.source,
+    title: unit.title || ev?.title || '(无标题)',
+    occurredAt: unit.time?.occurredAt ?? ev?.occurred_at ?? unit.createdAt,
+    url: ev?.url ?? undefined,
+    excerpt: (unit.content || ev?.text || '').slice(0, 200) || undefined,
+  };
+}
+
+export function resolveAttentionSignalDetails(
+  ids: string[]
+): AttentionSignalDetail[] {
+  const seenKey = new Set<string>();
+  const out: AttentionSignalDetail[] = [];
+
+  for (const sid of ids) {
+    // (1) context_unit.id
+    const unit = getContextUnitById(sid);
+    if (unit) {
+      let ev: EventRow | null = null;
+      if (unit.origin.kind === 'event' && unit.origin.refId) {
+        ev = getEventRowById(unit.origin.refId);
+      }
+      const key = ev ? `event:${ev.id}` : `unit:${unit.id}`;
+      if (seenKey.has(key)) continue;
+      seenKey.add(key);
+      out.push(unitToDetail(sid, unit, ev));
+      continue;
+    }
+
+    // (2) cards.id（旧路径）
+    const card = getCard(sid);
+    if (card) {
+      let ev: EventRow | null = null;
+      if (card.raw_event_id) ev = getEventRowById(card.raw_event_id);
+      const key = ev ? `event:${ev.id}` : `card:${card.id}`;
+      if (seenKey.has(key)) continue;
+      seenKey.add(key);
+      if (ev) {
+        out.push(eventRowToDetail(sid, ev));
+      } else {
+        out.push({
+          signalId: sid,
+          kind: 'card',
+          title: card.title,
+          occurredAt: card.created_at,
+          url: card.source_url ?? undefined,
+          excerpt: card.summary ? card.summary.slice(0, 200) : undefined,
+        });
+      }
+      continue;
+    }
+
+    // (3) events.id
+    const ev = getEventRowById(sid);
+    if (ev) {
+      const key = `event:${ev.id}`;
+      if (seenKey.has(key)) continue;
+      seenKey.add(key);
+      out.push(eventRowToDetail(sid, ev));
+      continue;
+    }
+
+    // (4) 完全找不到：留个壳，前端就不显示链接
+    out.push({
+      signalId: sid,
+      kind: 'unknown',
+      title: `未解析的 signal（${sid.slice(0, 8)}）`,
+    });
+  }
+
+  return out;
 }
