@@ -469,6 +469,65 @@ CREATE TABLE IF NOT EXISTS org_department_taxonomy (
 );
 `);
 
+// ============ MVP15A: 图归纳 ============
+// 详见 docs/MVP15A-Work-Map-图归纳与协作圈技术方案.md §6。
+//
+// 1. entity_edges：承载 person↔person / person↔project 两类边
+//    （MVP15C 预留 project↔project；schema 已能容纳）。
+// 2. work_item_edges：承载 ContextUnit↔ContextUnit 的 follows 边
+//    （MVP15B 扩 blocks/depends_on/derived_from）。
+// 3. org_project_taxonomy：LLM project entity 去重缓存（仿 dept_taxonomy）。
+db.exec(`
+CREATE TABLE IF NOT EXISTS entity_edges (
+  id TEXT PRIMARY KEY,
+  edge_kind TEXT NOT NULL,              -- 'person_person' | 'person_project' | 'project_project'(预留)
+  from_id TEXT NOT NULL,                -- canonical entity id（已 resolveAliased）
+  to_id TEXT NOT NULL,                  -- canonical entity id；person_person 时强制 from_id < to_id
+  role_or_type TEXT,                    -- person_project: 'owner'|'driver'|'reviewer'|'contributor'|'stakeholder'|'observer'
+                                        -- person_person: NULL（MVP15A），MVP15B LLM 写 collabType
+  weight REAL NOT NULL DEFAULT 0,       -- recency-decayed cooccur count（30d 半衰）
+  business_relation TEXT,               -- 仅 person_person：'same_business'|'cross_business'|'external'|'unknown'
+  shared_ids_json TEXT,                 -- 仅 person_person：sharedProjectEntityIds[]
+  evidence_unit_ids_json TEXT NOT NULL DEFAULT '[]',  -- ≤10 条 unit id，用于 hover 解释
+  detected_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_entity_edges_kind ON entity_edges(edge_kind);
+CREATE INDEX IF NOT EXISTS idx_entity_edges_from ON entity_edges(edge_kind, from_id);
+CREATE INDEX IF NOT EXISTS idx_entity_edges_to ON entity_edges(edge_kind, to_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_entity_edges
+  ON entity_edges(edge_kind, from_id, to_id);
+
+CREATE TABLE IF NOT EXISTS work_item_edges (
+  id TEXT PRIMARY KEY,
+  from_unit_id TEXT NOT NULL,
+  to_unit_id TEXT NOT NULL,
+  type TEXT NOT NULL,                   -- MVP15A 只写 'follows'；MVP15B 加 'blocks'|'depends_on'|'derived_from'
+  status TEXT NOT NULL DEFAULT 'active',-- 'active'|'resolved'|'stale'
+  reason TEXT NOT NULL,                 -- ≤200 字解释
+  evidence_unit_ids_json TEXT NOT NULL DEFAULT '[]',
+  detected_at TEXT NOT NULL,
+  resolved_at TEXT,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_work_item_edges_from ON work_item_edges(from_unit_id);
+CREATE INDEX IF NOT EXISTS idx_work_item_edges_to ON work_item_edges(to_unit_id);
+CREATE INDEX IF NOT EXISTS idx_work_item_edges_status ON work_item_edges(status);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_work_item_edges
+  ON work_item_edges(from_unit_id, to_unit_id, type);
+
+CREATE TABLE IF NOT EXISTS org_project_taxonomy (
+  canonical_name TEXT PRIMARY KEY,
+  aliases_json TEXT NOT NULL,           -- JSON 数组：包含 canonical_name 自身
+  summary TEXT,                         -- LLM 一句话项目摘要，可空
+  parsed_by TEXT NOT NULL DEFAULT 'llm',-- 'llm'|'manual'|'rule'
+  parsed_at TEXT NOT NULL
+);
+-- 反向索引粗筛：从 entity 名 → canonical_name，aliases_json 里 LIKE 匹配后应用层精确匹配
+CREATE INDEX IF NOT EXISTS idx_org_project_aliases ON org_project_taxonomy(aliases_json);
+`);
+
 // MVP13 §3.1: Space intent + Work Map ref
 ensureColumn('context_spaces', 'intent_json', "TEXT NOT NULL DEFAULT '{}'");
 ensureColumn('context_spaces', 'work_map_ref_json', 'TEXT');
@@ -2601,4 +2660,278 @@ export function nextAttentionGeneration(): number {
     )
     .get() as { max_gen: number };
   return (row?.max_gen ?? 0) + 1;
+}
+
+// ============================================================================
+// MVP15A: 图归纳 — entity_edges / work_item_edges / org_project_taxonomy helpers
+// 详见 docs/MVP15A-Work-Map-图归纳与协作圈技术方案.md §6 §7.1
+// ============================================================================
+
+export type EdgeKind = 'person_person' | 'person_project' | 'project_project';
+
+export type EntityEdgeRow = {
+  id: string;
+  edge_kind: EdgeKind;
+  from_id: string;
+  to_id: string;
+  role_or_type: string | null;
+  weight: number;
+  business_relation: string | null;
+  shared_ids_json: string | null;
+  evidence_unit_ids_json: string;
+  detected_at: string;
+  last_seen_at: string;
+  updated_at: string;
+};
+
+/**
+ * upsert 一条 entity_edge。
+ * UNIQUE 约束在 (edge_kind, from_id, to_id) 上；命中则更新 weight / role_or_type /
+ * business_relation / shared_ids_json / evidence / last_seen_at / updated_at，
+ * detected_at 保持首次落库时间。
+ */
+export function upsertEntityEdge(row: EntityEdgeRow): void {
+  db.prepare(
+    `INSERT INTO entity_edges
+       (id, edge_kind, from_id, to_id, role_or_type, weight, business_relation,
+        shared_ids_json, evidence_unit_ids_json, detected_at, last_seen_at, updated_at)
+     VALUES (@id, @edge_kind, @from_id, @to_id, @role_or_type, @weight, @business_relation,
+             @shared_ids_json, @evidence_unit_ids_json, @detected_at, @last_seen_at, @updated_at)
+     ON CONFLICT(edge_kind, from_id, to_id) DO UPDATE SET
+       role_or_type           = excluded.role_or_type,
+       weight                 = excluded.weight,
+       business_relation      = excluded.business_relation,
+       shared_ids_json        = excluded.shared_ids_json,
+       evidence_unit_ids_json = excluded.evidence_unit_ids_json,
+       last_seen_at           = excluded.last_seen_at,
+       updated_at             = excluded.updated_at`
+  ).run(row);
+}
+
+export type ListEntityEdgesOpts = {
+  kind?: EdgeKind;
+  fromId?: string;
+  toId?: string;
+  minWeight?: number;
+  limit?: number;
+};
+
+export function listEntityEdges(opts: ListEntityEdgesOpts = {}): EntityEdgeRow[] {
+  const conds: string[] = [];
+  const params: Array<string | number> = [];
+  if (opts.kind) {
+    conds.push('edge_kind = ?');
+    params.push(opts.kind);
+  }
+  if (opts.fromId) {
+    conds.push('from_id = ?');
+    params.push(opts.fromId);
+  }
+  if (opts.toId) {
+    conds.push('to_id = ?');
+    params.push(opts.toId);
+  }
+  if (typeof opts.minWeight === 'number') {
+    conds.push('weight >= ?');
+    params.push(opts.minWeight);
+  }
+  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+  const limit = Math.min(Math.max(opts.limit ?? 1000, 1), 5000);
+  const stmt = db.prepare(
+    `SELECT * FROM entity_edges ${where} ORDER BY weight DESC, last_seen_at DESC LIMIT ?`
+  );
+  return stmt.all(...params, limit) as EntityEdgeRow[];
+}
+
+/**
+ * 删掉 last_seen_at < cutoff 的 entity_edges。**保留 self-anchored 边**（self id
+ * 在 from_id 或 to_id 上的）—— 历史协作记忆不丢。返回删除的边数。
+ * dryRun=true 时只统计不删（MVP15A 第一周默认 dryRun，见自审 §9 #9）。
+ */
+export function purgeStaleEntityEdges(
+  cutoffIso: string,
+  selfEntityId: string | null,
+  opts: { dryRun?: boolean } = {}
+): { matched: number; deleted: number } {
+  const baseWhere = `last_seen_at < ?`;
+  const selfGuard = selfEntityId ? ` AND from_id != ? AND to_id != ?` : '';
+  const params: Array<string> = [cutoffIso];
+  if (selfEntityId) params.push(selfEntityId, selfEntityId);
+  const matched = (
+    db.prepare(`SELECT COUNT(*) AS n FROM entity_edges WHERE ${baseWhere}${selfGuard}`).get(
+      ...params
+    ) as { n: number }
+  ).n;
+  if (opts.dryRun) return { matched, deleted: 0 };
+  const res = db
+    .prepare(`DELETE FROM entity_edges WHERE ${baseWhere}${selfGuard}`)
+    .run(...params);
+  return { matched, deleted: res.changes };
+}
+
+// -------- work_item_edges --------
+
+export type WorkItemEdgeRow = {
+  id: string;
+  from_unit_id: string;
+  to_unit_id: string;
+  type: string;                          // MVP15A: 'follows'
+  status: 'active' | 'resolved' | 'stale';
+  reason: string;
+  evidence_unit_ids_json: string;
+  detected_at: string;
+  resolved_at: string | null;
+  updated_at: string;
+};
+
+export function upsertWorkItemEdge(row: WorkItemEdgeRow): void {
+  db.prepare(
+    `INSERT INTO work_item_edges
+       (id, from_unit_id, to_unit_id, type, status, reason,
+        evidence_unit_ids_json, detected_at, resolved_at, updated_at)
+     VALUES (@id, @from_unit_id, @to_unit_id, @type, @status, @reason,
+             @evidence_unit_ids_json, @detected_at, @resolved_at, @updated_at)
+     ON CONFLICT(from_unit_id, to_unit_id, type) DO UPDATE SET
+       status                 = excluded.status,
+       reason                 = excluded.reason,
+       evidence_unit_ids_json = excluded.evidence_unit_ids_json,
+       resolved_at            = excluded.resolved_at,
+       updated_at             = excluded.updated_at`
+  ).run(row);
+}
+
+export function listWorkItemEdges(
+  opts: { fromUnitId?: string; toUnitId?: string; status?: string; limit?: number } = {}
+): WorkItemEdgeRow[] {
+  const conds: string[] = [];
+  const params: Array<string | number> = [];
+  if (opts.fromUnitId) {
+    conds.push('from_unit_id = ?');
+    params.push(opts.fromUnitId);
+  }
+  if (opts.toUnitId) {
+    conds.push('to_unit_id = ?');
+    params.push(opts.toUnitId);
+  }
+  if (opts.status) {
+    conds.push('status = ?');
+    params.push(opts.status);
+  }
+  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+  const limit = Math.min(Math.max(opts.limit ?? 1000, 1), 5000);
+  return db
+    .prepare(`SELECT * FROM work_item_edges ${where} ORDER BY updated_at DESC LIMIT ?`)
+    .all(...params, limit) as WorkItemEdgeRow[];
+}
+
+/** 把 status='active' 但 updated_at 早于 cutoff 的 work_item_edges 转 'stale'。 */
+export function markStaleWorkItemEdges(cutoffIso: string): { transitioned: number } {
+  const r = db
+    .prepare(
+      `UPDATE work_item_edges SET status='stale', updated_at=?
+       WHERE status='active' AND updated_at < ?`
+    )
+    .run(new Date().toISOString(), cutoffIso);
+  return { transitioned: r.changes };
+}
+
+// -------- org_project_taxonomy --------
+
+export type OrgProjectTaxonomyRow = {
+  canonical_name: string;
+  aliases_json: string;                  // JSON array of strings
+  summary: string | null;
+  parsed_by: string;
+  parsed_at: string;
+};
+
+export function listProjectTaxonomy(): OrgProjectTaxonomyRow[] {
+  return db
+    .prepare(`SELECT * FROM org_project_taxonomy ORDER BY canonical_name`)
+    .all() as OrgProjectTaxonomyRow[];
+}
+
+/**
+ * upsert 语义（增量解析关键）：如果 canonical_name 已存在，**aliases 取并集**而非覆盖。
+ * 这样后续 LLM run 给同一 canonical 加了新 alias 不会把老 alias 丢掉。
+ * summary 走"新值覆盖空值"策略——新 row.summary 非空就用，空则保留旧值。
+ */
+export function upsertProjectTaxonomy(row: OrgProjectTaxonomyRow): void {
+  const existing = (
+    db
+      .prepare(`SELECT * FROM org_project_taxonomy WHERE canonical_name = ?`)
+      .get(row.canonical_name) as OrgProjectTaxonomyRow | undefined
+  );
+  if (!existing) {
+    db.prepare(
+      `INSERT INTO org_project_taxonomy
+         (canonical_name, aliases_json, summary, parsed_by, parsed_at)
+       VALUES (@canonical_name, @aliases_json, @summary, @parsed_by, @parsed_at)`
+    ).run(row);
+    return;
+  }
+  // 合并 aliases：并集
+  let oldAliases: unknown;
+  try {
+    oldAliases = JSON.parse(existing.aliases_json);
+  } catch {
+    oldAliases = [];
+  }
+  let newAliases: unknown;
+  try {
+    newAliases = JSON.parse(row.aliases_json);
+  } catch {
+    newAliases = [];
+  }
+  const merged = Array.from(
+    new Set([
+      ...((Array.isArray(oldAliases) ? oldAliases : []) as string[]),
+      ...((Array.isArray(newAliases) ? newAliases : []) as string[]),
+    ].filter((s): s is string => typeof s === 'string'))
+  );
+  const mergedSummary = (row.summary && row.summary.trim()) || existing.summary;
+  db.prepare(
+    `UPDATE org_project_taxonomy
+       SET aliases_json=?, summary=?, parsed_by=?, parsed_at=?
+       WHERE canonical_name=?`
+  ).run(
+    JSON.stringify(merged),
+    mergedSummary,
+    row.parsed_by,
+    row.parsed_at,
+    row.canonical_name
+  );
+}
+
+/**
+ * 给定 entity 名，返回对应 canonical_name；缓存里没找到返回原名（不做隐式合并）。
+ * 实现：SQL LIKE 粗筛后应用层精确匹配（aliases_json 是 JSON 数组字符串）。
+ * 性能：org_project_taxonomy 行数通常 ≤30，全表 LIKE 是 O(30)；不引入额外缓存。
+ */
+export function resolveProjectCanonical(entityName: string): string {
+  const trimmed = entityName.trim();
+  if (!trimmed) return entityName;
+  // 粗筛：LIKE 含 entity 名 substring 的行
+  const candidates = db
+    .prepare(
+      `SELECT canonical_name, aliases_json FROM org_project_taxonomy
+        WHERE aliases_json LIKE ?`
+    )
+    .all(`%${trimmed.replace(/[%_]/g, '\\$&')}%`) as Array<{
+    canonical_name: string;
+    aliases_json: string;
+  }>;
+  for (const c of candidates) {
+    let arr: unknown;
+    try {
+      arr = JSON.parse(c.aliases_json);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(arr)) continue;
+    if (arr.some((a) => typeof a === 'string' && a.trim() === trimmed)) {
+      return c.canonical_name;
+    }
+  }
+  return entityName;
 }
