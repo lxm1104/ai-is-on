@@ -23,6 +23,7 @@ import { SYNC_DRAFT_SYSTEM_PROMPT } from '../agents/syncDraftAgent.js';
 import { RECAP_SYSTEM_PROMPT } from '../agents/recapActionItemsAgent.js';
 import { RANKER_SYSTEM_PROMPT } from '../spaces/llmChatAffinityRanker.js';
 import { DEPT_TAXONOMY_SYSTEM_PROMPT } from '../util/departmentTaxonomyPrompt.js';
+import { PROJECT_TAXONOMY_SYSTEM_PROMPT } from '../util/projectTaxonomyPrompt.js';
 
 export type OpencodeAgentName =
   | 'aiisn-chat'
@@ -34,7 +35,8 @@ export type OpencodeAgentName =
   | 'aiisn-sync-draft'
   | 'aiisn-recap'
   | 'aiisn-ranker'
-  | 'aiisn-dept-taxonomy';
+  | 'aiisn-dept-taxonomy'
+  | 'aiisn-project-taxonomy';
 
 type Permission = 'allow' | 'ask' | 'deny';
 type AgentDef = {
@@ -113,6 +115,12 @@ const AGENTS: readonly AgentDef[] = [
     description: 'AI is ON MVP15 部门名 → business + functionPath 解析',
     permission: READ_ONLY,
     prompt: DEPT_TAXONOMY_SYSTEM_PROMPT,
+  },
+  {
+    name: 'aiisn-project-taxonomy',
+    description: 'AI is ON MVP15A project entity 名 → cluster 聚类去重',
+    permission: READ_ONLY,
+    prompt: PROJECT_TAXONOMY_SYSTEM_PROMPT,
   },
 ];
 
