@@ -25,6 +25,7 @@ import { actionItemsRouter } from './routes/actionItems.js';
 import { resolveRouter } from './routes/resolve.js';
 import { adminSuggestionRouter } from './routes/adminSuggestion.js';
 import { attentionRouter } from './routes/attention.js';
+import { larkTasksRouter } from './routes/larkTasks.js';
 import { startCollectorScheduler, stopCollectorScheduler } from './collectors/scheduler.js';
 import { startTriggerScheduler, stopTriggerScheduler } from './triggers/triggerScheduler.js';
 import { startAttentionScheduler, stopAttentionScheduler } from './attention/attentionEngine.js';
@@ -58,6 +59,7 @@ app.use('/api', actionItemsRouter);
 app.use('/api', resolveRouter);
 app.use('/api', adminSuggestionRouter);
 app.use('/api', attentionRouter);
+app.use('/api', larkTasksRouter);
 
 const server = http.createServer(app);
 attachWebSocket(server);

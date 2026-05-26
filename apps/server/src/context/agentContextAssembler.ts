@@ -579,6 +579,10 @@ import { createHash } from 'node:crypto';
 import { getCurrentWorkMap } from '../bootstrap/workMapService.js';
 import { listActiveBoundaryRules } from '../boundary/boundaryStore.js';
 import type { BoundaryRule } from '../boundary/BoundaryRule.js';
+import {
+  type AttentionInteraction,
+  listRecentAttentionInteractions,
+} from '../attention/attentionInteractions.js';
 import { listRecentAgentProposalCards } from '../db.js';
 
 export type GlobalSpaceInPacket = SpaceInPacket & {
@@ -627,6 +631,7 @@ export type GlobalContextPacket = {
   stakeholders: StakeholderInPacket[];
   preferences: string[];
   boundaryRules: GlobalBoundaryRuleInPacket[];
+  attentionInteractions: AttentionInteraction[];
   agentProposals: AgentProposalInPacket[];     // MVP14 Step3.5
   tokenEstimate: number;
   /** 稳定的 input 摘要 hash，attentionEngine 用它做 idempotency cache */
@@ -643,11 +648,13 @@ const GLOBAL_SLICE_CAPS = {
   stakeholders: 8,
   preferences: 10,
   boundaryRules: 10,
+  attentionInteractions: 20,
   agentProposals: 12,
 } as const;
 
 const GLOBAL_RECENT_EVENT_WINDOW_MS = 24 * 3600_000;
 const AGENT_PROPOSAL_WINDOW_MS = 24 * 3600_000;
+const ATTENTION_INTERACTION_WINDOW_MS = 7 * 24 * 3600_000;
 
 export type AssembleGlobalInput = {
   now?: number;
@@ -765,6 +772,12 @@ export function assembleGlobalContextPacket(
       scope: r.scope,
     }));
 
+  // -------- 6.25) Attention interactions：用户刚刚如何处理过旧提醒 --------
+  const attentionInteractions = listRecentAttentionInteractions({
+    sinceIso: new Date(now - ATTENTION_INTERACTION_WINDOW_MS).toISOString(),
+    limit: GLOBAL_SLICE_CAPS.attentionInteractions,
+  });
+
   // -------- 6.5) Agent proposals：近 24h 专项 agent 写的待处理卡 --------
   const agentProposals: AgentProposalInPacket[] = listRecentAgentProposalCards(
     AGENT_PROPOSAL_WINDOW_MS,
@@ -793,6 +806,7 @@ export function assembleGlobalContextPacket(
     stakeholders,
     preferences,
     boundaryRules,
+    attentionInteractions,
     agentProposals,
   });
 
@@ -829,6 +843,15 @@ export function assembleGlobalContextPacket(
     boundaryRules: boundaryRules
       .map((r) => ({ id: r.id, d: r.description, a: r.allowedAction }))
       .sort((a, b) => a.id.localeCompare(b.id)),
+    attentionInteractions: attentionInteractions
+      .map((i) => ({
+        id: i.attentionId,
+        action: i.action,
+        title: i.title,
+        signals: [...i.signalIds].sort(),
+        createdAt: i.createdAt,
+      }))
+      .sort((a, b) => `${a.createdAt}:${a.id}`.localeCompare(`${b.createdAt}:${b.id}`)),
     agentProposals: agentProposals
       .map((p) => ({ id: p.id, p: p.priority, t: p.title }))
       .sort((a, b) => a.id.localeCompare(b.id)),
@@ -851,6 +874,7 @@ export function assembleGlobalContextPacket(
     stakeholders,
     preferences,
     boundaryRules,
+    attentionInteractions,
     agentProposals,
     tokenEstimate,
     inputHash,
@@ -880,6 +904,7 @@ function estimateGlobalPacketTokens(input: {
   stakeholders: StakeholderInPacket[];
   preferences: string[];
   boundaryRules: GlobalBoundaryRuleInPacket[];
+  attentionInteractions: AttentionInteraction[];
   agentProposals: AgentProposalInPacket[];
 }): number {
   let chars = 0;
@@ -908,6 +933,10 @@ function estimateGlobalPacketTokens(input: {
   chars += input.stakeholders.reduce((a, s) => a + s.name.length, 0);
   chars += input.preferences.reduce((a, s) => a + s.length, 0);
   chars += input.boundaryRules.reduce((a, r) => a + r.description.length, 0);
+  chars += input.attentionInteractions.reduce(
+    (a, i) => a + i.title.length + i.signalIds.reduce((sum, s) => sum + s.length, 0),
+    0
+  );
   chars += input.agentProposals.reduce(
     (a, p) => a + p.title.length + (p.summary?.length ?? 0) / 2,
     0

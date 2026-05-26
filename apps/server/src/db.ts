@@ -548,6 +548,51 @@ CREATE INDEX IF NOT EXISTS idx_attention_input_hash ON attention_items(input_has
 CREATE INDEX IF NOT EXISTS idx_attention_generation ON attention_items(generation);
 CREATE INDEX IF NOT EXISTS idx_attention_expires_at ON attention_items(expires_at);
 
+-- 用户对 attention item 的轻量交互日志。
+-- 这些记录会进入下一轮 attention prompt，但不作为长期 ContextUnit，避免污染记忆层。
+CREATE TABLE IF NOT EXISTS attention_interactions (
+  id TEXT PRIMARY KEY,
+  attention_id TEXT NOT NULL,
+  action TEXT NOT NULL,                         -- 'ack' | 'dismiss' | 'not_relevant' | 'ask_agent' | 'create_task'
+  input_hash TEXT NOT NULL,
+  priority TEXT NOT NULL,
+  title TEXT NOT NULL,
+  signal_ids_json TEXT NOT NULL DEFAULT '[]',
+  related_entity_ids_json TEXT NOT NULL DEFAULT '[]',
+  related_space_ids_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_attention_interactions_created
+  ON attention_interactions(created_at);
+CREATE INDEX IF NOT EXISTS idx_attention_interactions_attention
+  ON attention_interactions(attention_id);
+CREATE INDEX IF NOT EXISTS idx_attention_interactions_action
+  ON attention_interactions(action);
+
+-- 外部任务系统绑定。ContextUnit 负责语义记忆；这里负责飞书 task guid/url、
+-- 幂等 key、原始返回与后续状态同步。
+CREATE TABLE IF NOT EXISTS external_task_bindings (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,                       -- 'lark'
+  external_guid TEXT NOT NULL,
+  external_url TEXT,
+  source_kind TEXT NOT NULL,                    -- 'card' | 'attention'
+  source_ref_id TEXT NOT NULL,
+  commitment_unit_id TEXT,
+  result_unit_id TEXT,
+  status TEXT NOT NULL DEFAULT 'created',       -- 'created' | 'failed' | 'completed' | 'archived'
+  idempotency_key TEXT NOT NULL,
+  raw_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(provider, external_guid),
+  UNIQUE(provider, idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_external_task_bindings_source
+  ON external_task_bindings(source_kind, source_ref_id);
+CREATE INDEX IF NOT EXISTS idx_external_task_bindings_status
+  ON external_task_bindings(status);
+
 CREATE TABLE IF NOT EXISTS attention_engine_runs (
   id TEXT PRIMARY KEY,
   generation INTEGER NOT NULL,
@@ -2277,6 +2322,95 @@ export function markAttentionItemsExpired(
     )
     .run(updatedAt, beforeIso);
   return r.changes;
+}
+
+export type AttentionInteractionRow = {
+  id: string;
+  attention_id: string;
+  action: string;
+  input_hash: string;
+  priority: string;
+  title: string;
+  signal_ids_json: string;
+  related_entity_ids_json: string;
+  related_space_ids_json: string;
+  created_at: string;
+};
+
+export function insertAttentionInteraction(row: AttentionInteractionRow): void {
+  db.prepare(
+    `INSERT INTO attention_interactions
+       (id, attention_id, action, input_hash, priority, title,
+        signal_ids_json, related_entity_ids_json, related_space_ids_json, created_at)
+     VALUES
+       (@id, @attention_id, @action, @input_hash, @priority, @title,
+        @signal_ids_json, @related_entity_ids_json, @related_space_ids_json, @created_at)`
+  ).run(row);
+}
+
+export function listRecentAttentionInteractions(opts: {
+  sinceIso: string;
+  limit: number;
+}): AttentionInteractionRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM attention_interactions
+       WHERE created_at >= @sinceIso
+       ORDER BY created_at DESC
+       LIMIT @limit`
+    )
+    .all(opts) as AttentionInteractionRow[];
+}
+
+export type ExternalTaskBindingRow = {
+  id: string;
+  provider: string;
+  external_guid: string;
+  external_url: string | null;
+  source_kind: string;
+  source_ref_id: string;
+  commitment_unit_id: string | null;
+  result_unit_id: string | null;
+  status: string;
+  idempotency_key: string;
+  raw_json: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export function upsertExternalTaskBinding(row: ExternalTaskBindingRow): void {
+  db.prepare(
+    `INSERT INTO external_task_bindings
+       (id, provider, external_guid, external_url, source_kind, source_ref_id,
+        commitment_unit_id, result_unit_id, status, idempotency_key, raw_json,
+        created_at, updated_at)
+     VALUES
+       (@id, @provider, @external_guid, @external_url, @source_kind, @source_ref_id,
+        @commitment_unit_id, @result_unit_id, @status, @idempotency_key, @raw_json,
+        @created_at, @updated_at)
+     ON CONFLICT(provider, idempotency_key) DO UPDATE SET
+       external_guid = excluded.external_guid,
+       external_url = excluded.external_url,
+       commitment_unit_id = excluded.commitment_unit_id,
+       result_unit_id = excluded.result_unit_id,
+       status = excluded.status,
+       raw_json = excluded.raw_json,
+       updated_at = excluded.updated_at`
+  ).run(row);
+}
+
+export function getExternalTaskBindingByIdempotency(
+  provider: string,
+  idempotencyKey: string
+): ExternalTaskBindingRow | null {
+  return (
+    (db
+      .prepare(
+        `SELECT * FROM external_task_bindings
+         WHERE provider = ? AND idempotency_key = ?`
+      )
+      .get(provider, idempotencyKey) as ExternalTaskBindingRow | undefined) ?? null
+  );
 }
 
 export type AttentionEngineRunRow = {

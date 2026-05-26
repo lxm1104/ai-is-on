@@ -33,6 +33,9 @@ import {
   projectAttentionItemToCard,
 } from '../attention/attentionProjection.js';
 import { buildRichAskAgentPrompt } from '../attention/askAgentPrompt.js';
+import { applyAttentionFeedback } from '../attention/attentionFeedback.js';
+import { recordAttentionInteraction } from '../attention/attentionInteractions.js';
+import { enqueueAttentionTickSoon } from '../attention/attentionEngine.js';
 
 export function rowToCard(row: CardRow): SignalCard {
   let actions: CardAction[] = [];
@@ -329,6 +332,7 @@ async function applyAttentionAction(
         title: attn.title,
         skipContext: true,
       });
+      recordAttentionInteraction(attn, 'ask_agent', now);
       const updated = updateAttentionItemStatus(attn.id, 'acted', now);
       if (!updated) return { ok: false, error: 'update failed' };
       const card = projectAttentionItemToCard(updated);
@@ -345,14 +349,31 @@ async function applyAttentionAction(
     return { ok: true, card };
   }
 
-  // ack / mark_done → 'acted'；dismiss → 'dismissed'；snooze 当 ack 用（保守）
-  const newAttnStatus =
-    action.kind === 'dismiss'
-      ? 'dismissed'
-      : action.kind === 'mark_done' || action.kind === 'ack' || action.kind === 'snooze'
-        ? 'acted'
-        : 'acted';
-  const updated = updateAttentionItemStatus(attn.id, newAttnStatus, now);
+  if (action.kind === 'dismiss') {
+    try {
+      applyAttentionFeedback({
+        attentionId: attn.id,
+        type: 'not_relevant',
+        payload: {},
+        confirm: true,
+        sourceAction: 'dismiss',
+      });
+      enqueueAttentionTickSoon();
+      const updated = getAttentionItem(attn.id);
+      if (!updated) return { ok: false, error: 'update failed' };
+      const card = projectAttentionItemToCard(updated);
+      broadcast({ type: 'card_updated', card });
+      return { ok: true, card };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  // ack / mark_done → 'acted'；snooze 当 ack 用（保守）。dismiss 上面已走负反馈分支。
+  if (action.kind === 'ack') {
+    recordAttentionInteraction(attn, 'ack', now);
+  }
+  const updated = updateAttentionItemStatus(attn.id, 'acted', now);
   if (!updated) return { ok: false, error: 'update failed' };
   const card = projectAttentionItemToCard(updated);
   broadcast({ type: 'card_updated', card });

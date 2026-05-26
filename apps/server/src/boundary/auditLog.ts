@@ -16,7 +16,9 @@ export type AuditAction =
   | 'attention_dismissed_with_learn'
   | 'attention_space_corrected'
   | 'attention_entity_demoted'
-  | 'attention_preference_added';
+  | 'attention_preference_added'
+  | 'lark_task_created'
+  | 'lark_task_failed';
 
 export function writeAudit(input: {
   action: AuditAction;
