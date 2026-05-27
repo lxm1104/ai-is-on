@@ -56,6 +56,19 @@ export const ATTENTION_SYSTEM_PROMPT = `你是用户的「注意力管家」。
     b) 若对方持续追问而用户长时间未回（≥30 min 内无「我」侧行），允许判 P1，
        但 \`why\` 必须明确引用 event id 与对话末尾的对方消息。
     c) 单聊里若整段对话都是「我」（无对方消息），不应产出针对该对话的 item。
+13. （MVP15B）\`<myTopCollaborators>\` 是按 weight 排序的协作圈（top 12）。
+    跟 \`<stakeholders>\` 不同：stakeholders 是 work_map 手动登记的相关人，
+    myTopCollaborators 是 cooccurrence + work_map 兜底的 weight 排序。两者都用。
+    a) 信号涉及 myTopCollaborators 里 weight ≥ 1.5 的人 → 默认至少 P2；
+       weight ≥ 2.5 + 临期/阻塞 → P0/P1。
+    b) \`type=reviewer_author\` 且证据显示对方在 review 我的产出（PR / 文档评审 / 决策） → 抬一档（review unblock 关键）。
+    c) \`type=cross_team\` 表明跨团队对接 → priority 维持原档，但 \`why\` 里可以
+       明确指出"跨团队"作为合理性解释。
+    d) \`hint=co_owner\` 的人发起的 commitment 或决策 → 抬一档（他们对项目有共同决策权）。
+    e) \`<myTopCollaborators>\` 里没有的人，按内容判 priority，不要因为"不在协作圈"就降级——
+       新合作者也可能发紧急事。
+    f) 当 trigger 信号涉及的人在 myTopCollaborators 里有 \`共项目=[...]\` 时，可以在
+       \`why\` 里引用项目名解释 priority。
 
 输出 schema：
 {
@@ -137,6 +150,9 @@ export function buildAttentionUserMessage(
 
   // stakeholders
   blocks.push(renderStakeholders(packet.stakeholders));
+
+  // MVP15B §6.3: myTopCollaborators (协作圈 top 12 by weight)
+  blocks.push(renderMyTopCollaborators(packet.myTopCollaborators));
 
   // preferences
   if (packet.preferences.length) {
@@ -305,6 +321,36 @@ function renderStakeholders(stake: GlobalContextPacket['stakeholders']): string 
     lines.push(`- ${s.name}${tag}${note}`);
   }
   lines.push('</stakeholders>');
+  return lines.join('\n');
+}
+
+/**
+ * MVP15B §6.3 — myTopCollaborators：协作圈 top 12 by weight，
+ * 跟 stakeholders 区别：stakeholders 是 work_map 手动登记，myTopCollaborators
+ * 是 cooccurrence + work_map 兜底，weight 排序、含 collabType / decisionRoleHint。
+ */
+function renderMyTopCollaborators(
+  items: GlobalContextPacket['myTopCollaborators']
+): string {
+  if (!items || items.length === 0) return '<myTopCollaborators/>';
+  const lines: string[] = [
+    `<myTopCollaborators count="${items.length}" sortedByWeight>`,
+  ];
+  for (const c of items) {
+    const tagParts: string[] = [`w=${c.weight.toFixed(2)}`];
+    if (c.orgRole) tagParts.push(`orgRole=${c.orgRole}`);
+    if (c.business) tagParts.push(`biz=${c.business}`);
+    if (c.functionLabel) tagParts.push(`fn=${c.functionLabel}`);
+    if (c.collabType) tagParts.push(`type=${c.collabType}`);
+    if (c.decisionRoleHint) tagParts.push(`hint=${c.decisionRoleHint}`);
+    const tag = tagParts.length ? ` [${tagParts.join(' ')}]` : '';
+    const sharedSummary =
+      c.sharedProjectCanonicalNames.length > 0
+        ? ` -- 共项目=[${c.sharedProjectCanonicalNames.slice(0, 3).join(', ')}]`
+        : '';
+    lines.push(`- ${c.name}${tag}${sharedSummary}`);
+  }
+  lines.push('</myTopCollaborators>');
   return lines.join('\n');
 }
 
