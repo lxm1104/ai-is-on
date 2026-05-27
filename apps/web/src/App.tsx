@@ -12,6 +12,7 @@ import {
   fetchAttentionCards,
   fetchCollectors,
   fetchMessages,
+  fetchTopicStatusSnapshot,
   fetchTopics,
   interruptRuntime,
   postCardAction,
@@ -28,10 +29,14 @@ import type {
   RuntimeStatus,
   ServerEvent,
   SignalCard,
+  TopicStatus,
 } from './types';
 
 export function App() {
+  // MVP18 Stage 1: `status` 已收窄为 runtime 进程健康度（不再含 'busy'）。
+  // per-topic 的忙闲态走 topicStatus map。
   const [status, setStatus] = useState<RuntimeStatus>('starting');
+  const [topicStatus, setTopicStatus] = useState<Record<string, TopicStatus>>({});
   const [topics, setTopics] = useState<ChatTopic[]>([]);
   const [activeTopicId, setActiveTopicId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -99,20 +104,35 @@ export function App() {
   }
 
   useEffect(() => {
-    Promise.allSettled([fetchTopics(), fetchAttentionCards(), fetchCollectors()]).then(
-      ([t, c, col]) => {
-        if (t.status === 'fulfilled') {
-          setTopics(t.value);
-        }
-        if (c.status === 'fulfilled') setCards(c.value);
-        if (col.status === 'fulfilled') setCollectors(col.value);
+    Promise.allSettled([
+      fetchTopics(),
+      fetchAttentionCards(),
+      fetchCollectors(),
+      // MVP18 Stage 1: 启动时一次性拉 topic_status 快照，避免冷启动时
+      // 某些 topic 已经在 busy（如服务重启前的卡片 ask_agent 还没跑完）但前端不知道。
+      fetchTopicStatusSnapshot(),
+    ]).then(([t, c, col, ts]) => {
+      if (t.status === 'fulfilled') {
+        setTopics(t.value);
       }
-    );
+      if (c.status === 'fulfilled') setCards(c.value);
+      if (col.status === 'fulfilled') setCollectors(col.value);
+      if (ts.status === 'fulfilled') {
+        setTopicStatus(
+          Object.fromEntries(ts.value.topics.map((row) => [row.topicId, row.status]))
+        );
+      }
+    });
 
     const client = connectWs((e: ServerEvent) => {
       switch (e.type) {
         case 'runtime_status':
           setStatus(e.status);
+          return;
+        case 'topic_status':
+          // MVP18 Stage 1: per-topic 状态变化即时入桶。Stage 2 之后还会
+          // 在 onOpen 回调里再拉一次快照，进一步覆盖 WS 重连缝隙。
+          setTopicStatus((prev) => ({ ...prev, [e.topicId]: e.status }));
           return;
         case 'message_added':
           if (e.message.topicId === activeTopicId) applyMessage(e.message, 'add');
@@ -195,9 +215,13 @@ export function App() {
   }
 
   async function onInterrupt() {
+    // MVP18 Stage 1: 只中断当前 active topic。没有 activeTopicId（新会话占位）时不动作。
+    // 不能走无参 interruptRuntime() —— 后端会一次中断所有 busy session，把后台并发跑的
+    // 别的 topic 也一起打断。
+    if (!activeTopicId) return;
     setTopError(null);
     try {
-      await interruptRuntime();
+      await interruptRuntime(activeTopicId);
     } catch (err) {
       setTopError(err instanceof Error ? err.message : String(err));
     }
@@ -234,8 +258,11 @@ export function App() {
   }
 
   const lastMsg = messages[messages.length - 1];
+  // MVP18 Stage 1: 'busy' 从 runtime 进程态搬到 per-topic 态。Stage 1 期间只有一个 active
+  // topic，所以读 topicStatus[activeTopicId] 单值；Stage 2+ 多 tab 时这一行仍然有效。
+  const activeTopicBusy = activeTopicId ? topicStatus[activeTopicId] === 'busy' : false;
   const thinking =
-    status === 'busy' &&
+    activeTopicBusy &&
     (!lastMsg ||
       lastMsg.role === 'user' ||
       (lastMsg.role === 'tool' && lastMsg.status === 'running'));
@@ -294,7 +321,7 @@ export function App() {
           <Composer
             onSend={onSend}
             disabled={sending || status === 'stopped'}
-            thinking={thinking || status === 'busy'}
+            thinking={thinking || activeTopicBusy}
             onInterrupt={onInterrupt}
             mode={activeTopic ? 'reply' : 'new'}
             topicTitle={activeTopic?.title}

@@ -7,11 +7,12 @@ import {
   type ActiveContextSnapshot,
 } from '../lib/api';
 
+// MVP18 Stage 1: RuntimeStatus 不再含 'busy'（per-topic busy 由 Composer 的 thinking
+// 状态表达），LABEL/DOT_COLOR 两表里 busy 行随之删除。
 const LABEL: Record<RuntimeStatus, string> = {
   idle: '空闲',
   starting: '启动中',
   ready: '在线',
-  busy: '忙碌',
   stopped: '离线',
   error: '错误',
 };
@@ -20,7 +21,6 @@ const DOT_COLOR: Record<RuntimeStatus, string> = {
   idle: '#9ca3af',
   starting: '#fbbf24',
   ready: '#22c55e',
-  busy: '#fbbf24',
   stopped: '#9ca3af',
   error: '#ef4444',
 };
