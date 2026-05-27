@@ -32,22 +32,74 @@ import type {
   TopicStatus,
 } from './types';
 
+// MVP18 Stage 2: 抗竞态 merge —— fetchMessages 拉到的是 HTTP 调用时点之前的快照，
+// WS 可能已经把后续消息塞进 messagesByTopic[tid] 桶里（因为 openTopicIds 先入桶、再 fetch）。
+// 直接覆盖会丢这些"快照未包含但 cache 已收到"的消息，所以按 id diff 后追加。
+function mergeSnapshot(
+  prev: Record<string, ChatMessage[]>,
+  tid: string,
+  snapshot: ChatMessage[]
+): Record<string, ChatMessage[]> {
+  const existing = prev[tid] ?? [];
+  const snapshotIds = new Set(snapshot.map((m) => m.id));
+  const extras = existing.filter((m) => !snapshotIds.has(m.id));
+  return { ...prev, [tid]: [...snapshot, ...extras] };
+}
+
+// MVP18 Stage 2: WS message_added / message_updated 进桶。
+// 不再依赖 seenIds ref —— 直接按桶内 id 检查。mode==='update' 找不到 id 时丢弃，
+// 避免迟到 update 写入空槽形成脏数据（与原 applyMessage 兜底等价）。
+function applyMessageToBucket(
+  prev: Record<string, ChatMessage[]>,
+  tid: string,
+  msg: ChatMessage,
+  mode: 'add' | 'update'
+): Record<string, ChatMessage[]> {
+  const bucket = prev[tid] ?? [];
+  const idx = bucket.findIndex((x) => x.id === msg.id);
+  if (idx >= 0) {
+    const next = bucket.slice();
+    next[idx] = msg;
+    return { ...prev, [tid]: next };
+  }
+  if (mode === 'update') return prev;
+  return { ...prev, [tid]: [...bucket, msg] };
+}
+
 export function App() {
   // MVP18 Stage 1: `status` 已收窄为 runtime 进程健康度（不再含 'busy'）。
   // per-topic 的忙闲态走 topicStatus map。
   const [status, setStatus] = useState<RuntimeStatus>('starting');
   const [topicStatus, setTopicStatus] = useState<Record<string, TopicStatus>>({});
   const [topics, setTopics] = useState<ChatTopic[]>([]);
+  // MVP18 Stage 2: openTopicIds 是"前端在缓存里维护的 topic 集合"。Stage 2 单 tab 时 UI 还是
+  // 只显示 activeTopicId，但 WS message_added 会按这个集合过滤 → 任何 touched 过的 topic 的
+  // 后台 turn 事件都会持续累积到 messagesByTopic[tid]，切回时无需重新 fetch（cache 命中）。
+  // Stage 3 会用它驱动 TabBar，并加 closeTab 才能从集合移除。
+  const [openTopicIds, setOpenTopicIds] = useState<string[]>([]);
   const [activeTopicId, setActiveTopicId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // MVP18 Stage 2: messages 由单数组改为按 topicId 分桶。当前 UI 仍只渲染 activeTopicId 对应那一桶。
+  const [messagesByTopic, setMessagesByTopic] = useState<Record<string, ChatMessage[]>>({});
   const [cards, setCards] = useState<SignalCard[]>([]);
   const [collectors, setCollectors] = useState<CollectorStatus[]>([]);
-  const [sending, setSending] = useState(false);
+  // MVP18 Stage 2: sending 由单值改为按 topic 桶（key = activeTopicId ?? '__new__'）。
+  // 新会话占位的 sending 用特殊 key __new__，等 sendChat 拿到 topic.id 再翻到该 id 上。
+  const [sending, setSending] = useState<Record<string, boolean>>({});
   const [topError, setTopError] = useState<string | null>(null);
   const [bootstrapCompletedAt, setBootstrapCompletedAt] = useState<string | null>(null);
   const [bootstrapBannerDismissed, setBootstrapBannerDismissed] = useState(false);
-  const seenIds = useRef<Set<string>>(new Set());
+  // MVP18 Stage 2: refs 给 WS handler 看，避免空依赖 useEffect 闭包过期
+  const openIdsRef = useRef<string[]>([]);
+  const messagesByTopicRef = useRef<Record<string, ChatMessage[]>>({});
+  useEffect(() => {
+    openIdsRef.current = openTopicIds;
+  }, [openTopicIds]);
+  useEffect(() => {
+    messagesByTopicRef.current = messagesByTopic;
+  }, [messagesByTopic]);
   const activeTopic = topics.find((t) => t.id === activeTopicId) ?? null;
+  // MVP18 Stage 2: 渲染时从桶里取当前 active 的消息列表
+  const activeMessages = activeTopicId ? messagesByTopic[activeTopicId] ?? [] : [];
 
   function upsertTopic(topic: ChatTopic) {
     setTopics((prev) => {
@@ -62,19 +114,10 @@ export function App() {
     });
   }
 
-  function applyMessage(m: ChatMessage, mode: 'add' | 'update') {
-    setMessages((prev) => {
-      const idx = prev.findIndex((x) => x.id === m.id);
-      if (idx >= 0) {
-        const next = prev.slice();
-        next[idx] = m;
-        return next;
-      }
-      if (mode === 'update') return prev;
-      seenIds.current.add(m.id);
-      return [...prev, m];
-    });
-  }
+  // MVP18 Stage 2: applyMessage 已搬到模块顶部的 applyMessageToBucket 工具函数；
+  // 原 seenIds ref 删除——桶内 id 检查就够去重。
+
+
 
   function applyCard(c: SignalCard, mode: 'add' | 'update') {
     setCards((prev) => {
@@ -103,18 +146,16 @@ export function App() {
     });
   }
 
+  // MVP18 Stage 2: 启动时一次性拉初始数据（topics / cards / collectors / topic-status）。
+  // 跟 WS 连接拆开两个 useEffect：WS 用空依赖避免切 tab 时整段重连。
   useEffect(() => {
     Promise.allSettled([
       fetchTopics(),
       fetchAttentionCards(),
       fetchCollectors(),
-      // MVP18 Stage 1: 启动时一次性拉 topic_status 快照，避免冷启动时
-      // 某些 topic 已经在 busy（如服务重启前的卡片 ask_agent 还没跑完）但前端不知道。
       fetchTopicStatusSnapshot(),
     ]).then(([t, c, col, ts]) => {
-      if (t.status === 'fulfilled') {
-        setTopics(t.value);
-      }
+      if (t.status === 'fulfilled') setTopics(t.value);
       if (c.status === 'fulfilled') setCards(c.value);
       if (col.status === 'fulfilled') setCollectors(col.value);
       if (ts.status === 'fulfilled') {
@@ -123,61 +164,72 @@ export function App() {
         );
       }
     });
+  }, []);
 
-    const client = connectWs((e: ServerEvent) => {
-      switch (e.type) {
-        case 'runtime_status':
-          setStatus(e.status);
-          return;
-        case 'topic_status':
-          // MVP18 Stage 1: per-topic 状态变化即时入桶。Stage 2 之后还会
-          // 在 onOpen 回调里再拉一次快照，进一步覆盖 WS 重连缝隙。
-          setTopicStatus((prev) => ({ ...prev, [e.topicId]: e.status }));
-          return;
-        case 'message_added':
-          if (e.message.topicId === activeTopicId) applyMessage(e.message, 'add');
-          return;
-        case 'message_updated':
-          if (e.message.topicId === activeTopicId) applyMessage(e.message, 'update');
-          return;
-        case 'topic_created':
-          upsertTopic(e.topic);
-          return;
-        case 'topic_updated':
-          upsertTopic(e.topic);
-          return;
-        case 'card_updated':
-          // MVP14 Step 3: 现在只有 attention 流，所有 card_updated 都来自 attention 路由
-          applyCard(e.card, 'update');
-          return;
-        case 'collector_status':
-          applyCollector(e.collector);
-          return;
-        case 'attention_updated':
-          // 新 tick 完成，重新拉取整个 live 列表
-          fetchAttentionCards()
-            .then((cs) => setCards(cs))
-            .catch(() => {});
-          return;
-        case 'error':
-          setTopError(e.message);
-          return;
-      }
-    });
-    return () => client.close();
-  }, [activeTopicId]);
-
+  // MVP18 Stage 2: WS handler 改空依赖 + ref 读 openTopicIds，避免切 tab 时整段重连。
+  // onOpen 回调里再拉一次 topic_status 快照（修 R1：重连期间漏掉的 status 变化）。
   useEffect(() => {
-    if (!activeTopicId) {
-      seenIds.current = new Set();
-      setMessages([]);
-      return;
-    }
+    const client = connectWs(
+      (e: ServerEvent) => {
+        switch (e.type) {
+          case 'runtime_status':
+            setStatus(e.status);
+            return;
+          case 'topic_status':
+            setTopicStatus((prev) => ({ ...prev, [e.topicId]: e.status }));
+            return;
+          case 'message_added':
+          case 'message_updated': {
+            const tid = e.message.topicId;
+            if (!tid) return;
+            // 仅缓存当前 openTopicIds 集合里的 topic 消息。未 touched 的 topic 事件丢弃 ——
+            // 重新打开（setActiveTopicId）会触发 fetchMessages 全量补回。
+            if (!openIdsRef.current.includes(tid)) return;
+            setMessagesByTopic((prev) =>
+              applyMessageToBucket(prev, tid, e.message, e.type === 'message_added' ? 'add' : 'update')
+            );
+            return;
+          }
+          case 'topic_created':
+          case 'topic_updated':
+            upsertTopic(e.topic);
+            return;
+          case 'card_updated':
+            applyCard(e.card, 'update');
+            return;
+          case 'collector_status':
+            applyCollector(e.collector);
+            return;
+          case 'attention_updated':
+            fetchAttentionCards()
+              .then((cs) => setCards(cs))
+              .catch(() => {});
+            return;
+          case 'error':
+            setTopError(e.message);
+            return;
+        }
+      },
+      // onOpen: WS 每次（re-）建连都拉一次 topic_status 快照，覆盖重连缝隙
+      () => {
+        void fetchTopicStatusSnapshot()
+          .then((snap) =>
+            setTopicStatus(Object.fromEntries(snap.topics.map((t) => [t.topicId, t.status])))
+          )
+          .catch((err) => console.warn('topic-status snapshot failed:', err));
+      }
+    );
+    return () => client.close();
+  }, []);
+
+  // MVP18 Stage 2: activeTopicId 变化 → 加入 openTopicIds（如果还没在里面）
+  // → 若桶里已有该 topic 的消息则跳过 fetch（cache hit），否则拉一次并 merge。
+  useEffect(() => {
+    if (!activeTopicId) return;
+    setOpenTopicIds((prev) => (prev.includes(activeTopicId) ? prev : [...prev, activeTopicId]));
+    if (messagesByTopicRef.current[activeTopicId] !== undefined) return; // cache hit
     fetchMessages(activeTopicId)
-      .then((ms) => {
-        seenIds.current = new Set(ms.map((r) => r.id));
-        setMessages(ms);
-      })
+      .then((ms) => setMessagesByTopic((prev) => mergeSnapshot(prev, activeTopicId, ms)))
       .catch((err) => setTopError(err instanceof Error ? err.message : String(err)));
   }, [activeTopicId]);
 
@@ -189,19 +241,34 @@ export function App() {
   }, []);
 
   async function onSend(text: string) {
-    setSending(true);
+    // MVP18 Stage 2: sending 按 topic 桶。新会话占位用 '__new__' 临时 key，
+    // 等拿到 topic.id 后把状态翻到该 id 上，再清掉 '__new__'。
+    const startKey = activeTopicId ?? '__new__';
+    setSending((prev) => ({ ...prev, [startKey]: true }));
     setTopError(null);
     try {
       const topic = await sendChat(text, { topicId: activeTopicId ?? undefined });
       upsertTopic(topic);
+      // 先把新 topic 加入 open 集合，再 setActiveTopicId / fetch —— 保证 fetchMessages
+      // 期间到达的 WS message_added 已经能通过 openIdsRef.current.includes 的过滤
+      // 写入 messagesByTopic[topic.id] 的中间桶。
+      setOpenTopicIds((prev) => (prev.includes(topic.id) ? prev : [...prev, topic.id]));
       setActiveTopicId(topic.id);
-      const ms = await fetchMessages(topic.id);
-      seenIds.current = new Set(ms.map((r) => r.id));
-      setMessages(ms);
+      if (!messagesByTopicRef.current[topic.id]) {
+        const ms = await fetchMessages(topic.id);
+        // mergeSnapshot 而非直接覆盖：sendTopicMessage 已立即返回、turn 在后台跑，
+        // message_added WS 事件可能先于本 fetch 拿到响应到达。
+        setMessagesByTopic((prev) => mergeSnapshot(prev, topic.id, ms));
+      }
     } catch (err) {
       setTopError(err instanceof Error ? err.message : String(err));
     } finally {
-      setSending(false);
+      // 清掉 start key（不论是 __new__ 还是 activeTopicId）
+      setSending((prev) => {
+        const next = { ...prev };
+        delete next[startKey];
+        return next;
+      });
     }
   }
 
@@ -236,10 +303,16 @@ export function App() {
       const result = await postCardAction(cardId, actionId, opts);
       if (result.topic) {
         upsertTopic(result.topic);
+        // MVP18 Stage 2: 卡片 ask_agent / draft_reply → 自动加入 open 集合并切到该 topic。
+        // Stage 3 这一行会换成显式的 openTab() helper，行为等价。
+        setOpenTopicIds((prev) =>
+          prev.includes(result.topic!.id) ? prev : [...prev, result.topic!.id]
+        );
         setActiveTopicId(result.topic.id);
-        const ms = await fetchMessages(result.topic.id);
-        seenIds.current = new Set(ms.map((r) => r.id));
-        setMessages(ms);
+        if (!messagesByTopicRef.current[result.topic.id]) {
+          const ms = await fetchMessages(result.topic.id);
+          setMessagesByTopic((prev) => mergeSnapshot(prev, result.topic!.id, ms));
+        }
       }
     } catch (err) {
       setTopError(err instanceof Error ? err.message : String(err));
@@ -257,15 +330,17 @@ export function App() {
     }
   }
 
-  const lastMsg = messages[messages.length - 1];
-  // MVP18 Stage 1: 'busy' 从 runtime 进程态搬到 per-topic 态。Stage 1 期间只有一个 active
-  // topic，所以读 topicStatus[activeTopicId] 单值；Stage 2+ 多 tab 时这一行仍然有效。
+  // MVP18 Stage 2: lastMsg / thinking 从 activeMessages（桶视图）计算
+  const lastMsg = activeMessages[activeMessages.length - 1];
   const activeTopicBusy = activeTopicId ? topicStatus[activeTopicId] === 'busy' : false;
   const thinking =
     activeTopicBusy &&
     (!lastMsg ||
       lastMsg.role === 'user' ||
       (lastMsg.role === 'tool' && lastMsg.status === 'running'));
+  // MVP18 Stage 2: sending 按桶取（与 onSend 的 key 约定一致）
+  const sendingKey = activeTopicId ?? '__new__';
+  const isSending = !!sending[sendingKey];
 
   const collectorsHint = collectorErrorHint(collectors);
 
@@ -317,10 +392,10 @@ export function App() {
             onSelect={(id) => setActiveTopicId(id)}
             onNew={() => setActiveTopicId(null)}
           />
-          <MessageList messages={messages} thinking={thinking} />
+          <MessageList messages={activeMessages} thinking={thinking} />
           <Composer
             onSend={onSend}
-            disabled={sending || status === 'stopped'}
+            disabled={isSending || status === 'stopped'}
             thinking={thinking || activeTopicBusy}
             onInterrupt={onInterrupt}
             mode={activeTopic ? 'reply' : 'new'}
