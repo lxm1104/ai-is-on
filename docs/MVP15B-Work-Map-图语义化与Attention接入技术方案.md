@@ -441,15 +441,18 @@ dogfood:
 
 ## 6. 验证
 
-### 6.1 单元用例矩阵
+### 6.1 单元用例矩阵（实测）
 
-| 文件 | 覆盖 |
-|---|---|
-| `mvp15b-project-phase.test.ts` | LLM hook + cache + TTL 过期 + 空项目降级 |
-| `mvp15b-decision-authority.test.ts` | top-N 控制 + cache + 部分 LLM 失败仍能 partial 写入 |
-| `mvp15b-collab-type.test.ts` | 同上 |
-| `mvp15b-graph-context.test.ts` | 无 focal / 无 project / activeBlockers 空 / projectPhase 缺 |
-| `mvp15b-attention-packet.test.ts` | global packet 含 myTopCollaborators / focal packet 含 graphContext / 文本格式校验 |
+| 文件 | 用例数 | 覆盖 |
+|---|---|---|
+| `mvp15b-project-phase.test.ts` | 9 | T1 空 / T2 happy / T3 cache 命中 / T4 TTL 过期 / T5 force / T6 LLM 抛错 / T7 漏返 / T8 非法值 filter / T9 JSON parse 失败 |
+| `mvp15b-decision-authority.test.ts` | 8 | T1 空 / T2 happy / T3-T4 cache+TTL / T5 topN / T6 LLM 抛错 / T7 非法值 / **T8 关键：inducer 重跑不擦 LLM 字段** |
+| `mvp15b-collab-type.test.ts` | 4 | T1 4 档 collabType 全档位 / T2 非法值 filter / T3 LLM 抛错 / T4 topN + cache 配合 |
+| `mvp15b-graph-context.test.ts` | 9 | T1 null focal / T2 无 project / T3 DA*role 排序 / T4 self 排除 / T5 focal 排除 / T6 follows 上溯 / T7 单/多 project phase / T8 60s cache / T9 cache 过期 |
+| `mvp15b-attention-packet.test.ts` | 7 | T1 myTopCollaborators 字段 / T2 render block / T3 §13 in system prompt / T4 graphContext 装配 / T5 不 declare 时 undefined / T6 unit=null 时 undefined / T7 materializedSlices 含 entry |
+| **合计** | **37** | 全部通过 |
+
+跟 MVP15A 合并跑 regression: **85/85 全过**。
 
 ### 6.2 真 db smoke 期望
 
