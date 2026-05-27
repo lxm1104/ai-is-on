@@ -111,10 +111,14 @@ export function inducePersonProjectEdges(opts: {
       buckets.set(key, bucket);
     }
     // 同一 unit 可能出现多次（多人扮演同一 role）；这里收集所有，去重在 evidence 时做
+    // 2026-05-27 dogfood：把 author/owner/assignee 等"实际参与"角色统一归一化成
+    // 'actor'，弱关系（mentioned/cc/observer/about/target）归一化成 'about'。
+    // 这样 inferRole 的 'kind:actor' 频次门槛能正确触发。
+    const normalizedRole = normalizeRole(r.unit_role);
     bucket.evidence.push({
       unitId: r.unit_id,
       updatedAt: r.unit_updated_at,
-      kindRole: `${r.unit_kind}:${r.unit_role}`,
+      kindRole: `${r.unit_kind}:${normalizedRole}`,
     });
   }
 
@@ -237,6 +241,36 @@ export function inferRole(kindRolePairs: string[]): PersonProjectRole {
   if (aboutCount > actorCount * 2) return 'stakeholder';
   if (actorCount > 0) return 'contributor';
   return 'observer';
+}
+
+/**
+ * 角色归一化：飞书/字节多 collector 用了 40+ 种 role 名（actor/author/owner/
+ * assignee/organizer/cc/mentioned/...）。把它们归一化成 'actor' / 'about' / 其它
+ * 供 inferRole 频次门槛使用。
+ *
+ * actor-like（实际参与做事）：actor, author, owner, assignee, requester, reporter,
+ *   organizer, speaker, coordinator, proposer, decision_maker, editor, developer,
+ *   tester, verifier, fixer, evaluator, source, handler, confirmer
+ * about-like（被提及/弱关联）：about, subject, mentioned, cc, observer, participant,
+ *   target, peer, initiator, forwarder, counterpart, concerned_party, blocker_source,
+ *   stakeholder, gatekeeper, involved, explainer
+ * 其它原样保留
+ */
+const ACTOR_LIKE_ROLES = new Set([
+  'actor', 'author', 'owner', 'assignee', 'requester', 'reporter', 'organizer',
+  'speaker', 'coordinator', 'proposer', 'decision_maker', 'editor', 'developer',
+  'tester', 'verifier', 'fixer', 'evaluator', 'source', 'handler', 'confirmer',
+  'responder', 'initiator',
+]);
+const ABOUT_LIKE_ROLES = new Set([
+  'about', 'subject', 'mentioned', 'cc', 'observer', 'participant', 'target',
+  'peer', 'forwarder', 'counterpart', 'concerned_party', 'blocker_source',
+  'stakeholder', 'gatekeeper', 'involved', 'explainer',
+]);
+export function normalizeRole(role: string): 'actor' | 'about' | string {
+  if (ACTOR_LIKE_ROLES.has(role)) return 'actor';
+  if (ABOUT_LIKE_ROLES.has(role)) return 'about';
+  return role;
 }
 
 // 暴露给测试

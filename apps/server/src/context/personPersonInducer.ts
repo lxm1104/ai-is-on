@@ -84,8 +84,10 @@ export function inducePersonPersonEdges(opts: {
        WHERE cu.status = 'active'
          AND cu.scope = 'work'
          AND (cu.expires_at IS NULL OR cu.expires_at > ?)
-         AND a.role IN ('actor','about')
-         AND b.role IN ('actor','about')
+         -- 2026-05-27 dogfood 发现：role 白名单 ('actor','about') 过窄，
+         -- 把 author/assignee/owner/reporter/organizer/participant 等弱协作
+         -- 角色全丢掉了（self 340 行只剩 13 行 'about'）。改成不过滤 role，
+         -- 任何同 unit 出现都算共现，'me'/'Me'/'我' placeholder 仍排除。
          AND ea.name NOT IN ('me', 'Me', '我')
          AND eb.name NOT IN ('me', 'Me', '我')`
     )
