@@ -800,3 +800,41 @@ export async function runCollectorsOnce(name?: string): Promise<RunOnceResult[]>
   if (!r.ok) throw new Error(j.error || `collectors run ${r.status}`);
   return (j.results ?? []) as RunOnceResult[];
 }
+
+// ============================================================================
+// MVP15A: graph API
+// ============================================================================
+
+export type DecisionRoleHint =
+  | 'co_owner'
+  | 'reviewer'
+  | 'contributor'
+  | 'observer'
+  | null;
+
+export type SelfCollaboratorEntry = {
+  personEntityId: string;
+  name: string;
+  weight: number;
+  orgRole?: OrgRoleFromMe;
+  business?: string;
+  functionLabel?: string;
+  sharedProjectCanonicalNames: string[];
+  decisionRoleHint: DecisionRoleHint;
+  evidenceUnitIds: string[];
+  lastSeenAt: string;
+};
+
+export type MyCollaboratorsResponse = {
+  entries: SelfCollaboratorEntry[];
+  inducerLastRunAt: string;
+};
+
+export async function fetchMyCollaborators(
+  opts: { limit?: number } = {}
+): Promise<MyCollaboratorsResponse> {
+  const limit = opts.limit ?? 20;
+  const r = await fetch(`/api/graph/my-collaborators?limit=${limit}`);
+  if (!r.ok) throw new Error(`graph/my-collaborators ${r.status}`);
+  return (await r.json()) as MyCollaboratorsResponse;
+}
