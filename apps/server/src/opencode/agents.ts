@@ -24,6 +24,7 @@ import { RECAP_SYSTEM_PROMPT } from '../agents/recapActionItemsAgent.js';
 import { RANKER_SYSTEM_PROMPT } from '../spaces/llmChatAffinityRanker.js';
 import { DEPT_TAXONOMY_SYSTEM_PROMPT } from '../util/departmentTaxonomyPrompt.js';
 import { PROJECT_TAXONOMY_SYSTEM_PROMPT } from '../util/projectTaxonomyPrompt.js';
+import { PROJECT_PHASE_SYSTEM_PROMPT } from '../util/projectPhasePrompt.js';
 
 export type OpencodeAgentName =
   | 'aiisn-chat'
@@ -36,7 +37,8 @@ export type OpencodeAgentName =
   | 'aiisn-recap'
   | 'aiisn-ranker'
   | 'aiisn-dept-taxonomy'
-  | 'aiisn-project-taxonomy';
+  | 'aiisn-project-taxonomy'
+  | 'aiisn-project-phase';
 
 type Permission = 'allow' | 'ask' | 'deny';
 type AgentDef = {
@@ -121,6 +123,12 @@ const AGENTS: readonly AgentDef[] = [
     description: 'AI is ON MVP15A project entity 名 → cluster 聚类去重',
     permission: READ_ONLY,
     prompt: PROJECT_TAXONOMY_SYSTEM_PROMPT,
+  },
+  {
+    name: 'aiisn-project-phase',
+    description: 'AI is ON MVP15B project 阶段 + 健康度判定',
+    permission: READ_ONLY,
+    prompt: PROJECT_PHASE_SYSTEM_PROMPT,
   },
 ];
 
