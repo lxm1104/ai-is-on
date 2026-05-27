@@ -7,6 +7,7 @@ import { ContextPanel } from './components/ContextPanel';
 import { SpacesPanel } from './components/SpacesPanel';
 import { RulesPanel } from './components/RulesPanel';
 import { WorkMapPanel } from './components/WorkMapPanel';
+import { MyCollaboratorsPanel } from './components/MyCollaboratorsPanel';
 import {
   fetchAttentionCards,
   fetchCollectors,
@@ -277,6 +278,7 @@ export function App() {
           <WorkMapPanel
             onBootstrapChange={(t) => setBootstrapCompletedAt(t)}
           />
+          <MyCollaboratorsPanel />
           <SpacesPanel />
           <RulesPanel />
           <ContextPanel />

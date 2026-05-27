@@ -26,6 +26,8 @@ import { resolveRouter } from './routes/resolve.js';
 import { adminSuggestionRouter } from './routes/adminSuggestion.js';
 import { attentionRouter } from './routes/attention.js';
 import { larkTasksRouter } from './routes/larkTasks.js';
+import { graphRouter } from './routes/graph.js';
+import { runGraphInducer } from './context/graphInducer.js';
 import { startCollectorScheduler, stopCollectorScheduler } from './collectors/scheduler.js';
 import { startTriggerScheduler, stopTriggerScheduler } from './triggers/triggerScheduler.js';
 import { startAttentionScheduler, stopAttentionScheduler } from './attention/attentionEngine.js';
@@ -60,6 +62,7 @@ app.use('/api', resolveRouter);
 app.use('/api', adminSuggestionRouter);
 app.use('/api', attentionRouter);
 app.use('/api', larkTasksRouter);
+app.use('/api', graphRouter);
 
 const server = http.createServer(app);
 attachWebSocket(server);
@@ -85,6 +88,15 @@ server.listen(config.port, '127.0.0.1', () => {
   startCollectorScheduler();
   startTriggerScheduler();
   startAttentionScheduler();
+  // MVP15A §7.2.1: 10s 后台预热 graph inducer（首次 LLM project taxonomy 慢，
+  // 这样 /api/graph/* 第一次访问命中缓存）。失败不阻塞 server。
+  setTimeout(() => {
+    runGraphInducer({ force: true }).catch((err) => {
+      console.warn(
+        `[server] graph inducer warmup failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    });
+  }, 10_000);
 });
 
 const shutdown = async (signal: string) => {

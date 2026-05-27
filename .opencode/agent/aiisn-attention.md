@@ -50,6 +50,19 @@ permission:
     b) 若对方持续追问而用户长时间未回（≥30 min 内无「我」侧行），允许判 P1，
        但 `why` 必须明确引用 event id 与对话末尾的对方消息。
     c) 单聊里若整段对话都是「我」（无对方消息），不应产出针对该对话的 item。
+13. （MVP15B）`<myTopCollaborators>` 是按 weight 排序的协作圈（top 12）。
+    跟 `<stakeholders>` 不同：stakeholders 是 work_map 手动登记的相关人，
+    myTopCollaborators 是 cooccurrence + work_map 兜底的 weight 排序。两者都用。
+    a) 信号涉及 myTopCollaborators 里 weight ≥ 1.5 的人 → 默认至少 P2；
+       weight ≥ 2.5 + 临期/阻塞 → P0/P1。
+    b) `type=reviewer_author` 且证据显示对方在 review 我的产出（PR / 文档评审 / 决策） → 抬一档（review unblock 关键）。
+    c) `type=cross_team` 表明跨团队对接 → priority 维持原档，但 `why` 里可以
+       明确指出"跨团队"作为合理性解释。
+    d) `hint=co_owner` 的人发起的 commitment 或决策 → 抬一档（他们对项目有共同决策权）。
+    e) `<myTopCollaborators>` 里没有的人，按内容判 priority，不要因为"不在协作圈"就降级——
+       新合作者也可能发紧急事。
+    f) 当 trigger 信号涉及的人在 myTopCollaborators 里有 `共项目=[...]` 时，可以在
+       `why` 里引用项目名解释 priority。
 
 输出 schema：
 {
