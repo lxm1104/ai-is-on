@@ -25,6 +25,7 @@ import { RANKER_SYSTEM_PROMPT } from '../spaces/llmChatAffinityRanker.js';
 import { DEPT_TAXONOMY_SYSTEM_PROMPT } from '../util/departmentTaxonomyPrompt.js';
 import { PROJECT_TAXONOMY_SYSTEM_PROMPT } from '../util/projectTaxonomyPrompt.js';
 import { PROJECT_PHASE_SYSTEM_PROMPT } from '../util/projectPhasePrompt.js';
+import { DECISION_AUTHORITY_SYSTEM_PROMPT } from '../util/decisionAuthorityPrompt.js';
 
 export type OpencodeAgentName =
   | 'aiisn-chat'
@@ -38,7 +39,8 @@ export type OpencodeAgentName =
   | 'aiisn-ranker'
   | 'aiisn-dept-taxonomy'
   | 'aiisn-project-taxonomy'
-  | 'aiisn-project-phase';
+  | 'aiisn-project-phase'
+  | 'aiisn-decision-authority';
 
 type Permission = 'allow' | 'ask' | 'deny';
 type AgentDef = {
@@ -129,6 +131,12 @@ const AGENTS: readonly AgentDef[] = [
     description: 'AI is ON MVP15B project 阶段 + 健康度判定',
     permission: READ_ONLY,
     prompt: PROJECT_PHASE_SYSTEM_PROMPT,
+  },
+  {
+    name: 'aiisn-decision-authority',
+    description: 'AI is ON MVP15B 推断某人对某项目的决策权重',
+    permission: READ_ONLY,
+    prompt: DECISION_AUTHORITY_SYSTEM_PROMPT,
   },
 ];
 
