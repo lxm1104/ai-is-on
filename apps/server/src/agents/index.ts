@@ -18,10 +18,12 @@ export function bootstrapAgents() {
   if (bootstrapped) return;
   bootstrapped = true;
 
+  // MVP15B M8: slices 加 'graphContext'，让 commitmentAgent 文案能用 decisionPath /
+  // expectedButMissing / activeBlockers / projectPhase。其它 agent 走 MVP15B.x 独立 PR。
   registerAgent('track_commitment', {
     handler: trackCommitmentHandler,
-    packetSliceVersion: 1,
-    slices: ['focalUnit', 'latestActionResult', 'boundary', 'subject', 'spaces'],
+    packetSliceVersion: 2,
+    slices: ['focalUnit', 'latestActionResult', 'boundary', 'subject', 'spaces', 'graphContext'],
   });
 
   registerAgent('prepare_meeting', {

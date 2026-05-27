@@ -22,6 +22,10 @@ import {
   purgeStaleEdges,
   type PurgeSummary,
 } from './workItemInducer.js';
+// MVP15B D12：inducer 写完 entity_edges 后必须 invalidate SCR + graphContext cache，
+// 否则前端 panel 和 attention prompt 在 60s 内看到的还是没标签的旧数据。
+import { __internal as scrInternal } from './selfCollaboratorRanking.js';
+import { __internal as gcInternal } from './graphContextAssembler.js';
 
 const THROTTLE_MS = 5 * 60_000;
 let lastRunAt = 0;
@@ -98,6 +102,10 @@ export async function runGraphInducer(
   };
   lastRunAt = now;
   lastSummary = summary;
+
+  // MVP15B D12：写完 entity_edges → 强制 invalidate downstream caches
+  scrInternal.resetCache();
+  gcInternal.resetCache();
 
   console.log(
     `[graphInducer] ${summary.durationMs}ms taxonomy=${taxonomy.clustersWritten} ` +

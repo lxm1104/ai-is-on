@@ -17,6 +17,7 @@ import type { ContextUnit, ContextUnitKind } from './ContextUnit.js';
 import { getContextUnitById, listActiveContextUnits } from './contextStore.js';
 import { scoreContextUnit } from './activeContext.js';
 import {
+  db,
   type ContextSpaceLinkRow,
   type ContextSpaceRow,
   type TriggerRow,
@@ -35,6 +36,13 @@ import {
   type PersonAttributes,
 } from './personAttributes.js';
 import { computeOrgRoleFromMe } from './personOrgRole.js';
+import {
+  assembleGraphContext,
+  type GraphContextSlice,
+} from './graphContextAssembler.js';
+import { buildSelfCollaboratorRanking } from './selfCollaboratorRanking.js';
+import { listEntityEdges as listEntityEdgesFromDb } from '../db.js';
+import { resolveAliased as resolveAliasedCanonical } from './entityResolver.js';
 
 export type PacketSlice =
   | 'subject'
@@ -46,7 +54,10 @@ export type PacketSlice =
   | 'stakeholders'
   | 'latestActionResult'
   | 'boundary'
-  | 'missingInfo';
+  | 'missingInfo'
+  // MVP15B §6.3：focal-scoped 图邻域 slice。assembleGraphContext(focalUnitId)
+  // 现算，60s in-memory cache。给 commitmentAgent / attention prompt 用。
+  | 'graphContext';
 
 export type SpaceInPacket = {
   id: string;
@@ -112,6 +123,8 @@ export type AgentContextPacket = {
   boundary?: BoundaryInPacket;
   missingInfo?: string[];
   recommendedHandling?: RecommendedHandling;
+  // MVP15B §6.3：图邻域 slice，仅当 declared 'graphContext' AND input.unit 非 null 时填
+  graphContext?: GraphContextSlice;
 };
 
 // 全局版本号：排序/裁剪/token 预算逻辑变化时 ++
@@ -128,6 +141,7 @@ const SLICE_CAPS: Record<PacketSlice, number> = {
   stakeholders: 8,
   latestActionResult: 1,
   boundary: 1,
+  graphContext: 1,  // MVP15B：一次 agent run 一个 graphContext slice
   missingInfo: 8,
 };
 
@@ -242,6 +256,27 @@ export function assembleAgentContextPacket(input: AssembleInput): AgentContextPa
       itemCount: stake.length,
       topItemIds: stake.slice(0, 3).map((s) => s.name),
     });
+  }
+
+  // -------- graphContext (MVP15B §6.3) --------
+  // 仅在 declared AND input.unit 非 null 时填；走 graphContextAssembler 现算 + 60s cache
+  if (declared.has('graphContext') && input.unit) {
+    const gc = assembleGraphContext(input.unit.id, { now });
+    if (gc) {
+      packet.graphContext = gc;
+      // materializedSlices.topItemIds 取 decisionPath 的人名（≤3 已经 cap 过）
+      materialized.push({
+        name: 'graphContext',
+        itemCount:
+          gc.decisionPath.length +
+          gc.expectedButMissing.persons.length +
+          gc.activeBlockers.length +
+          (gc.projectPhase ? 1 : 0),
+        topItemIds: gc.decisionPath.map((d) => d.name),
+      });
+    } else {
+      materialized.push({ name: 'graphContext', itemCount: 0, topItemIds: [] });
+    }
   }
 
   // -------- latestActionResult (same primary entity as focalUnit) --------
@@ -682,6 +717,22 @@ export type AgentProposalInPacket = {
   createdAt: string;
 };
 
+/**
+ * MVP15B §6.3：my top collaborators —— global 视角的协作圈摘要。
+ * 来自 SelfCollaboratorRanking + entity_edges.collab_type 字段拼装。
+ * 跟 stakeholders 区别：stakeholders 是 focal-related ad-hoc，my collaborators 是 weight-sorted global。
+ */
+export type MyTopCollaboratorInPacket = {
+  name: string;
+  weight: number;
+  orgRole?: OrgRoleFromMe;
+  business?: string;
+  functionLabel?: string;
+  sharedProjectCanonicalNames: string[];
+  collabType?: 'collab' | 'reviewer_author' | 'cross_team' | 'mentor';
+  decisionRoleHint?: 'co_owner' | 'reviewer' | 'contributor' | 'observer';
+};
+
 export type GlobalContextPacket = {
   packetAssemblerVersion: number;
   generatedAt: string;
@@ -694,6 +745,8 @@ export type GlobalContextPacket = {
   recentEvents: ContextUnit[];
   topActive: ContextUnit[];
   stakeholders: StakeholderInPacket[];
+  // MVP15B §6.3：协作圈 top 12 by weight，含 collab_type / decisionRoleHint / business 等
+  myTopCollaborators: MyTopCollaboratorInPacket[];
   preferences: string[];
   boundaryRules: GlobalBoundaryRuleInPacket[];
   attentionInteractions: AttentionInteraction[];
@@ -713,6 +766,8 @@ const GLOBAL_SLICE_CAPS = {
   // MVP15 §4 (revision): 8 → 12。每行带 orgRole + biz + fn ~50 token，12 行 ~600 token，
   // 仍在 packet 整体预算内。给 attention 看到更多协作者，特别是 same_business_cross_function 的同事。
   stakeholders: 12,
+  // MVP15B §6.3：每行 ~50 tokens，12 行 ~600 token。跟 stakeholders 平齐。
+  myTopCollaborators: 12,
   preferences: 10,
   boundaryRules: 10,
   attentionInteractions: 20,
@@ -822,6 +877,15 @@ export function assembleGlobalContextPacket(
 
   // -------- 4) Stakeholders（focal=null，纯走 work_map relationships） --------
   const stakeholders = collectStakeholders(null, GLOBAL_SLICE_CAPS.stakeholders);
+
+  // -------- 4.5) myTopCollaborators (MVP15B §6.3) ------------------------
+  // 跟 stakeholders 区别：stakeholders 来自 work_map:relationship: 单元（用户手动登记），
+  // myTopCollaborators 来自 SelfCollaboratorRanking（cooccurrence + work_map 兜底，weight 排序）。
+  // 两者都有用，attention prompt 分块消费。
+  const myTopCollaborators = buildMyTopCollaboratorsSlice(
+    GLOBAL_SLICE_CAPS.myTopCollaborators,
+    now
+  );
 
   // -------- 5) Preferences：直接拿 workMap 的 title --------
   const preferences = wm.preferences
@@ -939,6 +1003,7 @@ export function assembleGlobalContextPacket(
     recentEvents,
     topActive,
     stakeholders,
+    myTopCollaborators,
     preferences,
     boundaryRules,
     attentionInteractions,
@@ -946,6 +1011,58 @@ export function assembleGlobalContextPacket(
     tokenEstimate,
     inputHash,
   };
+}
+
+// ---------------------------------------------------------------------------
+// MVP15B §6.3：buildMyTopCollaboratorsSlice
+// ---------------------------------------------------------------------------
+// SelfCollaboratorRanking 已经把 weight / orgRole / business / fn / sharedProjects /
+// decisionRoleHint 算好，这里只补 collab_type（M4 LLM 写的字段，在 entity_edges 上）。
+function buildMyTopCollaboratorsSlice(
+  cap: number,
+  now: number
+): MyTopCollaboratorInPacket[] {
+  const ranking = buildSelfCollaboratorRanking({ limit: cap, now });
+  if (ranking.length === 0) return [];
+
+  // self id 用来匹配 entity_edges 的 from/to（person_person 表里 from < to）
+  const selfRow = db
+    .prepare(`SELECT value FROM settings WHERE key='self_person_entity_id'`)
+    .get() as { value: string } | undefined;
+  const selfId = selfRow?.value ? resolveAliasedCanonical(selfRow.value) : null;
+
+  return ranking.map((entry): MyTopCollaboratorInPacket => {
+    let collabType: MyTopCollaboratorInPacket['collabType'];
+    if (selfId) {
+      const from = selfId < entry.personEntityId ? selfId : entry.personEntityId;
+      const to = selfId < entry.personEntityId ? entry.personEntityId : selfId;
+      const edges = listEntityEdgesFromDb({
+        kind: 'person_person',
+        fromId: from,
+        toId: to,
+        limit: 1,
+      });
+      const ct = edges[0]?.collab_type;
+      if (
+        ct === 'collab' ||
+        ct === 'reviewer_author' ||
+        ct === 'cross_team' ||
+        ct === 'mentor'
+      ) {
+        collabType = ct;
+      }
+    }
+    return {
+      name: entry.name,
+      weight: entry.weight,
+      orgRole: entry.orgRole,
+      business: entry.business,
+      functionLabel: entry.functionLabel,
+      sharedProjectCanonicalNames: entry.sharedProjectCanonicalNames,
+      collabType,
+      decisionRoleHint: entry.decisionRoleHint ?? undefined,
+    };
+  });
 }
 
 // --------------------------------------------------------------------------
