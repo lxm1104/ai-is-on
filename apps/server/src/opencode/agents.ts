@@ -26,6 +26,7 @@ import { DEPT_TAXONOMY_SYSTEM_PROMPT } from '../util/departmentTaxonomyPrompt.js
 import { PROJECT_TAXONOMY_SYSTEM_PROMPT } from '../util/projectTaxonomyPrompt.js';
 import { PROJECT_PHASE_SYSTEM_PROMPT } from '../util/projectPhasePrompt.js';
 import { DECISION_AUTHORITY_SYSTEM_PROMPT } from '../util/decisionAuthorityPrompt.js';
+import { COLLAB_TYPE_SYSTEM_PROMPT } from '../util/collabTypePrompt.js';
 
 export type OpencodeAgentName =
   | 'aiisn-chat'
@@ -40,7 +41,8 @@ export type OpencodeAgentName =
   | 'aiisn-dept-taxonomy'
   | 'aiisn-project-taxonomy'
   | 'aiisn-project-phase'
-  | 'aiisn-decision-authority';
+  | 'aiisn-decision-authority'
+  | 'aiisn-collab-type';
 
 type Permission = 'allow' | 'ask' | 'deny';
 type AgentDef = {
@@ -137,6 +139,12 @@ const AGENTS: readonly AgentDef[] = [
     description: 'AI is ON MVP15B 推断某人对某项目的决策权重',
     permission: READ_ONLY,
     prompt: DECISION_AUTHORITY_SYSTEM_PROMPT,
+  },
+  {
+    name: 'aiisn-collab-type',
+    description: 'AI is ON MVP15B 推断两人协作关系类型',
+    permission: READ_ONLY,
+    prompt: COLLAB_TYPE_SYSTEM_PROMPT,
   },
 ];
 
