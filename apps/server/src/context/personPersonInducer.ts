@@ -154,7 +154,7 @@ export function inducePersonPersonEdges(opts: {
       edge_kind: 'person_person',
       from_id: bucket.fromId,
       to_id: bucket.toId,
-      role_or_type: null,                       // MVP15B LLM 写 collabType
+      role_or_type: null,                       // person_person 不用 role_or_type
       weight,
       business_relation: businessRelation,
       shared_ids_json: JSON.stringify(sharedProjects),
@@ -162,6 +162,11 @@ export function inducePersonPersonEdges(opts: {
       detected_at: nowIso,
       last_seen_at: lastSeenAt,
       updated_at: nowIso,
+      // MVP15B LLM 字段：inducer 不填，由 collabTypeClassifier 单独 UPDATE
+      decision_authority: null,
+      collab_type: null,
+      llm_classified_at: null,
+      llm_why: null,
     };
     upsertEntityEdge(row);
     written++;

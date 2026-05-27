@@ -178,6 +178,11 @@ export function inducePersonProjectEdges(opts: {
       detected_at: nowIso,
       last_seen_at: lastSeenAt,
       updated_at: nowIso,
+      // MVP15B LLM 字段：inducer 不填，由 decisionAuthorityClassifier 单独 UPDATE
+      decision_authority: null,
+      collab_type: null,
+      llm_classified_at: null,
+      llm_why: null,
     };
     upsertEntityEdge(row);
     written++;

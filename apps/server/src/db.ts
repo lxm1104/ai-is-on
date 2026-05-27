@@ -528,6 +528,34 @@ CREATE TABLE IF NOT EXISTS org_project_taxonomy (
 CREATE INDEX IF NOT EXISTS idx_org_project_aliases ON org_project_taxonomy(aliases_json);
 `);
 
+// ============ MVP15B: 图语义化 ============
+// 详见 docs/MVP15B-Work-Map-图语义化与Attention接入技术方案.md §4。
+//
+// 给 entity_edges 加 4 列承载 LLM 标签：
+//   decision_authority：仅 person_project 用，'high'|'mid'|'low'
+//   collab_type：      仅 person_person 用，'collab'|'reviewer_author'|'cross_team'|'mentor'
+//   llm_classified_at：cache 失效用（14 天 TTL）
+//   llm_why：           ≤200 字 LLM 简释
+ensureColumn('entity_edges', 'decision_authority', 'TEXT');
+ensureColumn('entity_edges', 'collab_type', 'TEXT');
+ensureColumn('entity_edges', 'llm_classified_at', 'TEXT');
+ensureColumn('entity_edges', 'llm_why', 'TEXT');
+
+// org_project_phase：LLM 判定的项目阶段 + 健康度。canonical_name 跟 org_project_taxonomy 对齐。
+// 30 天 TTL（ttl_until 字段），过期重判；手动 invalidate 也可。
+db.exec(`
+CREATE TABLE IF NOT EXISTS org_project_phase (
+  canonical_name TEXT PRIMARY KEY,
+  phase TEXT,                                -- 'discovery'|'planning'|'execution'|'review'|'frozen'
+  health TEXT,                               -- 'on_track'|'at_risk'|'overdue'|'unknown'
+  health_evidence_unit_ids_json TEXT,        -- JSON 数组：导致 at_risk/overdue 判定的 unit id
+  summary TEXT,                              -- LLM 一句话项目状态描述
+  llm_classified_at TEXT NOT NULL,
+  ttl_until TEXT NOT NULL                    -- ISO；< now 时视为过期需重判
+);
+CREATE INDEX IF NOT EXISTS idx_org_project_phase_ttl ON org_project_phase(ttl_until);
+`);
+
 // MVP13 §3.1: Space intent + Work Map ref
 ensureColumn('context_spaces', 'intent_json', "TEXT NOT NULL DEFAULT '{}'");
 ensureColumn('context_spaces', 'work_map_ref_json', 'TEXT');
@@ -2682,6 +2710,11 @@ export type EntityEdgeRow = {
   detected_at: string;
   last_seen_at: string;
   updated_at: string;
+  // MVP15B: LLM 语义标签（详见 docs/MVP15B §4.1）
+  decision_authority: string | null;     // 仅 person_project：'high'|'mid'|'low'
+  collab_type: string | null;            // 仅 person_person：'collab'|'reviewer_author'|'cross_team'|'mentor'
+  llm_classified_at: string | null;      // ISO；< now-14d 视为过期
+  llm_why: string | null;                // ≤200 字简释
 };
 
 /**
@@ -2689,14 +2722,21 @@ export type EntityEdgeRow = {
  * UNIQUE 约束在 (edge_kind, from_id, to_id) 上；命中则更新 weight / role_or_type /
  * business_relation / shared_ids_json / evidence / last_seen_at / updated_at，
  * detected_at 保持首次落库时间。
+ *
+ * MVP15B：**LLM 标签字段（decision_authority / collab_type / llm_classified_at / llm_why）
+ * 不在 upsertEntityEdge 中维护**——这是 inducer 走的边数据通路，LLM 字段由
+ * `decisionAuthorityClassifier` / `collabTypeClassifier` 单独 UPDATE。这样 inducer
+ * 每次跑不会把 LLM 标签覆盖回 null。
  */
 export function upsertEntityEdge(row: EntityEdgeRow): void {
   db.prepare(
     `INSERT INTO entity_edges
        (id, edge_kind, from_id, to_id, role_or_type, weight, business_relation,
-        shared_ids_json, evidence_unit_ids_json, detected_at, last_seen_at, updated_at)
+        shared_ids_json, evidence_unit_ids_json, detected_at, last_seen_at, updated_at,
+        decision_authority, collab_type, llm_classified_at, llm_why)
      VALUES (@id, @edge_kind, @from_id, @to_id, @role_or_type, @weight, @business_relation,
-             @shared_ids_json, @evidence_unit_ids_json, @detected_at, @last_seen_at, @updated_at)
+             @shared_ids_json, @evidence_unit_ids_json, @detected_at, @last_seen_at, @updated_at,
+             @decision_authority, @collab_type, @llm_classified_at, @llm_why)
      ON CONFLICT(edge_kind, from_id, to_id) DO UPDATE SET
        role_or_type           = excluded.role_or_type,
        weight                 = excluded.weight,
@@ -2705,7 +2745,41 @@ export function upsertEntityEdge(row: EntityEdgeRow): void {
        evidence_unit_ids_json = excluded.evidence_unit_ids_json,
        last_seen_at           = excluded.last_seen_at,
        updated_at             = excluded.updated_at`
+       /* LLM 字段（decision_authority/collab_type/llm_classified_at/llm_why）刻意不在
+          ON CONFLICT 分支里更新，避免 inducer 覆盖掉 LLM classifier 之前写入的标签。
+          LLM 字段更新走 updateEntityEdgeLlmTags 函数。 */
   ).run(row);
+}
+
+/**
+ * MVP15B：单独的 LLM 标签更新函数。LLM classifier 分类完后用这个写回。
+ * @param updates 部分字段更新——传 null 显式清空，undefined 跳过。
+ */
+export function updateEntityEdgeLlmTags(
+  edgeId: string,
+  updates: {
+    decision_authority?: string | null;
+    collab_type?: string | null;
+    llm_why?: string | null;
+    llm_classified_at: string;       // 必填，记下分类时间
+  }
+): void {
+  const sets: string[] = ['llm_classified_at = ?'];
+  const params: Array<string | null> = [updates.llm_classified_at];
+  if (updates.decision_authority !== undefined) {
+    sets.push('decision_authority = ?');
+    params.push(updates.decision_authority);
+  }
+  if (updates.collab_type !== undefined) {
+    sets.push('collab_type = ?');
+    params.push(updates.collab_type);
+  }
+  if (updates.llm_why !== undefined) {
+    sets.push('llm_why = ?');
+    params.push(updates.llm_why);
+  }
+  params.push(edgeId);
+  db.prepare(`UPDATE entity_edges SET ${sets.join(', ')} WHERE id = ?`).run(...params);
 }
 
 export type ListEntityEdgesOpts = {
@@ -2934,4 +3008,64 @@ export function resolveProjectCanonical(entityName: string): string {
     }
   }
   return entityName;
+}
+
+// ============================================================================
+// MVP15B: org_project_phase helpers（LLM 判定的项目阶段 + 健康度）
+// 详见 docs/MVP15B §4.2
+// ============================================================================
+
+export type OrgProjectPhaseRow = {
+  canonical_name: string;
+  phase: string | null;
+  health: string | null;
+  health_evidence_unit_ids_json: string | null;
+  summary: string | null;
+  llm_classified_at: string;
+  ttl_until: string;
+};
+
+export function getProjectPhase(canonicalName: string): OrgProjectPhaseRow | null {
+  return (
+    (db
+      .prepare(`SELECT * FROM org_project_phase WHERE canonical_name = ?`)
+      .get(canonicalName) as OrgProjectPhaseRow | undefined) ?? null
+  );
+}
+
+/** 返回所有 canonical_name 中 ttl_until < nowIso 的（含从未分类过的）。 */
+export function listProjectPhasesNeedingRefresh(
+  allCanonicalNames: string[],
+  nowIso: string
+): string[] {
+  if (allCanonicalNames.length === 0) return [];
+  const placeholders = allCanonicalNames.map(() => '?').join(',');
+  const existing = db
+    .prepare(
+      `SELECT canonical_name, ttl_until FROM org_project_phase
+        WHERE canonical_name IN (${placeholders})`
+    )
+    .all(...allCanonicalNames) as Array<{ canonical_name: string; ttl_until: string }>;
+  const existingMap = new Map(existing.map((r) => [r.canonical_name, r.ttl_until]));
+  return allCanonicalNames.filter((name) => {
+    const ttl = existingMap.get(name);
+    return !ttl || ttl < nowIso; // 没记录 OR 过期
+  });
+}
+
+export function upsertProjectPhase(row: OrgProjectPhaseRow): void {
+  db.prepare(
+    `INSERT INTO org_project_phase
+       (canonical_name, phase, health, health_evidence_unit_ids_json,
+        summary, llm_classified_at, ttl_until)
+     VALUES (@canonical_name, @phase, @health, @health_evidence_unit_ids_json,
+             @summary, @llm_classified_at, @ttl_until)
+     ON CONFLICT(canonical_name) DO UPDATE SET
+       phase                         = excluded.phase,
+       health                        = excluded.health,
+       health_evidence_unit_ids_json = excluded.health_evidence_unit_ids_json,
+       summary                       = excluded.summary,
+       llm_classified_at             = excluded.llm_classified_at,
+       ttl_until                     = excluded.ttl_until`
+  ).run(row);
 }

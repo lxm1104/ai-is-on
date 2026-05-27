@@ -458,6 +458,11 @@ test('T8.7 purgeStaleEdges self-guard: self 边保留，其它过期边删除', 
     detected_at: oldIso,
     last_seen_at: oldIso,
     updated_at: oldIso,
+    // MVP15B LLM 字段
+    decision_authority: null,
+    collab_type: null,
+    llm_classified_at: null,
+    llm_why: null,
   });
   // stranger↔other 100 天前（无 self）
   db.upsertEntityEdge({
@@ -473,6 +478,10 @@ test('T8.7 purgeStaleEdges self-guard: self 边保留，其它过期边删除', 
     detected_at: oldIso,
     last_seen_at: oldIso,
     updated_at: oldIso,
+    decision_authority: null,
+    collab_type: null,
+    llm_classified_at: null,
+    llm_why: null,
   });
   // dryRun first
   const dry = purgeStaleEdges({ now: NOW, dryRun: true, cutoffDays: 90 });
