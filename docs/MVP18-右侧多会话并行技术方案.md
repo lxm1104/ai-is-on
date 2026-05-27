@@ -1049,32 +1049,47 @@ manager 加 `maxConcurrent`，超出 reject。当前不做。
 
 ## 回归与测试
 
-### 并发烟雾测试（Stage 1 必跑）
+### 并发烟雾测试（Stage 1 必跑） — **已通过 ✅**
 
-验证 opencode 本身支持并发（修复 R2 的不确定性）：
+验证 opencode 本身支持并发（消除 R2 的不确定性）。
+
+> ⚠️ **首次起 session 不要预生成 `-s` UUID**：opencode CLI 的 `-s <id>` 要求 session **已存在**于其本地存储，传入未创建过的随机 UUID 会立刻报 `Error: Session not found` 退出。正确做法：首次调用**不传 `-s`**，让 opencode 自己建 session 并在事件流里发出 `sessionID`；后续 turn 才用 `-s <捕获到的 id>` 复用。这也跟服务器内部 [chatTopics.ts:91](../apps/server/src/chat/chatTopics.ts#L91) 的逻辑一致（`opencode_session_id: null` 初值，首轮通过 `onSessionId` 回调回填）。
 
 ```bash
-# 准备两个不同 sessionId（任意 UUID）
-SID_A=$(uuidgen)
-SID_B=$(uuidgen)
-
-# 同时跑
-opencode run --agent aiisn-chat -s "$SID_A" --format json -- "用一句话介绍你自己 A" > /tmp/opencode-A.ndjson 2>/tmp/opencode-A.err &
+# 并发跑两个全新 session（不传 -s 让 opencode 自建）
+rm -f /tmp/oc-{A,B}.{ndjson,err}
+opencode run --agent aiisn-chat --format json -- "用一句话介绍你自己 A" > /tmp/oc-A.ndjson 2>/tmp/oc-A.err &
 PID_A=$!
-opencode run --agent aiisn-chat -s "$SID_B" --format json -- "用一句话介绍你自己 B" > /tmp/opencode-B.ndjson 2>/tmp/opencode-B.err &
+opencode run --agent aiisn-chat --format json -- "用一句话介绍你自己 B" > /tmp/oc-B.ndjson 2>/tmp/oc-B.err &
 PID_B=$!
-wait $PID_A $PID_B
-echo "A exit: $?, B exit: $?"
+wait $PID_A; EA=$?
+wait $PID_B; EB=$?
+echo "exit_A=$EA exit_B=$EB"
+
+# 纯度检查：A 文件只能含一个 sessionID，B 文件含另一个
+grep -oE '"sessionID":"[^"]+"' /tmp/oc-A.ndjson | sort -u
+grep -oE '"sessionID":"[^"]+"' /tmp/oc-B.ndjson | sort -u
 ```
 
 **通过标准**（**全部满足才算通过**）：
 
 1. 两个 PID 都 exit 0。
-2. `/tmp/opencode-A.ndjson` 中所有 `sessionID` 字段值恒为 `$SID_A`；B 同理。**绝不能出现 A 文件里夹带 B 的 sessionID（这是并发不安全的典型表征）**。
+2. `/tmp/oc-A.ndjson` 中 `sessionID` 唯一且与 B 文件完全不同。**绝不能出现 A 文件里夹带 B 的 sessionID（这是并发不安全的典型表征）**。
 3. A 文件的 `text` 事件内容语义与 prompt A 对应；B 同理（人工通读）。
 4. 两个进程的实际墙钟时间 < 单独跑两次的总和（即真的并行）。
 
-**失败应对**（R2 fallback → L0 路径）：如果任一项不通过，本方案降级：
+**2026-05-27 实测结果**（main HEAD `7b1c3c3` 上跑）：
+
+| 验收 | 结果 |
+|---|---|
+| exit code | `exit_A=0 exit_B=0` ✅ |
+| sessionID 纯度 | A=`ses_1969d0b47ffeR4YSH4VfpGf3Xo`、B=`ses_1969d0ba6ffeMqUWLN1zJgRR1k`，零交叉 ✅ |
+| 文本语义 | 两条 self-intro 各自独立、与 prompt 对应 ✅ |
+| 墙钟时间 | 并行 13s（单次实测 ~30s，串行预期 ~60s） ✅ |
+
+→ **结论：Stage 1 走 L1 真并行路径**，无需降级到 L0 串行锁。
+
+**失败应对**（R2 fallback → L0 路径，**本期不触发**，仅作为预案保留）：如果未来回归测试有任一项不通过：
 
 - 保留所有后端协议变更（TopicSession / topic_status / tool maps per-topic）——这些不依赖 opencode 并发。
 - 在 `ChatRuntimeManager` 加全局串行锁：所有 session 共享同一个 `Promise.then` 链，`sendUserMessage` 排队进入。
@@ -1107,9 +1122,9 @@ echo "A exit: $?, B exit: $?"
 
 通过 `GET /api/runtime/topic-status` + WS `onOpen` 钩子拉一次全量同步。详见 §4.3 / 前端 §2。
 
-### R2 · opencode 是否真的并发安全 — **依赖烟雾测试**
+### R2 · opencode 是否真的并发安全 — **已验证 ✅（2026-05-27）**
 
-详见上面 *并发烟雾测试* 节。L0 fallback 路径已明确，最坏情况额外 ~半天工作量。**建议 Stage 0 完成后立即跑烟雾测试，再决定 Stage 1 走 L1 还是 L0。**
+烟雾测试在 main HEAD `7b1c3c3` 实测通过：两个并发 `opencode run` 的 sessionID 完全独立、文本互不交叉、墙钟 13s 完成（< 串行的 ~60s）。Stage 1 走 L1 真并行路径，L0 fallback 不触发但保留为未来回归预案。详见 *并发烟雾测试* 节。
 
 ### R3 · DB 写入并发 — 无风险
 
