@@ -106,6 +106,15 @@ export class ClaudeRuntime extends EventEmitter {
   }
 
   async sendUserMessage(text: string, opts: SendUserMessageOptions = {}): Promise<void> {
+    // MVP18 Stage 0: 上一轮还在执行时拒绝再发。
+    // 改造前 chatTopics.ts 整段 await，HTTP 层天然串行，不会出现并发；
+    // 改造后 POST /api/chat 立即返回、turn 后台跑，前端有可能在 turn 跑着时再发。
+    // 这里硬拒绝，由调用方 .catch 把错误转成 topic 内的 system 消息。
+    // Stage 1 TopicSession 上线后这一拒绝下沉到 per-topic 维度。
+    if (this.status === 'busy') {
+      throw new Error('上一轮还在执行，请先中断或等待');
+    }
+
     let content = text;
     if (!opts.skipContext) {
       try {
