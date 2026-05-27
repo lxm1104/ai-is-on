@@ -30,8 +30,10 @@ import {
 } from '../db.js';
 import { runOneShot } from '../triage/backgroundRuntime.js';
 
-const LLM_BATCH_LIMIT = 30;
-const LLM_TIMEOUT_MS = 60_000;
+// 2026-05-26 真 db smoke：30 个 entity + cooccur 上下文一批，60s 不够，超时。
+// 缩 batch + 拉 timeout：单次 LLM 平均 30-60s，多 batch 仍能在 5 min 内跑完 51 个 entity。
+const LLM_BATCH_LIMIT = 15;
+const LLM_TIMEOUT_MS = 180_000;
 
 export type ProjectTaxonomyInput = {
   entityName: string;
