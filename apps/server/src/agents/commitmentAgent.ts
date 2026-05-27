@@ -54,6 +54,21 @@ export const trackCommitmentHandler: AgentHandler = async ({
   const criticalSpace = packet?.spaces?.find((s) => s.priority === 'critical');
   if (criticalSpace) priority = overdue ? 'P0' : 'P1';
 
+  // ②.5 MVP15B M8 graphContext 调权（projectPhase 影响 priority）
+  // 注意 commitmentAgent 入口 priority 已经是 P1/P2（overdue/hours 决定），
+  // 不会是 P3；P3 分支也不展开。
+  const gc = packet?.graphContext;
+  if (gc?.projectPhase?.health === 'overdue') {
+    // 项目整体已逾期 → 再升一档
+    if (priority === 'P2') priority = 'P1';
+    else if (priority === 'P1') priority = 'P0';
+  } else if (gc?.projectPhase?.phase === 'frozen') {
+    // frozen 项目降一档（用户暂停了的事不该被催）
+    if (priority === 'P1') priority = 'P2';
+    else if (priority === 'P2') priority = 'P3';
+  }
+  // at_risk 不动 — 已经是 P1/P2 不需再升
+
   const cardTitle = overdue ? `承诺已逾期：${title}` : `承诺即将到期：${title}`;
 
   const bodyLines: string[] = [];
@@ -73,10 +88,46 @@ export const trackCommitmentHandler: AgentHandler = async ({
     // 让用户能看到 agent 已经知道我是谁；MVP8.1 先用最简单的方式：仅写 1 条最相关的
     bodyLines.push(`我的职责：${packet.subject.responsibilities[0]}`);
   }
+
+  // MVP15B M8 graphContext 文案分支
+  let suggestedActionHint: string | null = null;
+  if (gc) {
+    // (1) projectPhase 提示
+    if (gc.projectPhase) {
+      const phaseLabel = `${gc.projectPhase.phase}/${gc.projectPhase.health}`;
+      bodyLines.push(
+        `所属项目阶段：${phaseLabel}${gc.projectPhase.summary ? ` — ${gc.projectPhase.summary}` : ''}`
+      );
+    }
+    // (2) decisionPath: 列出 decision_authority=high 的 owner（非 self），让用户知道找谁同步
+    const topOwner = gc.decisionPath.find(
+      (d) => (d.role === 'owner' || d.role === 'driver') && d.decisionAuthority === 'high'
+    ) ?? gc.decisionPath.find((d) => d.role === 'owner' || d.role === 'driver');
+    if (topOwner) {
+      bodyLines.push(`该项目 owner：${topOwner.name}（建议同步给 TA）`);
+    }
+    // (3) expectedButMissing：suggestedAction 加抄送候选
+    if (gc.expectedButMissing.persons.length > 0) {
+      const names = gc.expectedButMissing.persons
+        .slice(0, 2)
+        .map((p) => p.name)
+        .join('、');
+      suggestedActionHint = `可考虑抄：${names}`;
+    }
+    // (4) activeBlockers 提示（如果有上游阻塞）
+    if (gc.activeBlockers.length > 0) {
+      const blocker = gc.activeBlockers[0];
+      bodyLines.push(
+        `可能上游 blocker：${blocker.blockerTitle}${blocker.blockerOwner ? `（owner=${blocker.blockerOwner}）` : ''}`
+      );
+    }
+  }
+
+  const baseSuggestion = overdue
+    ? '建议：检查是否已经完成；若未完成，向相关方说明并给新时间。'
+    : '建议：今天内主动推进或确认进展。';
   bodyLines.push(
-    overdue
-      ? '建议：检查是否已经完成；若未完成，向相关方说明并给新时间。'
-      : '建议：今天内主动推进或确认进展。'
+    suggestedActionHint ? `${baseSuggestion} ${suggestedActionHint}` : baseSuggestion
   );
 
   // ③ handlingPolicy 推荐
