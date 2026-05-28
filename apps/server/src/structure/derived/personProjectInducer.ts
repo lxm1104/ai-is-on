@@ -20,10 +20,11 @@
  * sharedProjectCanonicalNames，详见 graphInducer.ts 调用顺序。
  */
 
+// MVP21 S5.1: 本文件从 context/ 迁到 structure/derived/。
 import { randomUUID } from 'node:crypto';
-import { db, upsertEntityEdge, type EntityEdgeRow } from '../db.js';
-import { resolveAliased } from './entityResolver.js';
-import { resolveProjectCanonical } from '../db.js';
+import { db, upsertEntityEdge, type EntityEdgeRow } from '../../db.js';
+import { resolveAliased } from '../../context/entityResolver.js';
+import { resolveProjectCanonical } from '../../db.js';
 
 export type PersonProjectRole =
   | 'owner'

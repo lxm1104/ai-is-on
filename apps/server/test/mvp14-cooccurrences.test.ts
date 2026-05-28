@@ -26,7 +26,7 @@ process.env.COLLECTOR_ENABLED = 'false';
 const { insertEntityAlias } = await import('../src/db.js');
 const { upsertContextUnit } = await import('../src/context/contextStore.js');
 const { resolveOrCreateEntity } = await import('../src/context/entityResolver.js');
-const { listCooccurrences } = await import('../src/context/cooccurrenceService.js');
+const { listCooccurrences } = await import('../src/structure/derived/cooccurrenceService.js');
 
 function writeUnit(
   refId: string,

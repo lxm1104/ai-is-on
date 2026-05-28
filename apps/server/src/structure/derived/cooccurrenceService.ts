@@ -15,8 +15,10 @@
  *   - canonical pair 作 key 聚合 count / lastSeenAt / evidenceUnit
  *   - minCount filter → top N by count desc
  */
-import { db, getContextEntityById } from '../db.js';
-import { resolveAliased } from './entityResolver.js';
+// MVP21 S5.1：本文件从 context/ 迁到 structure/derived/。
+// 相对路径：../../db (跳出 structure/derived/) + ../../context/ (留在 context/ 的兄弟)。
+import { db, getContextEntityById } from '../../db.js';
+import { resolveAliased } from '../../context/entityResolver.js';
 
 const ENTITY_TYPE_WHITELIST = ['person', 'doc', 'project', 'topic'] as const;
 const ROLE_WHITELIST = ['actor', 'about'] as const;

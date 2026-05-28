@@ -22,19 +22,19 @@ process.env.COLLECTOR_ENABLED = 'false';
 
 const db = await import('../src/db.js');
 const { runGraphInducer, resetThrottle } = await import(
-  '../src/context/graphInducer.js'
+  '../src/structure/derived/graphInducer.js'
 );
 const { inducePersonProjectEdges, inferRole } = await import(
-  '../src/context/personProjectInducer.js'
+  '../src/structure/derived/personProjectInducer.js'
 );
 const { inducePersonPersonEdges, computeBusinessRelation } = await import(
-  '../src/context/personPersonInducer.js'
+  '../src/structure/derived/personPersonInducer.js'
 );
 const { induceWorkItemFollowsEdges, purgeStaleEdges } = await import(
-  '../src/context/workItemInducer.js'
+  '../src/structure/derived/workItemInducer.js'
 );
 const { buildSelfCollaboratorRanking, __internal: scrInternal } = await import(
-  '../src/context/selfCollaboratorRanking.js'
+  '../src/structure/derived/selfCollaboratorRanking.js'
 );
 
 // ----------------------------------------------------------------------------

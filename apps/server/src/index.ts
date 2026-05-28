@@ -28,7 +28,7 @@ import { attentionRouter } from './routes/attention.js';
 import { larkTasksRouter } from './routes/larkTasks.js';
 import { graphRouter } from './routes/graph.js';
 import { projectsRouter } from './routes/projects.js';
-import { runGraphInducer } from './context/graphInducer.js';
+import { runGraphInducer } from './structure/derived/graphInducer.js';
 import { startCollectorScheduler, stopCollectorScheduler } from './collectors/scheduler.js';
 import { startTriggerScheduler, stopTriggerScheduler } from './triggers/triggerScheduler.js';
 import { startAttentionScheduler, stopAttentionScheduler } from './attention/attentionEngine.js';

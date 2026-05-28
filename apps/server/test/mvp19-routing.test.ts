@@ -26,7 +26,7 @@ const { resolveUnitToSpaces, createSpace } = await import(
   '../src/spaces/contextSpaceService.js'
 );
 const { buildSelfCollaboratorRanking, __internal } = await import(
-  '../src/context/selfCollaboratorRanking.js'
+  '../src/structure/derived/selfCollaboratorRanking.js'
 );
 
 function nowIso() {

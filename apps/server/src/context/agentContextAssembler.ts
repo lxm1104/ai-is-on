@@ -40,7 +40,7 @@ import {
   assembleGraphContext,
   type GraphContextSlice,
 } from './graphContextAssembler.js';
-import { buildSelfCollaboratorRanking } from './selfCollaboratorRanking.js';
+import { buildSelfCollaboratorRanking } from '../structure/derived/selfCollaboratorRanking.js';
 import { listEntityEdges as listEntityEdgesFromDb } from '../db.js';
 import { resolveAliased as resolveAliasedCanonical } from './entityResolver.js';
 import {

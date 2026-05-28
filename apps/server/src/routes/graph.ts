@@ -13,8 +13,8 @@
 
 import { Router } from 'express';
 import { db, getContextEntityById, listEntityEdges } from '../db.js';
-import { runGraphInducer, getLastRunAt } from '../context/graphInducer.js';
-import { buildSelfCollaboratorRanking } from '../context/selfCollaboratorRanking.js';
+import { runGraphInducer, getLastRunAt } from '../structure/derived/graphInducer.js';
+import { buildSelfCollaboratorRanking } from '../structure/derived/selfCollaboratorRanking.js';
 import { resolveAliased } from '../context/entityResolver.js';
 import {
   parsePersonAttributesFromRow,
