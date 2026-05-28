@@ -29,6 +29,14 @@ import {
   listChatEntities,
   unitsForChatEntity,
 } from './chatAffinityQueries.js';
+// MVP21 S5: 注册表观测（trigger='tick' 因为 /api/context-spaces 通过 reconcile/POST
+// 路由触发；产出 context_space_suggestions 属 pending_inference layer——
+// 待用户 confirm / reject 才升格）
+import {
+  registerInducer,
+  reportInducerRun,
+} from '../structure/inducerRegistry.js';
+registerInducer('space_suggestion_worker', 'pending_inference', 'tick');
 
 // ---------- 配置 ----------
 const RECENT_DAYS_PERSON_CO_OCCUR = 30;
@@ -244,39 +252,52 @@ export async function runSuggestionWorker(
     fallbackSuggested: 0,
   };
   const workerRunId = opts.workerRunId ?? randomUUID();
+  // MVP21 S5: 主入口 try/finally 包裹，向 inducer 注册表汇报本次耗时与错误
+  const t0 = Date.now();
+  let errorMsg: string | null = null;
+  try {
+    // ---------- Phase 2: chat_affinity（MVP13 LLM ranker 走起） ----------
+    const candidates = buildChatAffinityCandidates({
+      workerRunId,
+      now: new Date(),
+    });
+    stats.candidateGenerated = candidates.length;
 
-  // ---------- Phase 2: chat_affinity（MVP13 LLM ranker 走起） ----------
-  const candidates = buildChatAffinityCandidates({
-    workerRunId,
-    now: new Date(),
-  });
-  stats.candidateGenerated = candidates.length;
+    const rankSummary = await rankChatAffinityCandidates(candidates, {
+      workerRunId,
+      runner: opts.runner,
+      enableLlm: opts.enableLlm,
+    });
+    stats.candidateRanked = rankSummary.outcomes.length;
+    stats.llmAccepted = rankSummary.llmAccepted;
+    stats.llmRejected = rankSummary.llmRejected;
+    stats.llmFailed = rankSummary.llmFailed;
+    stats.rankerCacheHit = rankSummary.rankerCacheHit;
+    stats.fallbackSuggested = rankSummary.fallbackSuggested;
 
-  const rankSummary = await rankChatAffinityCandidates(candidates, {
-    workerRunId,
-    runner: opts.runner,
-    enableLlm: opts.enableLlm,
-  });
-  stats.candidateRanked = rankSummary.outcomes.length;
-  stats.llmAccepted = rankSummary.llmAccepted;
-  stats.llmRejected = rankSummary.llmRejected;
-  stats.llmFailed = rankSummary.llmFailed;
-  stats.rankerCacheHit = rankSummary.rankerCacheHit;
-  stats.fallbackSuggested = rankSummary.fallbackSuggested;
+    for (const o of rankSummary.outcomes) {
+      if (!o.surfaced) continue;
+      const r = upsertChatAffinityFromOutcome(o);
+      if (r === 'inserted') stats.chatAffinityInserted++;
+      else if (r === 'updated') stats.chatAffinityUpdated++;
+    }
 
-  for (const o of rankSummary.outcomes) {
-    if (!o.surfaced) continue;
-    const r = upsertChatAffinityFromOutcome(o);
-    if (r === 'inserted') stats.chatAffinityInserted++;
-    else if (r === 'updated') stats.chatAffinityUpdated++;
+    // ---------- Phase 3: person_co_occur（保留 MVP12 规则路径） ----------
+    const personStats = runPersonCoOccurPath(stats);
+    stats.personCoOccurInserted = personStats.inserted;
+    stats.personCoOccurUpdated = personStats.updated;
+
+    return stats;
+  } catch (err) {
+    errorMsg = err instanceof Error ? err.message : String(err);
+    throw err;
+  } finally {
+    try {
+      reportInducerRun('space_suggestion_worker', Date.now() - t0, errorMsg);
+    } catch {
+      /* 注册表报告失败不影响主流程 */
+    }
   }
-
-  // ---------- Phase 3: person_co_occur（保留 MVP12 规则路径） ----------
-  const personStats = runPersonCoOccurPath(stats);
-  stats.personCoOccurInserted = personStats.inserted;
-  stats.personCoOccurUpdated = personStats.updated;
-
-  return stats;
 }
 
 function upsertChatAffinityFromOutcome(
