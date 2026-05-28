@@ -79,6 +79,7 @@ test('card dismiss records interaction and demotes related entity', async () => 
     confidence: 0.8,
     created_at: now,
     updated_at: now,
+    attributes_json: null,
   });
   const item = createAttentionItem({
     id: 'attn_dismiss_1',
