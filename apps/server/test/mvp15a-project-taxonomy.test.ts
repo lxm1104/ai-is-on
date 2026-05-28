@@ -186,3 +186,356 @@ test('T12.ter LLM 失败 → 不写缓存 + 不抛', async () => {
   assert.equal(db.resolveProjectCanonical('orphan'), 'orphan');
   assert.equal(db.listProjectTaxonomy().length, 0);
 });
+
+// ============================================================================
+// MVP19 §M1：项目 canonical 注册表与闭词表抽取
+// ============================================================================
+
+// ----- M1-1: resolveProjectCanonical lower-case alias 命中 -----
+test('M19.lower-case alias 命中（chatbot 命中存为 Chatbot 的 alias）', () => {
+  resetDb();
+  db.upsertProjectTaxonomy({
+    canonical_name: 'Chatbot 产研协同',
+    aliases_json: JSON.stringify(['Chatbot 产研协同', 'Chatbot']),
+    summary: null,
+    parsed_by: 'llm',
+    parsed_at: new Date().toISOString(),
+  });
+  // 输入大小写不同也能命中
+  assert.equal(db.resolveProjectCanonical('chatbot'), 'Chatbot 产研协同');
+  assert.equal(db.resolveProjectCanonical('CHATBOT'), 'Chatbot 产研协同');
+  assert.equal(db.resolveProjectCanonical('ChAtBoT'), 'Chatbot 产研协同');
+  // 中文不受大小写影响（本来就字面匹配）
+  assert.equal(db.resolveProjectCanonical('Chatbot 产研协同'), 'Chatbot 产研协同');
+  // canonical 仍以注册表原大小写返回
+  const tax = db.listProjectTaxonomy();
+  assert.equal(tax[0].canonical_name, 'Chatbot 产研协同');
+});
+
+// ----- M1-2: getProjectAncestorChain 单层 / 多层 / 不存在 -----
+test('M19.ancestor chain：单层 parent', () => {
+  resetDb();
+  const now = new Date().toISOString();
+  db.upsertProjectTaxonomy({
+    canonical_name: 'Chatbot 产研协同',
+    aliases_json: '["Chatbot 产研协同"]',
+    summary: null,
+    parsed_by: 'manual',
+    parsed_at: now,
+  });
+  db.upsertProjectTaxonomy({
+    canonical_name: 'Chatbot Skill Market',
+    aliases_json: '["Chatbot Skill Market"]',
+    summary: null,
+    parsed_by: 'manual',
+    parsed_at: now,
+    parent_canonical_name: 'Chatbot 产研协同',
+  });
+  assert.deepEqual(db.getProjectAncestorChain('Chatbot Skill Market'), [
+    'Chatbot 产研协同',
+  ]);
+  // 顶层 canonical 没有祖先
+  assert.deepEqual(db.getProjectAncestorChain('Chatbot 产研协同'), []);
+  // 不存在的 canonical
+  assert.deepEqual(db.getProjectAncestorChain('nonexistent'), []);
+});
+
+test('M19.ancestor chain：3 层链', () => {
+  resetDb();
+  const now = new Date().toISOString();
+  db.upsertProjectTaxonomy({
+    canonical_name: 'L1',
+    aliases_json: '["L1"]',
+    summary: null,
+    parsed_by: 'manual',
+    parsed_at: now,
+  });
+  db.upsertProjectTaxonomy({
+    canonical_name: 'L2',
+    aliases_json: '["L2"]',
+    summary: null,
+    parsed_by: 'manual',
+    parsed_at: now,
+    parent_canonical_name: 'L1',
+  });
+  db.upsertProjectTaxonomy({
+    canonical_name: 'L3',
+    aliases_json: '["L3"]',
+    summary: null,
+    parsed_by: 'manual',
+    parsed_at: now,
+    parent_canonical_name: 'L2',
+  });
+  assert.deepEqual(db.getProjectAncestorChain('L3'), ['L2', 'L1']);
+});
+
+// ----- M1-3: getProjectAncestorChain 环防护 -----
+test('M19.ancestor chain：环防护抛错', () => {
+  resetDb();
+  const now = new Date().toISOString();
+  // 先建无环，再绕过 upsert 直接 SQL 构造 A → B → A
+  db.upsertProjectTaxonomy({
+    canonical_name: 'A',
+    aliases_json: '["A"]',
+    summary: null,
+    parsed_by: 'manual',
+    parsed_at: now,
+  });
+  db.upsertProjectTaxonomy({
+    canonical_name: 'B',
+    aliases_json: '["B"]',
+    summary: null,
+    parsed_by: 'manual',
+    parsed_at: now,
+    parent_canonical_name: 'A',
+  });
+  // 手动 SQL 把 A.parent 指回 B，形成环（绕过应用层 upsert 检查）
+  db.db
+    .prepare(
+      `UPDATE org_project_taxonomy SET parent_canonical_name='B' WHERE canonical_name='A'`
+    )
+    .run();
+  assert.throws(
+    () => db.getProjectAncestorChain('A'),
+    /cycle detected|hierarchy cycle/i
+  );
+});
+
+// ----- M1-4: getProjectCanonicalSet 包含自身 + 祖先 -----
+test('M19.canonical set：包含 canonical + ancestor，alias 大小写不敏感', () => {
+  resetDb();
+  const now = new Date().toISOString();
+  db.upsertProjectTaxonomy({
+    canonical_name: 'Chatbot 产研协同',
+    aliases_json: JSON.stringify(['Chatbot 产研协同', 'Chatbot']),
+    summary: null,
+    parsed_by: 'manual',
+    parsed_at: now,
+  });
+  db.upsertProjectTaxonomy({
+    canonical_name: 'Chatbot Skill Market',
+    aliases_json: JSON.stringify(['Chatbot Skill Market', 'Skill 市场']),
+    summary: null,
+    parsed_by: 'manual',
+    parsed_at: now,
+    parent_canonical_name: 'Chatbot 产研协同',
+  });
+  // 用 alias 输入也能展开
+  const set = db.getProjectCanonicalSet('Skill 市场');
+  assert.deepEqual(
+    [...set].sort(),
+    ['Chatbot Skill Market', 'Chatbot 产研协同'].sort()
+  );
+  // canonical 直接输入
+  const set2 = db.getProjectCanonicalSet('Chatbot 产研协同');
+  assert.deepEqual([...set2], ['Chatbot 产研协同']);
+  // 不存在的名字
+  const set3 = db.getProjectCanonicalSet('未知项目');
+  assert.deepEqual([...set3], ['未知项目']);
+});
+
+// ----- M1-5: getProjectAuthoritativeSpaceId -----
+test('M19.authoritative_space_id 反查', () => {
+  resetDb();
+  const now = new Date().toISOString();
+  db.upsertProjectTaxonomy({
+    canonical_name: 'Has Space',
+    aliases_json: '["Has Space"]',
+    summary: null,
+    parsed_by: 'work_map_writer',
+    parsed_at: now,
+    authoritative_space_id: 'space-uuid-123',
+  });
+  db.upsertProjectTaxonomy({
+    canonical_name: 'No Space',
+    aliases_json: '["No Space"]',
+    summary: null,
+    parsed_by: 'llm',
+    parsed_at: now,
+  });
+  assert.equal(db.getProjectAuthoritativeSpaceId('Has Space'), 'space-uuid-123');
+  assert.equal(db.getProjectAuthoritativeSpaceId('No Space'), null);
+  assert.equal(db.getProjectAuthoritativeSpaceId('nonexistent'), null);
+});
+
+// ----- M1-6: upsertProjectTaxonomy alias 跨行唯一性 -----
+test('M19.alias 跨行冲突抛 AliasConflictError', () => {
+  resetDb();
+  const now = new Date().toISOString();
+  db.upsertProjectTaxonomy({
+    canonical_name: 'Alpha',
+    aliases_json: JSON.stringify(['Alpha', '别名X']),
+    summary: null,
+    parsed_by: 'llm',
+    parsed_at: now,
+  });
+  // 别名 X 已属 Alpha，试图把它分给 Beta 应抛 AliasConflictError
+  assert.throws(
+    () => {
+      db.upsertProjectTaxonomy({
+        canonical_name: 'Beta',
+        aliases_json: JSON.stringify(['Beta', '别名X']),
+        summary: null,
+        parsed_by: 'llm',
+        parsed_at: now,
+      });
+    },
+    (e: unknown) =>
+      e instanceof db.AliasConflictError &&
+      e.alias === '别名X' &&
+      e.existingCanonical === 'Alpha' &&
+      e.proposedCanonical === 'Beta'
+  );
+  // Beta 不应被写入
+  assert.equal(db.listProjectTaxonomy().length, 1);
+});
+
+test('M19.alias 冲突大小写不敏感（chatbot ≈ Chatbot）', () => {
+  resetDb();
+  const now = new Date().toISOString();
+  db.upsertProjectTaxonomy({
+    canonical_name: 'Alpha',
+    aliases_json: JSON.stringify(['Alpha', 'Chatbot']),
+    summary: null,
+    parsed_by: 'llm',
+    parsed_at: now,
+  });
+  assert.throws(() => {
+    db.upsertProjectTaxonomy({
+      canonical_name: 'Beta',
+      aliases_json: JSON.stringify(['Beta', 'chatbot']), // lower-case 同名
+      summary: null,
+      parsed_by: 'llm',
+      parsed_at: now,
+    });
+  }, db.AliasConflictError);
+});
+
+test('M19.同 canonical 行内重复写入 aliases 并集不冲突', () => {
+  resetDb();
+  const now = new Date().toISOString();
+  db.upsertProjectTaxonomy({
+    canonical_name: 'Alpha',
+    aliases_json: JSON.stringify(['Alpha', '别名X']),
+    summary: null,
+    parsed_by: 'llm',
+    parsed_at: now,
+  });
+  // 同 canonical 再次 upsert（增量 alias），不该抛
+  db.upsertProjectTaxonomy({
+    canonical_name: 'Alpha',
+    aliases_json: JSON.stringify(['Alpha', '别名X', '别名Y']),
+    summary: null,
+    parsed_by: 'llm',
+    parsed_at: now,
+  });
+  const tax = db.listProjectTaxonomy();
+  assert.equal(tax.length, 1);
+  const aliases = JSON.parse(tax[0].aliases_json) as string[];
+  assert.ok(aliases.includes('别名X'));
+  assert.ok(aliases.includes('别名Y'));
+});
+
+// ----- M1-7: upsertProjectTaxonomy 接受新可选字段 -----
+test('M19.upsert 接受 parent / authoritative_space_id 并保持现状语义', () => {
+  resetDb();
+  const now = new Date().toISOString();
+  db.upsertProjectTaxonomy({
+    canonical_name: 'Parent',
+    aliases_json: '["Parent"]',
+    summary: null,
+    parsed_by: 'manual',
+    parsed_at: now,
+  });
+  // 创建 child 时显式指定 parent
+  db.upsertProjectTaxonomy({
+    canonical_name: 'Child',
+    aliases_json: '["Child"]',
+    summary: null,
+    parsed_by: 'manual',
+    parsed_at: now,
+    parent_canonical_name: 'Parent',
+    authoritative_space_id: 'space-xyz',
+  });
+  // 验证字段持久化
+  let row = db.db
+    .prepare(
+      `SELECT parent_canonical_name, authoritative_space_id FROM org_project_taxonomy WHERE canonical_name='Child'`
+    )
+    .get() as { parent_canonical_name: string | null; authoritative_space_id: string | null };
+  assert.equal(row.parent_canonical_name, 'Parent');
+  assert.equal(row.authoritative_space_id, 'space-xyz');
+  // 不传 parent / authoritative_space_id 的 upsert 不应清空现有值
+  db.upsertProjectTaxonomy({
+    canonical_name: 'Child',
+    aliases_json: '["Child", "Child alias"]',
+    summary: null,
+    parsed_by: 'llm',
+    parsed_at: now,
+  });
+  row = db.db
+    .prepare(
+      `SELECT parent_canonical_name, authoritative_space_id FROM org_project_taxonomy WHERE canonical_name='Child'`
+    )
+    .get() as { parent_canonical_name: string | null; authoritative_space_id: string | null };
+  assert.equal(row.parent_canonical_name, 'Parent', '未显式传 parent 应保留');
+  assert.equal(row.authoritative_space_id, 'space-xyz', '未显式传 authoritative_space_id 应保留');
+  // 显式传 null 应清空
+  db.upsertProjectTaxonomy({
+    canonical_name: 'Child',
+    aliases_json: '["Child", "Child alias"]',
+    summary: null,
+    parsed_by: 'llm',
+    parsed_at: now,
+    parent_canonical_name: null,
+    authoritative_space_id: null,
+  });
+  row = db.db
+    .prepare(
+      `SELECT parent_canonical_name, authoritative_space_id FROM org_project_taxonomy WHERE canonical_name='Child'`
+    )
+    .get() as { parent_canonical_name: string | null; authoritative_space_id: string | null };
+  assert.equal(row.parent_canonical_name, null);
+  assert.equal(row.authoritative_space_id, null);
+});
+
+// ----- M1-8: project_canonical_proposals 表存在 + partial unique -----
+test('M19.proposals 表 partial unique（pending 同名冲突，reject 后可再来）', () => {
+  // 此 test 不依赖 resetDb（直接用底层 db 句柄写一遍即可）
+  const now = new Date().toISOString();
+  db.db
+    .prepare(
+      `INSERT INTO project_canonical_proposals
+       (id, proposed_name, source_unit_ids_json, source_event_id, occurrences,
+        first_seen_at, last_seen_at, status)
+       VALUES ('p1', 'M19TestProj', '[]', NULL, 1, ?, ?, 'pending')`
+    )
+    .run(now, now);
+  // pending 同名第二条应被 partial unique 拒绝
+  assert.throws(() => {
+    db.db
+      .prepare(
+        `INSERT INTO project_canonical_proposals
+         (id, proposed_name, source_unit_ids_json, source_event_id, occurrences,
+          first_seen_at, last_seen_at, status)
+         VALUES ('p2', 'M19TestProj', '[]', NULL, 1, ?, ?, 'pending')`
+      )
+      .run(now, now);
+  }, /UNIQUE constraint failed/);
+  // 把第一条置 rejected → partial index 不再覆盖 → 同名 pending 可以新进
+  db.db
+    .prepare(
+      `UPDATE project_canonical_proposals SET status='rejected', resolved_at=? WHERE id='p1'`
+    )
+    .run(now);
+  db.db
+    .prepare(
+      `INSERT INTO project_canonical_proposals
+       (id, proposed_name, source_unit_ids_json, source_event_id, occurrences,
+        first_seen_at, last_seen_at, status)
+       VALUES ('p2', 'M19TestProj', '[]', NULL, 1, ?, ?, 'pending')`
+    )
+    .run(now, now);
+  // 清理本测试写的行，避免污染后续
+  db.db.prepare(`DELETE FROM project_canonical_proposals WHERE proposed_name='M19TestProj'`).run();
+});
