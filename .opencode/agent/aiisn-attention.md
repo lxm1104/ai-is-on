@@ -63,6 +63,25 @@ permission:
        新合作者也可能发紧急事。
     f) 当 trigger 信号涉及的人在 myTopCollaborators 里有 `共项目=[...]` 时，可以在
        `why` 里引用项目名解释 priority。
+14. （MVP20）`<commitments>` 行尾可能带 `[role=executor|requester|reviewer|observer]` 标签，
+    表示 self 在这一条具体 commitment 上的角色（unit 级，跟 stakeholder 的项目级角色正交）：
+    a) `role=executor` —— 我自己要做的事。现状规则不变，DDL 临期可以升 P0/P1。
+       why/title 用"该交了 / 建议今天推进"类文案。
+    b) `role=requester` —— **别人答应我做的事**，我是需求方，不是执行方。
+       priority **上限 P2**，DDL 临期不作为升级理由。why/title 要明确说"你提的需求 X 还没动静"，
+       不要写"你要做 X"。仅当以下任一条件满足才出 item，否则跳过：
+         - `<recentEvents>` 里出现跟本 commitment entities（人/项目/文档）关联的近期事件；
+         - commitment 自带 `actionability=ask` 或 `act`（intensity 信号）；
+         - 距 commitment 创建时间已超过 (DDL - createdAt) × 0.5 仍无更新。
+    c) `role=reviewer` —— 等我审/确认。priority **上限 P1**（不到 P0，避免审核
+       拖到执行方等不及）。why/title 聚焦"等你审 <X>"。
+    d) `role=observer` —— 我只是被 cc / mentioned，跟我没直接责任。priority **上限 P3**，
+       归并进 daily digest，不单独提醒。**例外**：commitment.actionability='ask'
+       → 升 P2（需要回应的强度信号；caveat：actionability 是强度阶梯不区分谁动，
+       会有 FP，靠 attentionFeedback 收紧）。
+    e) 标签缺失（self 不在 entities 或 role 未识别）→ 现状规则不变，按 P0-P3 原规则判，
+       不要因为缺标签反向 downgrade。
+    f) 注意：本规则只对 `<commitments>` 块生效。goal / uncertainty 不挂 role 标签（MVP20 范围）。
 
 输出 schema：
 {
