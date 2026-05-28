@@ -566,6 +566,93 @@ CREATE INDEX IF NOT EXISTS idx_pcp_status_lastseen
   ON project_canonical_proposals(status, last_seen_at DESC);
 `);
 
+// MVP19 boot migration（一次性，幂等可重复启动）。
+// Step 2：扫所有现存 context_spaces（type='project'），同步到 org_project_taxonomy。
+// Step 3：把已知 Chatbot 业务线下的 7 个子 canonical 挂到 'Chatbot 产研协同'。
+// 两步都尽量惰性：Step 2 通过 INSERT/UPDATE 分支实现 idempotent；
+// Step 3 用 WHERE parent IS NULL 守卫，避免覆盖用户已设置的 parent。
+//
+// 直接 inline SQL 而非调用 contextSpaceService.syncSpaceToProjectTaxonomy，
+// 是为了避免 db.ts ← contextSpaceService.ts 循环导入；语义保持一致。
+(function runMvp19BootMigration() {
+  const nowIso = new Date().toISOString();
+
+  // ----- Step 2: spaces → taxonomy -----
+  const spaceRows = db
+    .prepare(
+      `SELECT id, name FROM context_spaces
+        WHERE type='project' AND (status IS NULL OR status='active')`
+    )
+    .all() as Array<{ id: string; name: string }>;
+  for (const sp of spaceRows) {
+    try {
+      const exists = db
+        .prepare(`SELECT 1 AS x FROM org_project_taxonomy WHERE canonical_name=?`)
+        .get(sp.name) as { x: number } | undefined;
+      if (!exists) {
+        db.prepare(
+          `INSERT INTO org_project_taxonomy
+             (canonical_name, aliases_json, summary, parsed_by, parsed_at,
+              parent_canonical_name, authoritative_space_id)
+           VALUES (?, ?, NULL, 'work_map_writer', ?, NULL, ?)`
+        ).run(sp.name, JSON.stringify([sp.name]), nowIso, sp.id);
+      } else {
+        // 仅 UPDATE 两列；aliases / parent / summary 一律不动
+        db.prepare(
+          `UPDATE org_project_taxonomy
+              SET parsed_by='work_map_writer',
+                  authoritative_space_id=?
+            WHERE canonical_name=?`
+        ).run(sp.id, sp.name);
+      }
+    } catch (err) {
+      console.warn(
+        `[MVP19 boot] failed to sync space "${sp.name}":`,
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  }
+
+  // ----- Step 3: Chatbot-* 7 兄弟收编为 'Chatbot 产研协同' 的子 -----
+  // 守卫：只在 parent 仍为 NULL 时设；用户手工改过就尊重。
+  // 'Chatbot 产研协同' 自身必须存在才有意义；若它还没在 taxonomy 里说明 Step 2
+  // 没把对应 space 同步进来（dev DB 上不存在该 space 时），此时跳过避免 dangling parent。
+  const parentExists = db
+    .prepare(
+      `SELECT 1 AS x FROM org_project_taxonomy
+        WHERE canonical_name='Chatbot 产研协同'`
+    )
+    .get();
+  if (parentExists) {
+    const chatbotChildren = [
+      'Chatbot',
+      'Chatbot Skill Market',
+      'Chatbot Agent Builder',
+      'Chatbot Badcase 收集跟进',
+      'Chatbot 接入 Workspace',
+      'Chatbot 支持在会话内分享',
+      'Chatbot一期',
+    ];
+    const stmt = db.prepare(
+      `UPDATE org_project_taxonomy
+          SET parent_canonical_name='Chatbot 产研协同'
+        WHERE canonical_name=?
+          AND parent_canonical_name IS NULL`
+    );
+    let updated = 0;
+    for (const child of chatbotChildren) {
+      const r = stmt.run(child);
+      if (r.changes > 0) updated++;
+    }
+    if (updated > 0) {
+      console.log(
+        `[MVP19 boot] Step 3: ${updated}/${chatbotChildren.length} Chatbot-* ` +
+          `canonical parented to 'Chatbot 产研协同'`
+      );
+    }
+  }
+})();
+
 // ============ MVP15B: 图语义化 ============
 // 详见 docs/MVP15B-Work-Map-图语义化与Attention接入技术方案.md §4。
 //
