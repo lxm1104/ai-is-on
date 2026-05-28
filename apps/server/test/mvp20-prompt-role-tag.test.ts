@@ -245,7 +245,7 @@ test('行尾 [role=...] 出现在 entities {...} 和 meaning 之后（顺序稳�
   const roleIdx = line.indexOf('[role=executor]');
   assert.ok(entitiesIdx >= 0, `entities 应包含 project:Base UX，实际行: "${line}"`);
   assert.ok(roleIdx >= 0, `[role=executor] 标签应存在，实际行: "${line}"`);
-  assert.ok(entitiesIdx < roleIdx, '[role=...] 应在 entities 之后（行尾）');
-  // [role=...] 应是行的最后一个段
-  assert.ok(line.trimEnd().endsWith('[role=executor]'), `行应以 [role=...] 结尾，实际: "${line}"`);
+  assert.ok(entitiesIdx < roleIdx, '[role=...] 应在 entities 之后');
+  // MVP21 S1：取消"必须以 [role=...] 结尾"的死锁——MVP21 在其后追加了 [src=...] 标签。
+  // 真实约束是"role 出现在 entities 之后"，已由 entitiesIdx < roleIdx 覆盖。
 });

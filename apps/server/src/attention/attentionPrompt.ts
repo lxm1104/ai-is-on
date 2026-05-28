@@ -6,6 +6,7 @@
 import { jsonrepair } from 'jsonrepair';
 import type { GlobalContextPacket } from '../context/agentContextAssembler.js';
 import type { ContextUnit } from '../context/ContextUnit.js';
+import type { ContextLayerHint, ContextSource } from '../context/layerClassifier.js';
 import type {
   AttentionItem,
   AttentionLLMItem,
@@ -88,6 +89,19 @@ export const ATTENTION_SYSTEM_PROMPT = `你是用户的「注意力管家」。
     e) 标签缺失（self 不在 entities 或 role 未识别）→ 现状规则不变，按 P0-P3 原规则判，
        不要因为缺标签反向 downgrade。
     f) 注意：本规则只对 \`<commitments>\` 块生效。goal / uncertainty 不挂 role 标签（MVP20 范围）。
+15. （MVP21）\`<commitments>\` / \`<goals>\` / \`<uncertainties>\` 行尾可能带 \`[src=...]\` 标签：
+    a) \`src=work_map_seed\` —— 用户在 Bootstrap / Work Map 上主动登记的种子信息。
+       视为"用户曾经认为重要的关注点"，**不**视为"当前一定还成立的事实"。
+       若同 entities / 同标题在 \`<recentEvents>\` 或其它 \`src=triage\` 信号里有近期更新，
+       priority 以 triage 那条为准；若只有 \`src=work_map_seed\`、没有近期事件支撑，
+       priority 上限 P2，title/why 措辞用"你之前登记的 X 是否还重要"类提问句，
+       不要写"X 该交了 / 今天必须 X"。
+    b) \`src=triage\` —— 系统从近期事件中抽出的语义 unit。priority 判断不变。
+    c) \`src=collector\` —— 原始事件直写，未经富化；通常只出现在 \`<recentEvents>\`，
+       不应单独产出 attention item（按现有规则）。
+    d) \`src=manual\` / \`src=card_action\` / \`src=agent_run\` / \`src=system_feedback\` ——
+       用户或 agent 显式写入，按内容本身判断。
+    e) 缺 \`[src=...]\` 标签 = 装配未注入或未知来源，按内容判断，不作来源加权。
 
 输出 schema：
 {
@@ -291,9 +305,15 @@ type RenderUnitsOpts = {
   showTime?: boolean;
 };
 
+/** MVP21 S1 §4.2 — 渲染时同时支持挂了 selfRoleOnUnit / _layerHint 的派生字段。 */
+type RenderableUnit = ContextUnit & {
+  selfRoleOnUnit?: 'executor' | 'requester' | 'reviewer' | 'observer' | null;
+  _layerHint?: ContextLayerHint;
+};
+
 function renderUnitsBlock(
   tag: string,
-  units: ContextUnit[],
+  units: RenderableUnit[],
   caption: string,
   opts: RenderUnitsOpts = {}
 ): string {
@@ -306,11 +326,23 @@ function renderUnitsBlock(
   return lines.join('\n');
 }
 
+// MVP21 S1 §4.2: 行尾除 [role=...] 外，再追加 [src=...] 标签——`_layerHint.source`
+// 派生字段在 agentContextAssembler 装配 commitments/goals/uncertainties 时挂的。
+// inducer / unknown / 缺失 hint 时不输出标签。
+const SRC_TAG_WHITELIST: ReadonlySet<ContextSource> = new Set<ContextSource>([
+  'work_map_seed',
+  'triage',
+  'collector',
+  'manual',
+  'card_action',
+  'agent_run',
+  'system_feedback',
+]);
+
 // MVP20 §M4: 行尾可能追加 [role=requester] 等 self-role 标签——派生字段在
 // agentContextAssembler 装配 commitments 时挂的（CommitmentInPacket）。
-// 本 PR (PR2) 只暴露标签让 LLM 自发学习；铁律 13 在 PR3 加入。
 function renderUnitOneLine(
-  u: ContextUnit & { selfRoleOnUnit?: 'executor' | 'requester' | 'reviewer' | 'observer' | null },
+  u: RenderableUnit,
   opts: RenderUnitsOpts
 ): string {
   const parts: string[] = [`- [${u.id}] (${u.kind})`];
@@ -332,6 +364,10 @@ function renderUnitOneLine(
   // MVP20 §M4: self 在这条 unit 上的角色（仅 commitment 派生，goal/uncertainty 不挂）
   if (u.selfRoleOnUnit) {
     parts.push(`[role=${u.selfRoleOnUnit}]`);
+  }
+  // MVP21 S1 §4.2: 来源标签（只对白名单 source 输出，让 LLM 区分用户登记 / triage / collector 等）
+  if (u._layerHint && SRC_TAG_WHITELIST.has(u._layerHint.source)) {
+    parts.push(`[src=${u._layerHint.source}]`);
   }
   return parts.join(' ');
 }

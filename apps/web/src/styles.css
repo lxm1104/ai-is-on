@@ -982,6 +982,32 @@ body { background: var(--bg); color: var(--text); }
 .ctx-kind--goal, .ctx-kind--intent { color: #6ee7b7; border-color: #6ee7b744; }
 .ctx-kind--event { color: #93c5fd; border-color: #93c5fd44; }
 .ctx-kind--emotion, .ctx-kind--self_narrative { color: #f9a8d4; border-color: #f9a8d444; }
+/* MVP21 S1: layer / source chip（与 .ctx-kind 同一形态） */
+.ctx-layer, .ctx-src {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border);
+  text-transform: lowercase;
+  letter-spacing: 0.3px;
+  color: var(--muted);
+}
+.ctx-layer--identity_fact      { color: #cbd5e1; border-color: #cbd5e144; }
+.ctx-layer--project_intent     { color: #a5b4fc; border-color: #a5b4fc44; }
+.ctx-layer--dynamic_signal     { color: #fbbf24; border-color: #fbbf2444; }
+.ctx-layer--derived_signal     { color: #94a3b8; border-color: #94a3b844; }
+.ctx-layer--pending_inference  { color: #f472b6; border-color: #f472b644; }
+.ctx-layer--output             { color: #34d399; border-color: #34d39944; }
+.ctx-src--work_map_seed        { color: #c4b5fd; border-color: #c4b5fd44; }
+.ctx-src--triage               { color: #7dd3fc; border-color: #7dd3fc44; }
+.ctx-src--collector            { color: #6b7280; border-color: #6b728044; }
+.ctx-src--agent_run            { color: #34d399; border-color: #34d39944; }
+.ctx-src--card_action          { color: #fbbf24; border-color: #fbbf2444; }
+.ctx-src--manual               { color: #fde68a; border-color: #fde68a44; }
+.ctx-src--system_feedback      { color: #94a3b8; border-color: #94a3b844; }
+.ctx-src--inducer              { color: #94a3b8; border-color: #94a3b844; }
+.ctx-src--unknown              { color: #f87171; border-color: #f8717144; }
 .ctx-unit__content {
   font-size: 12px;
   color: var(--muted);

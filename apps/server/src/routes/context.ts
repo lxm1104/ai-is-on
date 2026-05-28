@@ -10,15 +10,23 @@ import {
 import { buildActiveContext } from '../context/activeContext.js';
 import { listRelationships } from '../context/relationshipsService.js';
 import { listCooccurrences } from '../context/cooccurrenceService.js';
+import { classifyContextUnit } from '../context/layerClassifier.js';
+import type { ContextUnit } from '../context/ContextUnit.js';
 
 export const contextRouter = Router();
+
+// MVP21 S1 §4.3：把 layer 分类挂到 unit 上，给前端 ContextPanel 显示来源 chip 用。
+// 派生字段，不进 DB；前端按 _layerHint.source 显示视觉区分。
+function attachLayerHint<T extends ContextUnit>(u: T): T & { _layerHint: ReturnType<typeof classifyContextUnit> } {
+  return { ...u, _layerHint: classifyContextUnit(u) };
+}
 
 contextRouter.get('/context/units', (req, res) => {
   const limit = clampInt(req.query.limit, 100, 1, 500);
   const kind = stringOrUndef(req.query.kind);
   const originKind = stringOrUndef(req.query.origin);
   const actionability = stringOrUndef(req.query.actionability);
-  const items = listActiveContextUnits({ limit, kind, originKind, actionability });
+  const items = listActiveContextUnits({ limit, kind, originKind, actionability }).map(attachLayerHint);
   res.json({ items });
 });
 
@@ -29,7 +37,7 @@ contextRouter.get('/context/units/:id', (req, res) => {
     return;
   }
   const links = listLinksFor(unit.id);
-  res.json({ unit, links });
+  res.json({ unit: attachLayerHint(unit), links });
 });
 
 contextRouter.get('/context/entities', (_req, res) => {
