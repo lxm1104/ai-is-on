@@ -194,42 +194,24 @@ function writeProject(p: ProjectMapDraft) {
     r.wasUpdate ? unitsUpdated++ : unitsWritten++;
   }
 
-  // commitments / deadlines
-  for (const d of p.upcomingDeadlines) {
-    const title = d.title.trim();
-    if (!title) continue;
-    const r = upsertContextUnit({
-      kind: 'commitment',
-      title,
-      content: title,
-      entities: [{ type: 'project', name, role: 'about' }],
-      scope: 'work',
-      origin: { kind: 'system', refId: 'work_map' },
-      time: d.dueAt ? { dueAt: d.dueAt } : undefined,
-      actionability: 'act',
-      confidence: 0.85,
-      mergeHint: `work_map:commitment:${slug(name)}:${slug(title)}`,
-    });
-    r.wasUpdate ? unitsUpdated++ : unitsWritten++;
-  }
-
-  // risks
-  for (const risk of p.risks) {
-    const text = risk.trim();
-    if (!text) continue;
-    const r = upsertContextUnit({
-      kind: 'uncertainty',
-      title: text,
-      content: text,
-      entities: [{ type: 'project', name, role: 'about' }],
-      scope: 'work',
-      origin: { kind: 'system', refId: 'work_map' },
-      actionability: 'notify',
-      confidence: 0.7,
-      mergeHint: `work_map:risk:${slug(name)}:${slug(text)}`,
-    });
-    r.wasUpdate ? unitsUpdated++ : unitsWritten++;
-  }
+  // MVP21 S4: 不再写 kind=commitment / uncertainty (mergeHint=work_map:*)。
+  // 原因：这两类流速是周级（DDL 临期会消失、风险会演化），与 IM/triage 抽取的
+  // 同类 unit 在 attention.commitments[] / uncertainties[] 数组里争抢有限位置，
+  // 而用户在 Work Map UI 上没有"标记完成 / 标记已过时"的入口，导致双写漂移。
+  // 详见 docs/MVP21-Context语义分层与结构层收拢技术方案.md §7。
+  //
+  // 替代路径：
+  //   - p.upcomingDeadlines / p.risks 仍出现在 WorkMapDraft schema（schema 兼容
+  //     不动），但本 writer 不再以 ContextUnit 形态落库。
+  //   - 它们被收编进 Space.intent_json.seedGoalTitles / seedConcernTitles
+  //     （§5.1 sync 路径）作为"项目意图种子"喂给 ranker prompt，但 ranker prompt
+  //     已经在 RANKER_SYSTEM_PROMPT 铁律 7 里被告知"种子可能过时"，不会被当成
+  //     当前事实。
+  //   - 真实的 commitment / uncertainty 由 triage enrichment 从 IM / 日历 / 文档
+  //     自然抽取。
+  //
+  // 历史的 work_map:commitment:* / work_map:risk:* unit 仍在表里 status='active'，
+  // 通过可选的 scripts/mvp21-archive-work-map-dynamic-units.ts 归档（默认 dry-run）。
 
   // authoritative docs：entity{type:'doc',name:url} → link to Space
   for (const url of p.authoritativeDocs) {
