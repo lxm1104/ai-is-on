@@ -27,6 +27,7 @@ import { adminSuggestionRouter } from './routes/adminSuggestion.js';
 import { attentionRouter } from './routes/attention.js';
 import { larkTasksRouter } from './routes/larkTasks.js';
 import { graphRouter } from './routes/graph.js';
+import { projectsRouter } from './routes/projects.js';
 import { runGraphInducer } from './context/graphInducer.js';
 import { startCollectorScheduler, stopCollectorScheduler } from './collectors/scheduler.js';
 import { startTriggerScheduler, stopTriggerScheduler } from './triggers/triggerScheduler.js';
@@ -63,6 +64,7 @@ app.use('/api', adminSuggestionRouter);
 app.use('/api', attentionRouter);
 app.use('/api', larkTasksRouter);
 app.use('/api', graphRouter);
+app.use('/api', projectsRouter);
 
 const server = http.createServer(app);
 attachWebSocket(server);

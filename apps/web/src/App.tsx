@@ -5,6 +5,7 @@ import { Composer } from './components/Composer';
 import { CardList } from './components/CardList';
 import { ContextPanel } from './components/ContextPanel';
 import { SpacesPanel } from './components/SpacesPanel';
+import { ProjectProposalsPanel } from './components/ProjectProposalsPanel';
 import { RulesPanel } from './components/RulesPanel';
 import { WorkMapPanel } from './components/WorkMapPanel';
 import { MyCollaboratorsPanel } from './components/MyCollaboratorsPanel';
@@ -491,6 +492,7 @@ export function App() {
           />
           <MyCollaboratorsPanel />
           <SpacesPanel />
+          <ProjectProposalsPanel />
           <RulesPanel />
           <ContextPanel />
         </aside>

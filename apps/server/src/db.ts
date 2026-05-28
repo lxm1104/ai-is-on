@@ -3493,6 +3493,95 @@ export function upsertProjectCanonicalProposal(
   return { id, created: true, occurrences: 1 };
 }
 
+/**
+ * MVP19 §M4：列出待审核 proposals（status='pending'），按 last_seen_at 倒序。
+ */
+export type ProjectCanonicalProposalRow = {
+  id: string;
+  proposed_name: string;
+  source_unit_ids_json: string;
+  source_event_id: string | null;
+  occurrences: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  status: 'pending' | 'approved_new' | 'approved_alias' | 'rejected';
+  resolved_canonical_name: string | null;
+  resolved_as_parent_canonical: string | null;
+  resolved_by: string | null;
+  resolved_at: string | null;
+};
+export function listPendingProjectProposals(
+  limit = 200
+): ProjectCanonicalProposalRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM project_canonical_proposals
+        WHERE status='pending'
+        ORDER BY last_seen_at DESC
+        LIMIT ?`
+    )
+    .all(limit) as ProjectCanonicalProposalRow[];
+}
+
+export function getProjectProposal(id: string): ProjectCanonicalProposalRow | null {
+  const r = db
+    .prepare(`SELECT * FROM project_canonical_proposals WHERE id=?`)
+    .get(id) as ProjectCanonicalProposalRow | undefined;
+  return r ?? null;
+}
+
+/**
+ * 把一条 proposal 标记为已处理。调用方负责事先做实际的 taxonomy 写入
+ * （insert canonical / append alias），本函数只更新 proposal 行的 status/resolved_* 字段。
+ *
+ * status:
+ *  - 'approved_new'   → resolution.canonical = 新 canonical 名（通常 = proposed_name）
+ *                       resolution.parentCanonical 可选
+ *  - 'approved_alias' → resolution.canonical = 已存在的 target canonical
+ *  - 'rejected'       → resolution 可省略
+ */
+export type ResolveProposalInput =
+  | { id: string; status: 'approved_new'; canonical: string; parentCanonical?: string | null; resolvedBy?: string }
+  | { id: string; status: 'approved_alias'; canonical: string; resolvedBy?: string }
+  | { id: string; status: 'rejected'; resolvedBy?: string };
+
+export function resolveProjectProposalStatus(input: ResolveProposalInput): void {
+  const nowIso = new Date().toISOString();
+  if (input.status === 'rejected') {
+    db.prepare(
+      `UPDATE project_canonical_proposals
+          SET status='rejected', resolved_by=?, resolved_at=?
+        WHERE id=?`
+    ).run(input.resolvedBy ?? 'user', nowIso, input.id);
+    return;
+  }
+  if (input.status === 'approved_alias') {
+    db.prepare(
+      `UPDATE project_canonical_proposals
+          SET status='approved_alias',
+              resolved_canonical_name=?,
+              resolved_by=?, resolved_at=?
+        WHERE id=?`
+    ).run(input.canonical, input.resolvedBy ?? 'user', nowIso, input.id);
+    return;
+  }
+  // approved_new
+  db.prepare(
+    `UPDATE project_canonical_proposals
+        SET status='approved_new',
+            resolved_canonical_name=?,
+            resolved_as_parent_canonical=?,
+            resolved_by=?, resolved_at=?
+      WHERE id=?`
+  ).run(
+    input.canonical,
+    input.parentCanonical ?? null,
+    input.resolvedBy ?? 'user',
+    nowIso,
+    input.id
+  );
+}
+
 // ============================================================================
 // MVP15B: org_project_phase helpers（LLM 判定的项目阶段 + 健康度）
 // 详见 docs/MVP15B §4.2
