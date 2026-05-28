@@ -41,9 +41,13 @@ chatRouter.post('/chat', async (req, res) => {
     return;
   }
   try {
-    const topic = await sendTopicMessage({ topicId, text, sourceKind: 'manual' });
+    // MVP18 Stage 0: sendTopicMessage 同步返回 { topic, turn }，turn 后台跑。
+    // 这里立即 res.json，HTTP 不再卡到 turn 结束。
+    const { topic } = sendTopicMessage({ topicId, text, sourceKind: 'manual' });
     res.json({ ok: true, topic });
   } catch (err) {
+    // 仅捕获建 topic / 写 user 消息阶段的同步抛错（如 requireTopic 找不到 id）。
+    // turn 内部错误已通过 system 消息 + WS 表达，不会进这里。
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });

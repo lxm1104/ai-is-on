@@ -7,6 +7,7 @@ import type {
   CooccurrenceItem,
   RelationshipItem,
   SignalCard,
+  TopicStatus,
 } from '../types';
 
 export async function fetchTopics(): Promise<ChatTopic[]> {
@@ -87,10 +88,28 @@ export async function restartRuntime(): Promise<void> {
 }
 
 // MVP14: 中断当前 Claude turn（用户点 "停止" 按钮时）
-export async function interruptRuntime(): Promise<{ ok: boolean; method: string }> {
-  const r = await fetch('/api/runtime/interrupt', { method: 'POST' });
+// MVP18 Stage 1: 增加可选 topicId 参数；不传时后端退化为"中断所有 busy session"
+export async function interruptRuntime(
+  topicId?: string
+): Promise<{ ok: boolean; method?: string; count?: number }> {
+  const r = await fetch('/api/runtime/interrupt', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(topicId ? { topicId } : {}),
+  });
   if (!r.ok) throw new Error(`interrupt ${r.status}`);
-  return (await r.json()) as { ok: boolean; method: string };
+  return (await r.json()) as { ok: boolean; method?: string; count?: number };
+}
+
+// MVP18 Stage 1: 启动 / WS 重连时拉一次全量 per-topic 状态快照（修复 R1 漂移）
+export async function fetchTopicStatusSnapshot(): Promise<{
+  topics: Array<{ topicId: string; status: TopicStatus }>;
+}> {
+  const r = await fetch('/api/runtime/topic-status');
+  if (!r.ok) throw new Error(`topic-status ${r.status}`);
+  return (await r.json()) as {
+    topics: Array<{ topicId: string; status: TopicStatus }>;
+  };
 }
 
 // MVP14 Step 4：attention 反馈通道（影响 L1，下次 tick 生效）

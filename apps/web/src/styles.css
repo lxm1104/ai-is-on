@@ -168,78 +168,170 @@ body { background: var(--bg); color: var(--text); }
 }
 .pane--chat { grid-template-rows: auto 1fr auto; }
 
-/* topic header */
-.topicbar {
+/* MVP18 Stage 3: TabBar — 右侧多会话 tab 栏，替代旧 .topicbar 下拉框。
+   横向滚动，"+ 新会话"钉在右侧。 */
+.tabbar {
   border-bottom: 1px solid var(--border);
   background: var(--panel);
-  padding: 10px 14px;
+  padding: 6px 8px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 68px;
+  gap: 6px;
+  min-height: 40px;
 }
-.topicbar__main {
+.tabbar__scroll {
+  flex: 1;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  gap: 3px;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
-.topicbar__label {
-  color: var(--accent);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.5px;
+.tabbar__scroll::-webkit-scrollbar {
+  height: 6px;
 }
-.topicbar__title {
+.tabbar__scroll::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+.tab {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px 5px 10px;
+  background: var(--panel-2);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 220px;
+  user-select: none;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.tab:hover {
+  background: var(--bg);
   color: var(--text);
-  font-size: 14px;
+}
+.tab--active {
+  background: var(--bg);
+  color: var(--text);
+  border-color: var(--accent);
   font-weight: 600;
+}
+.tab--busy .tab__title {
+  color: var(--accent);
+}
+.tab__title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 46vw;
 }
-.topicbar__meta {
+.tab__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
   color: var(--text-dim);
-  font-size: 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
 }
-.topicbar__actions {
+.tab__close:hover {
+  background: var(--border);
+  color: var(--text);
+}
+.tab__spinner {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  border-top-color: transparent;
+  animation: tab-spin 0.8s linear infinite;
+  flex: 0 0 auto;
+}
+@keyframes tab-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.tab--new {
+  background: transparent;
+  border-style: dashed;
+  color: var(--accent);
+}
+.tab--new:hover {
+  background: var(--panel-2);
+}
+
+/* 历史会话下拉 —— Stage 3 修补：恢复历史会话入口 */
+.tab-history {
+  position: relative;
+  flex: 0 0 auto;
+}
+.tab--history {
+  color: var(--text-dim);
+}
+.tab--history:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.tab-history__popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 280px;
+  max-width: 360px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  z-index: 50;
+  padding: 4px;
+}
+.tab-history__row {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex: 0 0 auto;
-}
-.topicbar__select {
-  min-width: 168px;
-  max-width: 260px;
-  background: var(--panel-2);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  width: 100%;
   padding: 7px 9px;
-  font: inherit;
+  background: transparent;
+  border: none;
+  color: var(--text);
   font-size: 12px;
-  outline: none;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 6px;
 }
-.topicbar__select:focus {
-  border-color: var(--accent);
+.tab-history__row:hover {
+  background: var(--panel-2);
 }
-@media (max-width: 900px) {
-  .topicbar {
-    align-items: stretch;
-    flex-direction: column;
-  }
-  .topicbar__title {
-    max-width: 100%;
-  }
-  .topicbar__actions {
-    justify-content: space-between;
-  }
-  .topicbar__select {
-    flex: 1;
-    max-width: none;
-  }
+.tab-history__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tab-history__time {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.tab-history__more {
+  padding: 6px 9px;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-align: center;
 }
 
 /* card list */

@@ -275,7 +275,10 @@ export async function applyCardAction(
     try {
       // MVP2.2: 卡片动作的内部 prompt 已经把卡片自身 context 嵌进去了，
       // 不再额外 prepend active_context summary，避免重复并节省 token。
-      const topic = await sendTopicMessage({
+      // MVP18 Stage 0: sendTopicMessage 同步返回 { topic, turn }，turn 后台跑。
+      // turn 失败已通过 chatTopics 内部 .catch 写成 topic 内 system 消息，不会进本 try/catch。
+      // 这里的 try/catch 仅兜底"建 topic / 写 user 消息阶段的同步抛错"（如 requireTopic 失败）。
+      const { topic } = sendTopicMessage({
         text: prompt,
         sourceKind: 'card',
         sourceRefId: row.id,
@@ -325,7 +328,10 @@ async function applyAttentionAction(
       ? `${rich}\n\n【用户补充】${userPrompt}`
       : rich;
     try {
-      const topic = await sendTopicMessage({
+      // MVP18 Stage 0: sendTopicMessage 同步返回，turn 后台跑。
+      // 产品语义变更：用户点完立即标 acted，turn 失败不回滚 acted 状态
+      // （turn 失败会在该 topic 内显示 system error 消息，用户能感知）。
+      const { topic } = sendTopicMessage({
         text: prompt,
         sourceKind: 'attention',
         sourceRefId: attn.id,
@@ -339,6 +345,7 @@ async function applyAttentionAction(
       broadcast({ type: 'card_updated', card });
       return { ok: true, card, topic };
     } catch (err) {
+      // 同 applyCardAction：仅捕获建 topic 阶段的同步抛错。
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   }

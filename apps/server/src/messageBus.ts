@@ -2,11 +2,22 @@ import { randomUUID } from 'node:crypto';
 import { claudeRuntime } from './claude/ClaudeRuntime.js';
 import { insertRuntimeMessage, updateRuntimeMessage } from './db.js';
 import { broadcast } from './ws.js';
-import type { ChatMessage, RuntimeEvent } from './claude/protocol.js';
+import type { ChatMessage, RuntimeEvent, RuntimeStatus, TopicStatus } from './claude/protocol.js';
 
-// Track the latest tool_use id -> message id, so tool_result can update it.
-const toolUseIdToMessageId = new Map<string, string>();
-const toolUseIdToName = new Map<string, string>();
+// MVP18 Stage 1: tool_use_id → message_id / tool_name 的映射按 topic 分桶，
+// 防止两个 topic 并发跑时撞同名 tool_use_id（虽然 uuid 撞的概率极小，但不同 topic
+// 的 tool 消息走 broadcast 在前端按 topicId 路由，桶级隔离能让"切桶清理"非常干净）。
+type ToolMaps = { idToMsg: Map<string, string>; idToName: Map<string, string> };
+const toolMapsByTopic = new Map<string, ToolMaps>();
+
+function mapsFor(topicId: string): ToolMaps {
+  let m = toolMapsByTopic.get(topicId);
+  if (!m) {
+    m = { idToMsg: new Map(), idToName: new Map() };
+    toolMapsByTopic.set(topicId, m);
+  }
+  return m;
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -90,9 +101,22 @@ export function recordUserMessage(text: string, topicId?: string) {
 }
 
 export function startMessageBus() {
-  claudeRuntime.on('status', (status) => {
+  claudeRuntime.on('status', (status: RuntimeStatus) => {
     broadcast({ type: 'runtime_status', status });
   });
+
+  // MVP18 Stage 1: per-topic 状态广播。topic 回到 idle 时同时清理 tool maps —
+  // 此时该 topic 的 inflight 工具一定已经全部 tool_result 完，map 本来也该空了，
+  // 这是兜底（防止异常 turn 留下垃圾 key）。
+  claudeRuntime.on(
+    'topic_status',
+    ({ topicId, status }: { topicId: string; status: TopicStatus }) => {
+      broadcast({ type: 'topic_status', topicId, status });
+      if (status === 'idle') {
+        toolMapsByTopic.delete(topicId);
+      }
+    }
+  );
 
   claudeRuntime.on('runtime_event', (e: RuntimeEvent) => {
     switch (e.type) {
@@ -111,8 +135,9 @@ export function startMessageBus() {
         const raw = e.raw as { id?: string } | null;
         const toolUseId = raw?.id;
         if (typeof toolUseId === 'string') {
-          toolUseIdToMessageId.set(toolUseId, id);
-          toolUseIdToName.set(toolUseId, e.toolName);
+          const m = mapsFor(e.topicId);
+          m.idToMsg.set(toolUseId, id);
+          m.idToName.set(toolUseId, e.toolName);
         }
         addMessage({
           id,
@@ -128,13 +153,14 @@ export function startMessageBus() {
       case 'tool_result': {
         const raw = e.raw as { tool_use_id?: string } | null;
         const toolUseId = raw?.tool_use_id;
+        const m = mapsFor(e.topicId);
         const id =
-          (typeof toolUseId === 'string' && toolUseIdToMessageId.get(toolUseId)) || randomUUID();
+          (typeof toolUseId === 'string' && m.idToMsg.get(toolUseId)) || randomUUID();
         const toolName =
-          (typeof toolUseId === 'string' && toolUseIdToName.get(toolUseId)) || e.toolName;
+          (typeof toolUseId === 'string' && m.idToName.get(toolUseId)) || e.toolName;
         if (typeof toolUseId === 'string') {
-          toolUseIdToMessageId.delete(toolUseId);
-          toolUseIdToName.delete(toolUseId);
+          m.idToMsg.delete(toolUseId);
+          m.idToName.delete(toolUseId);
         }
         const summary = summarizeToolOutput(e.output, e.isError);
         updateMessage({

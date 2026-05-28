@@ -1,10 +1,14 @@
+// MVP18 Stage 1: RuntimeStatus 收窄为"runtime 进程健康度"，不再含 'busy'。
+// per-topic 的忙闲态走 TopicStatus + topic_status 事件。
 export type RuntimeStatus =
   | 'idle'
   | 'starting'
   | 'ready'
-  | 'busy'
   | 'stopped'
   | 'error';
+
+// MVP18 Stage 1: per-topic 状态
+export type TopicStatus = 'idle' | 'busy';
 
 export type ChatMessage =
   | { id: string; topicId?: string; role: 'user'; text: string; createdAt: string }
@@ -163,6 +167,8 @@ export type CooccurrenceItem = {
 
 export type ServerEvent =
   | { type: 'runtime_status'; status: RuntimeStatus }
+  // MVP18 Stage 1: 新增 per-topic 状态广播
+  | { type: 'topic_status'; topicId: string; status: TopicStatus }
   | { type: 'message_added'; message: ChatMessage }
   | { type: 'message_updated'; message: ChatMessage }
   | { type: 'topic_created'; topic: ChatTopic }
