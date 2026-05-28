@@ -92,6 +92,34 @@ export type CollectorStatus = {
   nextRunAt?: string;
 };
 
+// MVP21 S1 §3.1：classifier 的镜像类型（与 apps/server/src/context/layerClassifier.ts 对齐）。
+// 前端用来给 ContextPanel 上的每条 unit 显示 layer / source chip。
+export type ContextLayer =
+  | 'identity_fact'
+  | 'project_intent'
+  | 'dynamic_signal'
+  | 'pending_inference'
+  | 'derived_signal'
+  | 'output';
+
+export type ContextSource =
+  | 'work_map_seed'
+  | 'triage'
+  | 'collector'
+  | 'agent_run'
+  | 'card_action'
+  | 'manual'
+  | 'system_feedback'
+  | 'inducer'
+  | 'unknown';
+
+export type ContextLayerHint = {
+  layer: ContextLayer;
+  source: ContextSource;
+  asserted: boolean;
+  voluntary: boolean;
+};
+
 // MVP2 Context
 export type ContextUnit = {
   id: string;
@@ -113,6 +141,8 @@ export type ContextUnit = {
   expiresAt?: string;
   createdAt: string;
   updatedAt: string;
+  // MVP21 S1: 服务端 /api/context/units 响应时挂；纯派生、不持久化
+  _layerHint?: ContextLayerHint;
 };
 
 export type ContextEntity = {

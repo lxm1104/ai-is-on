@@ -169,6 +169,22 @@ function UnitItem({ unit: u }: { unit: ContextUnit }) {
     <li className="ctx-unit">
       <div className="ctx-unit__head">
         <span className={`ctx-kind ctx-kind--${u.kind}`}>{u.kind}</span>
+        {u._layerHint && (
+          <>
+            <span
+              className={`ctx-layer ctx-layer--${u._layerHint.layer}`}
+              title={`layer: ${u._layerHint.layer} · asserted=${u._layerHint.asserted} · voluntary=${u._layerHint.voluntary}`}
+            >
+              {u._layerHint.layer}
+            </span>
+            <span
+              className={`ctx-src ctx-src--${u._layerHint.source}`}
+              title={`source: ${u._layerHint.source}`}
+            >
+              {u._layerHint.source}
+            </span>
+          </>
+        )}
         <span className="ctx-unit__title">{u.title}</span>
         <span className="ctx-unit__meta">
           v{u.version} · conf {u.confidence.toFixed(2)} · {u.actionability}

@@ -82,6 +82,19 @@ permission:
     e) 标签缺失（self 不在 entities 或 role 未识别）→ 现状规则不变，按 P0-P3 原规则判，
        不要因为缺标签反向 downgrade。
     f) 注意：本规则只对 `<commitments>` 块生效。goal / uncertainty 不挂 role 标签（MVP20 范围）。
+15. （MVP21）`<commitments>` / `<goals>` / `<uncertainties>` 行尾可能带 `[src=...]` 标签：
+    a) `src=work_map_seed` —— 用户在 Bootstrap / Work Map 上主动登记的种子信息。
+       视为"用户曾经认为重要的关注点"，**不**视为"当前一定还成立的事实"。
+       若同 entities / 同标题在 `<recentEvents>` 或其它 `src=triage` 信号里有近期更新，
+       priority 以 triage 那条为准；若只有 `src=work_map_seed`、没有近期事件支撑，
+       priority 上限 P2，title/why 措辞用"你之前登记的 X 是否还重要"类提问句，
+       不要写"X 该交了 / 今天必须 X"。
+    b) `src=triage` —— 系统从近期事件中抽出的语义 unit。priority 判断不变。
+    c) `src=collector` —— 原始事件直写，未经富化；通常只出现在 `<recentEvents>`，
+       不应单独产出 attention item（按现有规则）。
+    d) `src=manual` / `src=card_action` / `src=agent_run` / `src=system_feedback` ——
+       用户或 agent 显式写入，按内容本身判断。
+    e) 缺 `[src=...]` 标签 = 装配未注入或未知来源，按内容判断，不作来源加权。
 
 输出 schema：
 {

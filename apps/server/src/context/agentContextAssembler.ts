@@ -47,6 +47,7 @@ import {
   computeSelfRolesOnUnits,
   type SelfRoleOnUnit,
 } from './selfRoleOnUnit.js';
+import { classifyContextUnit, type ContextLayerHint } from './layerClassifier.js';
 
 export type PacketSlice =
   | 'subject'
@@ -741,9 +742,22 @@ export type MyTopCollaboratorInPacket = {
  * MVP20 §3.1：commitment 在 GlobalContextPacket 里多挂一个派生字段 `selfRoleOnUnit`，
  * 回答"self 对这一条具体 commitment 是什么角色"。计算见 selfRoleOnUnit.ts。
  * 不污染核心 ContextUnit 类型，packet 层独立扩展。
+ *
+ * MVP21 S1 §3.4：commitments / goals / uncertainties 三类每条挂派生字段 `_layerHint`，
+ * 标注这条 unit 来自 work_map_seed 还是 triage 等。**纯派生、不持久化**。
+ * 详见 docs/MVP21-Context语义分层与结构层收拢技术方案.md §4.1。
  */
 export type CommitmentInPacket = ContextUnit & {
   selfRoleOnUnit?: SelfRoleOnUnit | null;
+  _layerHint?: ContextLayerHint;
+};
+
+export type GoalInPacket = ContextUnit & {
+  _layerHint?: ContextLayerHint;
+};
+
+export type UncertaintyInPacket = ContextUnit & {
+  _layerHint?: ContextLayerHint;
 };
 
 export type GlobalContextPacket = {
@@ -752,9 +766,9 @@ export type GlobalContextPacket = {
   bootstrapped: boolean;
   subject: SubjectInPacket | null;
   spaces: GlobalSpaceInPacket[];
-  goals: ContextUnit[];
+  goals: GoalInPacket[];
   commitments: CommitmentInPacket[];
-  uncertainties: ContextUnit[];
+  uncertainties: UncertaintyInPacket[];
   recentEvents: ContextUnit[];
   topActive: ContextUnit[];
   stakeholders: StakeholderInPacket[];
@@ -834,24 +848,28 @@ export function assembleGlobalContextPacket(
     commitmentsRaw.map((u) => u.id),
     selfCanonicalForRoles
   );
+  // MVP21 S1 §4.1：commitments 已挂 selfRoleOnUnit，这里再挂 _layerHint（不动 filter/sort/cap）
   const commitments: CommitmentInPacket[] = commitmentsRaw.map((u) => ({
     ...u,
     selfRoleOnUnit: selfRoles.get(u.id) ?? null,
+    _layerHint: classifyContextUnit(u),
   }));
 
-  const goals = allActive
+  // MVP21 S1 §4.1：goals 从 ContextUnit[] 升级为 GoalInPacket[]（同步类型，挂 _layerHint）
+  const goals: GoalInPacket[] = allActive
     .filter((u) => u.kind === 'goal')
     .map((u) => ({ u, s: scoreContextUnit(u, now) }))
     .sort((a, b) => b.s - a.s)
     .slice(0, GLOBAL_SLICE_CAPS.goals)
-    .map((x) => x.u);
+    .map((x) => ({ ...x.u, _layerHint: classifyContextUnit(x.u) }));
 
-  const uncertainties = allActive
+  // MVP21 S1 §4.1：uncertainties 同上
+  const uncertainties: UncertaintyInPacket[] = allActive
     .filter((u) => u.kind === 'uncertainty')
     .map((u) => ({ u, s: scoreContextUnit(u, now) }))
     .sort((a, b) => b.s - a.s)
     .slice(0, GLOBAL_SLICE_CAPS.uncertainties)
-    .map((x) => x.u);
+    .map((x) => ({ ...x.u, _layerHint: classifyContextUnit(x.u) }));
 
   const recentEvents = allActive
     .filter((u) => u.kind === 'event')
