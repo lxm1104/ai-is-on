@@ -13,6 +13,23 @@ import {
 } from '../lib/api';
 
 const DRAFT_STORAGE_KEY = 'aiis.workmap.draft.v1';
+// MVP21 S3: 拆分视图开关。默认 'on'（开启 Identity / Project Intent 两 tab）；
+// 用户设置 'off' 切回 MVP7 经典视图（所有 section 一条流）。
+const SPLIT_UI_STORAGE_KEY = 'aiis.mvp21.workMapSplit';
+function loadSplitUi(): boolean {
+  try {
+    return localStorage.getItem(SPLIT_UI_STORAGE_KEY) !== 'off';
+  } catch {
+    return true;
+  }
+}
+function saveSplitUi(on: boolean): void {
+  try {
+    localStorage.setItem(SPLIT_UI_STORAGE_KEY, on ? 'on' : 'off');
+  } catch {}
+}
+
+type WorkMapTab = 'identity' | 'projectIntent';
 
 const EMPTY_PROJECT: WorkMapProjectDraft = {
   name: '',
@@ -65,6 +82,9 @@ export function WorkMapPanel({ onBootstrapChange }: WorkMapPanelProps) {
   );
   const [seedText, setSeedText] = useState('');
   const [mode, setMode] = useState<'full' | 'incremental'>('full');
+  // MVP21 S3: 视图切换
+  const [splitUi, setSplitUi] = useState<boolean>(() => loadSplitUi());
+  const [tab, setTab] = useState<WorkMapTab>('identity');
 
   useEffect(() => {
     saveDraft(draft);
@@ -183,6 +203,54 @@ export function WorkMapPanel({ onBootstrapChange }: WorkMapPanelProps) {
               stake:{counts.stake} · spaces:{counts.spaces} · rules:{counts.rules}
             </div>
           )}
+          {/* MVP21 S3: 视图切换 + tab 栏 */}
+          {splitUi && (
+            <div className="wm-tabbar">
+              <button
+                type="button"
+                className={`wm-tab ${tab === 'identity' ? 'is-on' : ''}`}
+                onClick={() => setTab('identity')}
+                title="我是谁 / 我的工作世界结构（半年级稳定）"
+              >
+                我是谁
+              </button>
+              <button
+                type="button"
+                className={`wm-tab ${tab === 'projectIntent' ? 'is-on' : ''}`}
+                onClick={() => setTab('projectIntent')}
+                title="项目种子（项目长期意图 — 季度级稳定）"
+              >
+                项目种子
+              </button>
+              <button
+                type="button"
+                className="btn btn--ghost wm-tab__toggle"
+                onClick={() => {
+                  saveSplitUi(false);
+                  setSplitUi(false);
+                }}
+                title="切回 MVP7 经典视图（一条流）"
+              >
+                ↗ 经典视图
+              </button>
+            </div>
+          )}
+          {!splitUi && (
+            <div className="wm-row" style={{ justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={() => {
+                  saveSplitUi(true);
+                  setSplitUi(true);
+                }}
+                title="拆成『我是谁』+『项目种子』两个 tab"
+              >
+                ↗ 分屏视图
+              </button>
+            </div>
+          )}
+
           <section className="wm-section">
             <h4>从近期 context 生成草稿</h4>
             <textarea
@@ -217,29 +285,39 @@ export function WorkMapPanel({ onBootstrapChange }: WorkMapPanelProps) {
               </div>
             )}
           </section>
-          <ProfileEditor
-            value={draft.profile}
-            onChange={(profile) => setDraft({ ...draft, profile })}
-          />
-          <ProjectsEditor
-            value={draft.projects}
-            onChange={(projects) => setDraft({ ...draft, projects })}
-          />
-          <StakeholdersEditor
-            value={draft.stakeholders}
-            onChange={(stakeholders) => setDraft({ ...draft, stakeholders })}
-            orgRoles={current?.stakeholderOrgRoles}
-          />
-          <StringListEditor
-            label="工作偏好（preference）"
-            value={draft.preferences}
-            placeholder="如：上午专注，下午开会..."
-            onChange={(preferences) => setDraft({ ...draft, preferences })}
-          />
-          <BoundariesEditor
-            value={draft.boundaries}
-            onChange={(boundaries) => setDraft({ ...draft, boundaries })}
-          />
+
+          {/* MVP21 S3 §6.1: identity tab = 身份层（半年级稳定）；
+              projectIntent tab = 项目种子（季度级，含 deadlines/risks 但有 deprecation 提示） */}
+          {(!splitUi || tab === 'identity') && (
+            <>
+              <ProfileEditor
+                value={draft.profile}
+                onChange={(profile) => setDraft({ ...draft, profile })}
+              />
+              <StakeholdersEditor
+                value={draft.stakeholders}
+                onChange={(stakeholders) => setDraft({ ...draft, stakeholders })}
+                orgRoles={current?.stakeholderOrgRoles}
+              />
+              <StringListEditor
+                label="工作偏好（preference）"
+                value={draft.preferences}
+                placeholder="如：上午专注，下午开会..."
+                onChange={(preferences) => setDraft({ ...draft, preferences })}
+              />
+              <BoundariesEditor
+                value={draft.boundaries}
+                onChange={(boundaries) => setDraft({ ...draft, boundaries })}
+              />
+            </>
+          )}
+          {(!splitUi || tab === 'projectIntent') && (
+            <ProjectsEditor
+              value={draft.projects}
+              onChange={(projects) => setDraft({ ...draft, projects })}
+              splitUi={splitUi}
+            />
+          )}
 
           <div className="wm-actions">
             <button
@@ -316,9 +394,11 @@ function ProfileEditor({
 function ProjectsEditor({
   value,
   onChange,
+  splitUi = false,
 }: {
   value: WorkMapProjectDraft[];
   onChange: (v: WorkMapProjectDraft[]) => void;
+  splitUi?: boolean;
 }) {
   function patch(idx: number, p: Partial<WorkMapProjectDraft>) {
     const next = value.slice();
@@ -328,6 +408,12 @@ function ProjectsEditor({
   return (
     <section className="wm-section">
       <h4>当前项目</h4>
+      {splitUi && (
+        <div className="wm-section__hint">
+          这里填的是项目<strong>长期意图</strong>（季度级稳定）：项目名、简述、目标、权威文档。
+          DDL 临期的承诺与当下风险不需要在这里手动维护——系统会从 IM / 日历 / 文档实时抽出来。
+        </div>
+      )}
       {value.map((p, idx) => (
         <div key={idx} className="wm-project">
           <input
@@ -343,9 +429,9 @@ function ProjectsEditor({
             onChange={(e) => patch(idx, { description: e.target.value })}
           />
           <StringListEditor
-            label="目标"
+            label="目标（项目长期目标，季度级）"
             value={p.goals}
-            placeholder="本周目标..."
+            placeholder="本季度目标..."
             onChange={(goals) => patch(idx, { goals })}
           />
           <StringListEditor
@@ -354,16 +440,24 @@ function ProjectsEditor({
             placeholder="https://..."
             onChange={(authoritativeDocs) => patch(idx, { authoritativeDocs })}
           />
-          <DeadlinesEditor
-            value={p.upcomingDeadlines}
-            onChange={(upcomingDeadlines) => patch(idx, { upcomingDeadlines })}
-          />
-          <StringListEditor
-            label="风险 / 担心"
-            value={p.risks}
-            placeholder="担心的问题..."
-            onChange={(risks) => patch(idx, { risks })}
-          />
+          {/* MVP21 S3 §6.1: deadlines/risks 是动态信号，不该在静态 Work Map 维护。
+              S4 计划移除写入路径；这里加 deprecation 提示但仍允许编辑（兼容期保留）。 */}
+          <div className="wm-deprecation">
+            <div className="wm-deprecation__hint">
+              ⚠️ 以下字段（deadline / 风险）流速是周级，跟 IM/triage 抽出来的同名信号在 attention 里抢位置；
+              MVP21 S4 计划停写。**建议留空**，让 attention 从近期消息自然识别。
+            </div>
+            <DeadlinesEditor
+              value={p.upcomingDeadlines}
+              onChange={(upcomingDeadlines) => patch(idx, { upcomingDeadlines })}
+            />
+            <StringListEditor
+              label="风险 / 担心（不建议在此维护）"
+              value={p.risks}
+              placeholder="担心的问题..."
+              onChange={(risks) => patch(idx, { risks })}
+            />
+          </div>
           <button
             type="button"
             className="btn btn--ghost"

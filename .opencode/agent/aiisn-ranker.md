@@ -17,3 +17,4 @@ permission:
 4. 如果只是偶然提到、群过宽、像公司公告/闲聊/跨项目大群，应 reject。
 5. 对证据不足但可能相关的输出 maybe，不要为了召回强行 accept。
 6. 只输出 JSON，不要 Markdown，不要解释 JSON 之外的内容。
+7. （MVP21 S2）payload.space.workMap.{goalTitles, riskTitles} 是用户在 Work Map / Bootstrap 上**登记的项目种子文案**，**可能已过时**，并不等于该项目当前的事实。仅用于理解"该 Space 关心什么主题"，不要把它们当成"chat 现在还在讨论这些"或"用户当前必须关注这些"。判断 chat 是否相关时，更看重 ruleSignals 与 summarizedUnits 反映出来的近期实际信号。

@@ -42,7 +42,22 @@ export type SpaceIntentJson = {
   aliases?: string[];
   keywords?: string[];
   negativeKeywords?: string[];
+  /**
+   * MVP21 S2: 主键。承载"用户在 Work Map 上登记的种子目标 / 关注点"。
+   * 字段名刻意从 workMap* 改成 seed* —— 让消费方（ranker prompt）知道
+   * 这是种子文案而非当前事实，避免被当成 ground truth。
+   * workMapGoalTitles / workMapRiskTitles 同步双写作为兼容键。
+   */
+  seedGoalTitles?: string[];
+  seedConcernTitles?: string[];
+  /**
+   * @deprecated MVP21 S2 起请用 seedGoalTitles / seedConcernTitles。
+   * 写入路径（workMapWriter / syncSpaceIntentFromWorkMap）目前同步双写；
+   * 读取路径已迁移到 "seed* ?? workMap* ?? []"。
+   * S2 上线 6 个月后下线（或所有 active Space 都被重写一次即可清理）。
+   */
   workMapGoalTitles?: string[];
+  /** @deprecated MVP21 S2: 同 workMapGoalTitles */
   workMapRiskTitles?: string[];
   authoritativeDocNames?: string[];
   stakeholderNames?: string[];
@@ -133,7 +148,13 @@ export function syncSpaceIntentFromWorkMap(
     summary?: string;
     aliases?: string[];
     keywords?: string[];
+    // MVP21 S2: 主键。调用方（workMapWriter）应传 seed*；
+    // workMap* 别名键仍接受以方便迁移期混传，但内部归一到 seed*。
+    seedGoalTitles?: string[];
+    seedConcernTitles?: string[];
+    /** @deprecated MVP21 S2: 用 seedGoalTitles。函数内部归一到 seedGoalTitles。 */
     workMapGoalTitles?: string[];
+    /** @deprecated MVP21 S2: 用 seedConcernTitles。 */
     workMapRiskTitles?: string[];
     authoritativeDocNames?: string[];
     stakeholderNames?: string[];
@@ -142,19 +163,39 @@ export function syncSpaceIntentFromWorkMap(
 ): SpaceIntentJson | null {
   const sp = getContextSpace(spaceId);
   if (!sp) return null;
-  const current = decodeSpaceIntent(sp.intent_json);
+  const currentRaw = decodeSpaceIntent(sp.intent_json);
+
+  // MVP21 S2: 在归一前把 current 的 seed* / workMap* 收敛到 seed* 单一来源。
+  // 这样 pickArrayMerged 读 current.seedGoalTitles 不会漏掉老库的 workMapGoalTitles。
+  const current: SpaceIntentJson = {
+    ...currentRaw,
+    seedGoalTitles:
+      currentRaw.seedGoalTitles ?? currentRaw.workMapGoalTitles,
+    seedConcernTitles:
+      currentRaw.seedConcernTitles ?? currentRaw.workMapRiskTitles,
+  };
+
+  // patch 同理：调用方可能传 seed* 或仍传旧 workMap*；统一到 seed*
+  const patchNormalized = {
+    ...patch,
+    seedGoalTitles:
+      patch.seedGoalTitles ?? patch.workMapGoalTitles,
+    seedConcernTitles:
+      patch.seedConcernTitles ?? patch.workMapRiskTitles,
+  };
+
   const userOwned = current.updatedBy === 'user';
   const now = new Date().toISOString();
 
   function pickScalar<K extends 'summary'>(key: K): string | undefined {
-    if (!userOwned) return patch[key] ?? current[key];
-    return current[key] ?? patch[key];
+    if (!userOwned) return patchNormalized[key] ?? current[key];
+    return current[key] ?? patchNormalized[key];
   }
-  function pickArrayMerged<K extends keyof typeof patch & string>(
+  function pickArrayMerged<K extends keyof typeof patchNormalized & string>(
     key: K
   ): string[] | undefined {
     const a = (current[key as keyof SpaceIntentJson] as string[] | undefined) ?? [];
-    const b = (patch[key] as string[] | undefined) ?? [];
+    const b = (patchNormalized[key] as string[] | undefined) ?? [];
     if (!userOwned) {
       // work_map 全量覆盖：用 patch 为准，但保留 current 里 user 加的（不区分时全收）
       const set = new Set<string>([...(b ?? [])]);
@@ -168,16 +209,21 @@ export function syncSpaceIntentFromWorkMap(
     return Array.from(set);
   }
 
+  // MVP21 S2: seed* 是主键。current / patch 都已经归一到 seed*，pickArrayMerged 安全。
+  const seedGoalTitles = pickArrayMerged('seedGoalTitles');
+  const seedConcernTitles = pickArrayMerged('seedConcernTitles');
+
   const merged: SpaceIntentJson = {
     ...current,
     schemaVersion: 1,
     summary: pickScalar('summary'),
     aliases: pickArrayMerged('aliases') ?? current.aliases,
     keywords: pickArrayMerged('keywords') ?? current.keywords,
-    workMapGoalTitles:
-      pickArrayMerged('workMapGoalTitles') ?? current.workMapGoalTitles,
-    workMapRiskTitles:
-      pickArrayMerged('workMapRiskTitles') ?? current.workMapRiskTitles,
+    seedGoalTitles,
+    seedConcernTitles,
+    // 兼容键：与 seed* 同步双写。S2 上线 6 个月后可删除这两行。
+    workMapGoalTitles: seedGoalTitles,
+    workMapRiskTitles: seedConcernTitles,
     authoritativeDocNames:
       pickArrayMerged('authoritativeDocNames') ?? current.authoritativeDocNames,
     stakeholderNames:

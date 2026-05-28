@@ -250,14 +250,16 @@ function writeProject(p: ProjectMapDraft) {
     [p.name, ...p.goals, ...p.risks].filter(Boolean).join('\n'),
     12
   );
+  // MVP21 S2: 改用主键 seedGoalTitles / seedConcernTitles。
+  // 旧键 workMapGoalTitles / workMapRiskTitles 由 syncSpaceIntentFromWorkMap 自动同步双写。
   syncSpaceIntentFromWorkMap(
     space.id,
     {
       summary,
       aliases: [p.name],
       keywords,
-      workMapGoalTitles: p.goals.filter((g) => g.trim()),
-      workMapRiskTitles: p.risks.filter((g) => g.trim()),
+      seedGoalTitles: p.goals.filter((g) => g.trim()),
+      seedConcernTitles: p.risks.filter((g) => g.trim()),
       authoritativeDocNames: p.authoritativeDocs.filter((u) => u.trim()),
     },
     {

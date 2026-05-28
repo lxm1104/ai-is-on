@@ -15,6 +15,8 @@ import {
 import { getContextUnitById } from '../context/contextStore.js';
 import { listDecisionsBySpace } from '../db.js';
 import { runSuggestionWorker } from '../spaces/suggestionWorker.js';
+import { classifyContextUnit } from '../context/layerClassifier.js';
+import type { ContextUnit } from '../context/ContextUnit.js';
 
 export const contextSpacesRouter = Router();
 
@@ -69,15 +71,21 @@ contextSpacesRouter.get('/context-spaces/:id', (req, res) => {
     arr.push(u);
     byKind.set(u.kind, arr);
   }
+  // MVP21 S3 §6.2: 给每条 unit 挂派生 _layerHint，让前端"当前进展"视图按
+  // source（work_map_seed vs triage）做视觉区分。字段名不变。
+  const attachHint = <T extends ContextUnit>(u: T) => ({
+    ...u,
+    _layerHint: classifyContextUnit(u),
+  });
   res.json({
     space: detail.space,
     entityLinks,
-    commitments: byKind.get('commitment') ?? [],
-    goals: [...(byKind.get('goal') ?? []), ...(byKind.get('intent') ?? [])],
+    commitments: (byKind.get('commitment') ?? []).map(attachHint),
+    goals: [...(byKind.get('goal') ?? []), ...(byKind.get('intent') ?? [])].map(attachHint),
     decisions: listDecisionsBySpace(detail.space.id),
-    risks: [...(byKind.get('uncertainty') ?? []), ...(byKind.get('constraint') ?? [])],
-    state: byKind.get('state') ?? [],
-    recentEvents: (byKind.get('event') ?? []).slice(0, 10),
+    risks: [...(byKind.get('uncertainty') ?? []), ...(byKind.get('constraint') ?? [])].map(attachHint),
+    state: (byKind.get('state') ?? []).map(attachHint),
+    recentEvents: (byKind.get('event') ?? []).slice(0, 10).map(attachHint),
     allUnitCount: units.length,
   });
 });

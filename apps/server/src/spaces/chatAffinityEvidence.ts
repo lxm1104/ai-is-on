@@ -271,8 +271,11 @@ export function buildChatAffinityCandidates(
     const row = getContextSpace(sp.spaceId);
     if (!row) continue;
     const intent = decodeSpaceIntent(row.intent_json);
-    const goalTitles = intent.workMapGoalTitles ?? [];
-    const riskTitles = intent.workMapRiskTitles ?? [];
+    // MVP21 S2: 新键 seedGoalTitles / seedConcernTitles 优先；老库行 fallback 到旧键。
+    // 字段名向上游 ranker prompt 暴露时仍叫 goalTitles / riskTitles（保持 LLM 视角语义稳定，
+    // 但 prompt 措辞已在 RANKER_SYSTEM_PROMPT 中明示"来自 Work Map 的种子，可能过时"）。
+    const goalTitles = intent.seedGoalTitles ?? intent.workMapGoalTitles ?? [];
+    const riskTitles = intent.seedConcernTitles ?? intent.workMapRiskTitles ?? [];
     const nameTokenSet = new Set<string>([
       ...tokenize(row.name),
       ...(intent.aliases ?? []).flatMap((a) => tokenize(a)),
