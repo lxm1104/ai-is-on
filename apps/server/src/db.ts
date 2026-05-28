@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import { config } from './config.js';
 
@@ -3311,6 +3312,185 @@ export function getProjectAuthoritativeSpaceId(canonical: string): string | null
     )
     .get(canonical) as { authoritative_space_id: string | null } | undefined;
   return row?.authoritative_space_id ?? null;
+}
+
+/**
+ * MVP19 §E：渲染 <knownProjects> XML 块，注入到 triage user message。
+ *
+ * 顶层：parent_canonical_name IS NULL 的 canonical（即注册表里的"根"）。
+ *   排序：先有 authoritative_space_id 的（user-curated space），
+ *         然后按最近 30d 是否被 person_project edge 引用，
+ *         最后按 canonical_name 字母序兜底。
+ *   每行：`- "canonical" (alias: "a", "b")`
+ *         若有子：换行 `  sub: "child1", "child2", ...`
+ *
+ * 截断：当顶层超过 maxTopLevel（默认 100）行时按上述排序截断。
+ *       每条 alias 取前 5，sub 取前 8，超出 ` …`。
+ *
+ * 用途：仅 triagePrompt.buildTriageUserMessage 用。其他场景不要复用。
+ */
+export type BuildKnownProjectsOpts = {
+  maxTopLevel?: number;          // 默认 100
+  recentEdgeWindowMs?: number;   // "最近 30d" 默认 30*24h
+  now?: number;                  // 测试可注入
+};
+export function buildKnownProjectsBlock(opts: BuildKnownProjectsOpts = {}): string {
+  const maxTopLevel = opts.maxTopLevel ?? 100;
+  const recentMs = opts.recentEdgeWindowMs ?? 30 * 24 * 3600_000;
+  const nowMs = opts.now ?? Date.now();
+  const recentCutoff = new Date(nowMs - recentMs).toISOString();
+
+  type Row = {
+    canonical_name: string;
+    aliases_json: string;
+    authoritative_space_id: string | null;
+  };
+  const tops = db
+    .prepare(
+      `SELECT canonical_name, aliases_json, authoritative_space_id
+         FROM org_project_taxonomy
+        WHERE parent_canonical_name IS NULL`
+    )
+    .all() as Row[];
+
+  // 取每个顶层是否近期被 person_project edge 引用
+  const recentRefSet = new Set(
+    (
+      db
+        .prepare(
+          `SELECT DISTINCT to_id FROM entity_edges
+            WHERE edge_kind='person_project' AND last_seen_at >= ?`
+        )
+        .all(recentCutoff) as Array<{ to_id: string }>
+    ).map((r) => r.to_id)
+  );
+
+  // 排序：authoritative_space_id 优先，然后 recent edge ref，然后字母序
+  tops.sort((a, b) => {
+    const aHasSpace = a.authoritative_space_id ? 1 : 0;
+    const bHasSpace = b.authoritative_space_id ? 1 : 0;
+    if (aHasSpace !== bHasSpace) return bHasSpace - aHasSpace;
+    const aRecent = recentRefSet.has(a.canonical_name) ? 1 : 0;
+    const bRecent = recentRefSet.has(b.canonical_name) ? 1 : 0;
+    if (aRecent !== bRecent) return bRecent - aRecent;
+    return a.canonical_name.localeCompare(b.canonical_name);
+  });
+
+  const truncated = tops.length > maxTopLevel;
+  const renderTops = tops.slice(0, maxTopLevel);
+
+  // 拉所有 children（一次查询，按 parent 索引）
+  const allChildren = db
+    .prepare(
+      `SELECT canonical_name, parent_canonical_name FROM org_project_taxonomy
+        WHERE parent_canonical_name IS NOT NULL
+        ORDER BY canonical_name`
+    )
+    .all() as Array<{ canonical_name: string; parent_canonical_name: string }>;
+  const childrenByParent = new Map<string, string[]>();
+  for (const c of allChildren) {
+    const arr = childrenByParent.get(c.parent_canonical_name) ?? [];
+    arr.push(c.canonical_name);
+    childrenByParent.set(c.parent_canonical_name, arr);
+  }
+
+  const lines: string[] = [];
+  lines.push(`<knownProjects count="${tops.length}"${truncated ? ' truncated="true"' : ''}>`);
+  for (const t of renderTops) {
+    let aliases: string[] = [];
+    try {
+      const parsed = JSON.parse(t.aliases_json);
+      if (Array.isArray(parsed)) {
+        aliases = parsed.filter((s): s is string => typeof s === 'string' && s !== t.canonical_name);
+      }
+    } catch {}
+    const aliasPart =
+      aliases.length > 0
+        ? ` (alias: ${aliases.slice(0, 5).map((a) => `"${a}"`).join(', ')}${
+            aliases.length > 5 ? ' …' : ''
+          })`
+        : '';
+    lines.push(`- "${t.canonical_name}"${aliasPart}`);
+    const subs = childrenByParent.get(t.canonical_name) ?? [];
+    if (subs.length > 0) {
+      const subPart = subs.slice(0, 8).map((s) => `"${s}"`).join(', ');
+      const more = subs.length > 8 ? ' …' : '';
+      lines.push(`  sub: ${subPart}${more}`);
+    }
+  }
+  lines.push('</knownProjects>');
+  return lines.join('\n');
+}
+
+/**
+ * MVP19 §E-1：把 triage LLM 抽出的"不在 knownProjects 里的项目名"upsert 进
+ * project_canonical_proposals 队列。
+ *
+ * 语义：
+ *  - pending 状态下同名行最多一行（partial UNIQUE 保证）；
+ *  - 已存在 pending 行 → bump occurrences、更新 last_seen_at、
+ *    累加 source_unit_ids（保留近 20 条避免无限增长）；
+ *  - 不存在 pending 行 → INSERT 新行 status='pending', occurrences=1。
+ *
+ * idGen 默认走 randomUUID，测试可注入。
+ */
+export type UpsertProposalInput = {
+  proposedName: string;
+  sourceUnitIds: string[];
+  sourceEventId?: string | null;
+};
+const PROPOSAL_SOURCE_UNIT_IDS_CAP = 20;
+export function upsertProjectCanonicalProposal(
+  input: UpsertProposalInput,
+  opts: { idGen?: () => string; now?: () => string } = {}
+): { id: string; created: boolean; occurrences: number } {
+  const idGen = opts.idGen ?? (() => randomUUID());
+  const nowFn = opts.now ?? (() => new Date().toISOString());
+  const nowIso = nowFn();
+  const proposedName = input.proposedName.trim();
+  if (!proposedName) {
+    throw new Error('upsertProjectCanonicalProposal: proposedName empty');
+  }
+  const existing = db
+    .prepare(
+      `SELECT id, occurrences, source_unit_ids_json
+         FROM project_canonical_proposals
+        WHERE proposed_name = ? AND status = 'pending'`
+    )
+    .get(proposedName) as
+    | { id: string; occurrences: number; source_unit_ids_json: string }
+    | undefined;
+  if (existing) {
+    let oldIds: string[] = [];
+    try {
+      const parsed = JSON.parse(existing.source_unit_ids_json);
+      if (Array.isArray(parsed)) oldIds = parsed.filter((s): s is string => typeof s === 'string');
+    } catch {}
+    const mergedIds = Array.from(new Set([...oldIds, ...input.sourceUnitIds]))
+      .slice(-PROPOSAL_SOURCE_UNIT_IDS_CAP);
+    const newOcc = existing.occurrences + 1;
+    db.prepare(
+      `UPDATE project_canonical_proposals
+          SET occurrences=?, source_unit_ids_json=?, last_seen_at=?
+        WHERE id=?`
+    ).run(newOcc, JSON.stringify(mergedIds), nowIso, existing.id);
+    return { id: existing.id, created: false, occurrences: newOcc };
+  }
+  const id = idGen();
+  db.prepare(
+    `INSERT INTO project_canonical_proposals
+       (id, proposed_name, source_unit_ids_json, source_event_id, occurrences,
+        first_seen_at, last_seen_at, status)
+     VALUES (?, ?, ?, ?, 1, ?, ?, 'pending')`
+  ).run(
+    id,
+    proposedName,
+    JSON.stringify(input.sourceUnitIds.slice(-PROPOSAL_SOURCE_UNIT_IDS_CAP)),
+    input.sourceEventId ?? null,
+    nowIso,
+    nowIso
+  );
+  return { id, created: true, occurrences: 1 };
 }
 
 // ============================================================================

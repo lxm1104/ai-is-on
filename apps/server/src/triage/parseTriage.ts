@@ -17,6 +17,15 @@ export type TriageItem = {
   cardActions: CardAction[];
   // MVP2.1: LLM 提取出的 context（最多 3 条，由 coerce 截断）
   contextUpdates: ContextUnitDraft[];
+  // MVP19 §E：LLM 在原文里看到的项目名但不在 <knownProjects> 列表里。
+  // 走单独 proposal 队列等审核（不是 entities，不参与 unit→space 路由）。
+  proposedNewProjects: ProposedNewProject[];
+};
+
+export type ProposedNewProject = {
+  name: string;
+  evidence?: string;
+  suggestedParent?: string;
 };
 
 export type TriageResult = { items: TriageItem[] };
@@ -129,7 +138,27 @@ function coerceItem(raw: unknown): TriageItem | null {
     shouldCreateCard: o.shouldCreateCard !== false,
     cardActions,
     contextUpdates: coerceContextUpdates(o.contextUpdates),
+    proposedNewProjects: coerceProposedNewProjects(o.proposedNewProjects),
   };
+}
+
+function coerceProposedNewProjects(raw: unknown): ProposedNewProject[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ProposedNewProject[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const o = item as Record<string, unknown>;
+    const name = typeof o.name === 'string' ? o.name.trim() : '';
+    if (!name) continue;
+    const evidence =
+      typeof o.evidence === 'string' && o.evidence.trim() ? o.evidence.trim() : undefined;
+    const suggestedParent =
+      typeof o.suggestedParent === 'string' && o.suggestedParent.trim()
+        ? o.suggestedParent.trim()
+        : undefined;
+    out.push({ name, evidence, suggestedParent });
+  }
+  return out;
 }
 
 function coerceContextUpdates(raw: unknown): ContextUnitDraft[] {

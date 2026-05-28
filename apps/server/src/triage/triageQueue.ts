@@ -7,20 +7,27 @@
 // 文件名暂保留为 triageQueue.ts（rename 影响面大，留作下一轮清理）。
 import { config } from '../config.js';
 import {
+  db,
   type EventRow,
   listActiveUserRules,
   markEventContextExtracted,
   markEventProcessed,
+  resolveProjectCanonical,
+  upsertProjectCanonicalProposal,
 } from '../db.js';
 import { buildTriageUserMessage } from './triagePrompt.js';
 import { runTriageOnce } from './backgroundRuntime.js';
-import { parseTriageResult, type TriageItem } from './parseTriage.js';
+import {
+  parseTriageResult,
+  type ProposedNewProject,
+  type TriageItem,
+} from './parseTriage.js';
 import {
   findEventContextUnitId,
   linkContextUnits,
   upsertContextUnit,
 } from '../context/contextStore.js';
-import type { ContextScope } from '../context/ContextUnit.js';
+import type { ContextEntityRef, ContextScope } from '../context/ContextUnit.js';
 import { isCaringPaused } from '../caring/caringSettings.js';
 
 function scopeForEvent(ev: EventRow): ContextScope {
@@ -167,24 +174,62 @@ function persistOne(ev: EventRow, item: TriageItem) {
 }
 
 function persistContextUpdates(ev: EventRow, item: TriageItem) {
-  if (!item.contextUpdates || item.contextUpdates.length === 0) return;
+  if (!item.contextUpdates || item.contextUpdates.length === 0) {
+    // 即便没有 contextUpdates，item.proposedNewProjects 仍可能需要落库
+    persistProposedNewProjects(ev, item, []);
+    return;
+  }
   const scope = scopeForEvent(ev);
   const eventCtxId = findEventContextUnitId(ev.id);
+  const createdUnitIds: string[] = [];
+  // MVP19：闭词表兜底——LLM 抗指令时把不在 knownProjects 里的 project entity
+  // 收集起来，写完单元后转 proposal。按 name 去重，避免多 unit 含相同未知 project 时重复写。
+  const fallbackProposals = new Map<string, ProposedNewProject>();
+
   for (const draft of item.contextUpdates) {
     // MVP12 §4.1 P1.4：过滤 LLM 误产出的 type:'chat' / type:'app'。
     // chat 路由证据只在 raw event ContextUnit 上保留；写进 semantic unit 会污染 mergeKey。
     // doc 保留（commitment 的真实语义对象可以是 doc）。
-    const cleanedDraft = {
-      ...draft,
-      entities: draft.entities
-        ? draft.entities.filter((e) => e.type !== 'chat' && e.type !== 'app')
-        : draft.entities,
-    };
+    let filtered: ContextEntityRef[] | undefined = draft.entities
+      ? draft.entities.filter((e) => e.type !== 'chat' && e.type !== 'app')
+      : draft.entities;
+
+    // MVP19：project entity 必须命中 knownProjects（resolveProjectCanonical 返回值 !== 原名）。
+    // 命中失败的剔除 + 合成 fallback proposal。
+    if (filtered) {
+      const kept: ContextEntityRef[] = [];
+      for (const e of filtered) {
+        if (e.type === 'project') {
+          const canonical = resolveProjectCanonical(e.name);
+          if (canonical === e.name) {
+            // 没在注册表里命中（命中后 canonical 会变成存储原大小写或别名归一名；
+            // 这里粗判：返回值就是原 input 时算未命中）。
+            // 边界：canonical 名跟 input 拼写完全相同也算命中——此时 canonical === input，
+            // 但该 canonical 行确实存在；不会被误打到 fallback。我们通过单独查一次确认。
+            const exists = projectCanonicalExists(e.name);
+            if (!exists) {
+              if (!fallbackProposals.has(e.name)) {
+                fallbackProposals.set(e.name, {
+                  name: e.name,
+                  evidence: `triage 抽出但 knownProjects 未命中 (event=${ev.id.slice(0, 8)})`,
+                });
+              }
+              continue; // 不写进 entities
+            }
+          }
+        }
+        kept.push(e);
+      }
+      filtered = kept;
+    }
+
+    const cleanedDraft = { ...draft, entities: filtered };
     const { unit } = upsertContextUnit({
       ...cleanedDraft,
       scope,
       origin: { kind: 'event', refId: ev.id },
     });
+    createdUnitIds.push(unit.id);
     if (eventCtxId && eventCtxId !== unit.id) {
       try {
         linkContextUnits(eventCtxId, unit.id, 'updates', 0.8);
@@ -197,6 +242,59 @@ function persistContextUpdates(ev: EventRow, item: TriageItem) {
       }
     }
   }
+
+  // MVP19：fallback + LLM 明示的 proposedNewProjects 一并落 proposal 队列
+  if (fallbackProposals.size > 0) {
+    for (const p of fallbackProposals.values()) {
+      writeProposalSafe(p, createdUnitIds, ev.id);
+    }
+  }
+  persistProposedNewProjects(ev, item, createdUnitIds);
+
   // MVP2.1: triage 已经为这条 event 完成了 context 富化
   markEventContextExtracted(ev.id, new Date().toISOString());
+}
+
+function persistProposedNewProjects(
+  ev: EventRow,
+  item: TriageItem,
+  createdUnitIds: string[]
+) {
+  if (!item.proposedNewProjects || item.proposedNewProjects.length === 0) return;
+  for (const p of item.proposedNewProjects) {
+    writeProposalSafe(p, createdUnitIds, ev.id);
+  }
+}
+
+function writeProposalSafe(
+  p: ProposedNewProject,
+  sourceUnitIds: string[],
+  sourceEventId: string
+) {
+  try {
+    upsertProjectCanonicalProposal({
+      proposedName: p.name,
+      sourceUnitIds,
+      sourceEventId,
+    });
+  } catch (err) {
+    console.warn(
+      `[triage] proposal upsert failed for "${p.name}":`,
+      err instanceof Error ? err.message : String(err)
+    );
+  }
+}
+
+/**
+ * MVP19：判断给定名字是否对应到注册表里一行 canonical（包括 alias 命中且 canonical 拼写
+ * 跟 input 一致的边界情况）。
+ *
+ * 背景：resolveProjectCanonical 在"未命中"和"命中且 canonical===input"两种情形下都
+ * 返回原 input。本函数额外查一次 canonical_name=input 来区分。
+ */
+function projectCanonicalExists(name: string): boolean {
+  const r = db
+    .prepare(`SELECT 1 AS x FROM org_project_taxonomy WHERE canonical_name = ?`)
+    .get(name) as { x: number } | undefined;
+  return !!r;
 }
