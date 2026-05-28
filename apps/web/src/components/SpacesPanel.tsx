@@ -420,6 +420,15 @@ function SpaceGroup({ title, units }: { title: string; units: ContextUnit[] }) {
         {units.slice(0, 6).map((u) => (
           <li key={u.id} className="sp-group__item">
             <span className={`ctx-kind ctx-kind--${u.kind}`}>{u.kind}</span>
+            {/* MVP21 S3: source chip — 让用户一眼看出"用户登记 (work_map_seed)" vs "系统抓的 (triage)" */}
+            {u._layerHint && (
+              <span
+                className={`ctx-src ctx-src--${u._layerHint.source}`}
+                title={`layer: ${u._layerHint.layer} · source: ${u._layerHint.source}`}
+              >
+                {u._layerHint.source}
+              </span>
+            )}
             <span className="sp-group__name">{u.title}</span>
             {u.time?.dueAt && <span className="sp-group__due">due {shortTime(u.time.dueAt)}</span>}
           </li>

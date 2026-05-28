@@ -143,6 +143,54 @@ body { background: var(--bg); color: var(--text); }
   padding: 4px 8px 8px;
   word-break: break-word;
 }
+/* MVP21 S3: tabbar + section hint + deprecation 区块 */
+.wm-tabbar {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px 0;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+.wm-tab {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  background: transparent;
+  color: var(--text-dim);
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+}
+.wm-tab:hover { color: var(--text); }
+.wm-tab.is-on {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+.wm-tab__toggle { margin-left: auto; }
+.wm-section__hint {
+  font-size: 11px;
+  color: var(--text-dim);
+  background: rgba(96,165,250,0.08);
+  border-left: 2px solid var(--accent);
+  padding: 6px 8px;
+  margin: 0 0 8px;
+  border-radius: 0 4px 4px 0;
+}
+.wm-deprecation {
+  margin: 8px 0;
+  padding: 6px 8px;
+  background: rgba(245,158,11,0.06);
+  border-left: 2px solid var(--warn);
+  border-radius: 0 4px 4px 0;
+}
+.wm-deprecation__hint {
+  font-size: 11px;
+  color: var(--warn);
+  margin-bottom: 6px;
+  line-height: 1.4;
+}
 
 /* main split */
 .main {
