@@ -1,3 +1,5 @@
+import { buildKnownProjectsBlock } from '../db.js';
+
 export const TRIAGE_SYSTEM_PROMPT = `你正在为用户处理飞书信息流，并同时把信号沉淀成"context unit"供后续 Agent 使用。
 
 对每条新增信号，请完成两件事：
@@ -25,6 +27,11 @@ contextUpdates 提取规则：
 6. 情绪（emotion）：必须有文本里的明确证据，严禁脑补。证据不足就不提。
 7. 不确定性（uncertainty）：信息冲突、需要确认、过期数据。
 8. entities：每条 contextUpdate 列出涉及的人/项目/文档/任务，type 用 'person' | 'project' | 'doc' | 'task' | 'org'，name 用规范化的名字。
+   **（MVP19 闭词表）** 当 type='project' 时：
+   - name 必须严格等于 user message 中 <knownProjects> 列表里某行的 canonical 名 **或** 它的 alias 字符串。
+   - 原文出现但 <knownProjects> 里找不到匹配的项目名，**绝对不要写进 entities**；放进当前 item 的 proposedNewProjects 字段（数组，元素 {name, evidence, suggestedParent?}，evidence ≤60 字、引用原文片段；suggestedParent 仅当你确信属于 <knownProjects> 里某顶层 canonical 时填）。
+   - 不要为求覆盖率发明 project entity；找不到就别写。
+   其他 type（person/doc/task/org）按原规则：name 用规范化名字、原文有依据即可。
 9. mergeHint：≤20 字 canonical 短语，描述这条 context 的语义核心。相同语义在多源出现时应给出相同 mergeHint（例如"周三前补 MVP2 方案"两次出现都用同一 mergeHint）。
 10. confidence ∈ [0,1]，对自己的提取打分。
 11. （MVP16-A）IM 信号 text 字段可能包含双向对话，每行前缀为「我」或对方姓名。
@@ -63,8 +70,8 @@ contextUpdates 提取规则：
           "title": "周三前补 MVP2 方案",
           "content": "<对该 context 的简短描述，可引用原句>",
           "entities": [
-            {"type":"person","name":"小李","role":"target"},
-            {"type":"project","name":"AI is ON","role":"about"}
+            {"type":"person","name":"<原文里的具体人名>","role":"target"},
+            {"type":"project","name":"<必须从 knownProjects 选 canonical 或 alias；没匹配的项目名放 proposedNewProjects，不要写这里>","role":"about"}
           ],
           "time": { "dueAt": "2026-05-20T23:59:59+08:00" },
           "actionability": "ask",
@@ -73,12 +80,20 @@ contextUpdates 提取规则：
           "emotion": null,
           "meaning": null
         }
+      ],
+      "proposedNewProjects": [
+        {
+          "name": "<原文里出现但 knownProjects 里没有的项目名>",
+          "evidence": "<≤60 字、引用原文片段>",
+          "suggestedParent": "<可选；若你确信属于 knownProjects 里某顶层 canonical>"
+        }
       ]
     }
   ]
 }
 
-如果没有值得提取的 context，contextUpdates 给空数组 []。`;
+如果没有值得提取的 context，contextUpdates 给空数组 []。
+如果信号里没有任何项目名（或全部都已通过 entities 写出），proposedNewProjects 给空数组 [] 或省略。`;
 
 export function buildTriageUserMessage(opts: {
   signals: Array<{
@@ -93,6 +108,12 @@ export function buildTriageUserMessage(opts: {
   }>;
   userRules: Array<{ description: string }>;
   caringPaused?: boolean;
+  /**
+   * MVP19：已知项目 canonical 列表（XML 块）。注入到 user message 让 LLM
+   * 按闭词表抽取 project entity。默认调 buildKnownProjectsBlock(); 测试可注入。
+   * 传 '' 或省略走默认；传 null 表示"明确禁用"（极少场景）。
+   */
+  knownProjectsBlock?: string | null;
 }): string {
   const signalsJson = JSON.stringify({ items: opts.signals }, null, 2);
   const rulesJson = JSON.stringify(
@@ -100,9 +121,26 @@ export function buildTriageUserMessage(opts: {
     null,
     2
   );
+  const knownProjects =
+    opts.knownProjectsBlock === undefined
+      ? buildKnownProjectsBlock()
+      : opts.knownProjectsBlock;
+
   const lines = [
     '请按 system prompt 中的规则处理下面这批新增信号。',
     '',
+  ];
+
+  // MVP19 闭词表块：放在 user rules 之前，让 LLM 先看到项目词典
+  if (knownProjects) {
+    lines.push(
+      '当前已知项目（**抽 project entity 必须从这里选 canonical 或 alias**）：',
+      knownProjects,
+      ''
+    );
+  }
+
+  lines.push(
     '用户规则：',
     '<user_rules>',
     rulesJson,
@@ -113,8 +151,8 @@ export function buildTriageUserMessage(opts: {
     signalsJson,
     '</signals>',
     '',
-    '记得：contextUpdates 数量不限但要有证据，没有就给 []。只输出 JSON 对象，不要 Markdown。',
-  ];
+    '记得：contextUpdates 数量不限但要有证据，没有就给 []。只输出 JSON 对象，不要 Markdown。'
+  );
   if (opts.caringPaused) {
     // MVP4 §6.5 硬开关：用户暂停了情绪分析
     lines.splice(

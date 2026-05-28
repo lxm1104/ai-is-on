@@ -893,3 +893,46 @@ export async function fetchMyCollaborators(
   if (!r.ok) throw new Error(`graph/my-collaborators ${r.status}`);
   return (await r.json()) as MyCollaboratorsResponse;
 }
+
+// ============================================================================
+// MVP19 §M4 — project canonical proposals (审核入口最小版本)
+// ============================================================================
+
+export type ProjectProposal = {
+  id: string;
+  proposedName: string;
+  occurrences: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  sourceEventId: string | null;
+  sourceUnitIds: string[];
+};
+
+export async function fetchProjectProposals(): Promise<ProjectProposal[]> {
+  const r = await fetch("/api/projects/proposals");
+  if (!r.ok) throw new Error(`projects/proposals ${r.status}`);
+  const j = await r.json();
+  return (j.items ?? []) as ProjectProposal[];
+}
+
+export type ResolveProposalInput =
+  | { action: "approve_new"; canonical?: string; parentCanonical?: string }
+  | { action: "approve_alias"; target: string }
+  | { action: "rejected" };
+
+export async function resolveProjectProposal(
+  id: string,
+  input: ResolveProposalInput
+): Promise<{ ok: boolean; error?: string; alias?: string; existingCanonical?: string }> {
+  const r = await fetch(`/api/projects/proposals/${encodeURIComponent(id)}/resolve`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    return { ok: false, ...(j as Record<string, unknown>) };
+  }
+  return { ok: true };
+}
+

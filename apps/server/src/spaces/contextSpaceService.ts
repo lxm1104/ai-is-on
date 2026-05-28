@@ -1,11 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import {
+  AliasConflictError,
   db,
   type ContextSpaceLinkRow,
   type ContextSpaceRow,
   type ContextSpaceSuggestionRow,
   getContextSpace,
   getContextSpaceByTypeName,
+  getProjectAuthoritativeSpaceId,
+  getProjectCanonicalSet,
   insertContextSpace,
   insertContextSpaceSuggestionFeedback,
   listContextSpaces,
@@ -17,6 +20,7 @@ import {
   tryInsertContextSpaceLink,
   updateContextSpace,
   upsertContextSpaceLinkBestHit,
+  upsertProjectTaxonomy,
   type SpaceLinkHit,
 } from '../db.js';
 import type { ContextEntityRef, ContextUnit } from '../context/ContextUnit.js';
@@ -204,6 +208,58 @@ export function getSpaceDetail(id: string): {
   return { space, links };
 }
 
+/**
+ * MVP19 §行为设计 / work-map writer 接入注册表：
+ *
+ * 把一个 context_spaces 行同步到 org_project_taxonomy。语义：
+ *   - 若 canonical_name=space.name 不存在 → INSERT 新行
+ *     （parsed_by='work_map_writer'、authoritative_space_id=space.id、
+ *      parent_canonical_name=NULL、aliases_json=[space.name]）
+ *   - 若已存在 → 只 UPDATE 两列：parsed_by='work_map_writer'、
+ *     authoritative_space_id=space.id。aliases_json / parent_canonical_name /
+ *     summary 一律不动，避免覆盖 LLM 已积累的别名或人工已设的 parent。
+ *
+ * 由 upsertProjectTaxonomy 实现以下语义自动达成：
+ *   - 不存在 → INSERT；
+ *   - 存在 → aliases 取并集（重复加入 space.name 不会污染），
+ *     summary 空值新值跳过保留旧值；
+ *     parent_canonical_name=undefined → 保留现有；
+ *     authoritative_space_id 显式传入 → 覆盖。
+ *
+ * 用途：
+ *   1. createSpace 内部调用，让任何新建 space 都自动建注册表锚点；
+ *   2. boot migration 一次性扫存量 spaces 同步进 taxonomy（Step 2）。
+ *
+ * AliasConflictError 容错：仅记 warn 不阻断 createSpace 主流程——space 已经
+ * 落库成功，taxonomy 同步失败属于次要副作用，运维可后续 SQL 手工修。
+ */
+export function syncSpaceToProjectTaxonomy(space: ContextSpaceRow): void {
+  if (space.type !== 'project') return; // topic 类不挂 project taxonomy
+  try {
+    upsertProjectTaxonomy({
+      canonical_name: space.name,
+      aliases_json: JSON.stringify([space.name]),
+      summary: null,
+      parsed_by: 'work_map_writer',
+      parsed_at: new Date().toISOString(),
+      authoritative_space_id: space.id,
+      // parent_canonical_name 不传 → 保留现状（已存在的 canonical 可能已设父；
+      // 新创建的顶层为 NULL）
+    });
+  } catch (err) {
+    if (err instanceof AliasConflictError) {
+      console.warn(
+        `[contextSpaces] syncSpaceToProjectTaxonomy alias conflict for space ` +
+          `"${space.name}" (${space.id}): alias "${err.alias}" already belongs ` +
+          `to canonical "${err.existingCanonical}". Skipping taxonomy sync; ` +
+          `manual SQL needed.`
+      );
+      return;
+    }
+    throw err;
+  }
+}
+
 export function createSpace(input: {
   type: SpaceType;
   name: string;
@@ -211,7 +267,11 @@ export function createSpace(input: {
   entityNames?: Array<{ type: string; name: string }>;
 }): ContextSpaceRow {
   const existing = getContextSpaceByTypeName(input.type, input.name);
-  if (existing) return existing;
+  if (existing) {
+    // MVP19: 即便是复用已有 space，也确保 taxonomy 锚点存在（幂等）
+    syncSpaceToProjectTaxonomy(existing);
+    return existing;
+  }
 
   const now = new Date().toISOString();
   const row: ContextSpaceRow = {
@@ -256,6 +316,11 @@ export function createSpace(input: {
       created_at: now,
     });
   }
+
+  // MVP19: 新建 space 自动同步到 project canonical 注册表（仅 project 类型）。
+  // 失败不阻断 createSpace 主流程（详见 syncSpaceToProjectTaxonomy 注释）。
+  syncSpaceToProjectTaxonomy(row);
+
   return row;
 }
 
@@ -339,7 +404,6 @@ export function resolveUnitToSpaces(unit: ContextUnit): string[] {
       continue;
     }
     const links = listSpacesForTarget('entity', entId);
-    if (links.length === 0) continue;
     for (const l of links) {
       const seenKey = `${tier.via}::${entId}`;
       const seenSet = evidenceSeen.get(l.space_id) ?? new Set<string>();
@@ -364,6 +428,52 @@ export function resolveUnitToSpaces(unit: ContextUnit): string[] {
         (candidate.rank === current.rank && candidate.confidence > current.confidence)
       ) {
         bestPerSpace.set(l.space_id, candidate);
+      }
+    }
+
+    // ----- MVP19：project entity 额外走 canonical→space 路径 -----
+    // 即使该 project entity 没被任何 space 直接 seed-link，只要它的 canonical 或
+    // 任一祖先 canonical 有 authoritative_space_id，也算作命中那个 space。
+    // 用独立的 via='project_canonical' 跟 direct entity 路径区分，避免 seenKey 撞车。
+    if (e.type === 'project') {
+      let canonicalSet: Set<string>;
+      try {
+        canonicalSet = getProjectCanonicalSet(e.name);
+      } catch (err) {
+        // getProjectAncestorChain 内部检测到环时会抛；这里降级为只用自身
+        console.warn(
+          `[spaces] getProjectCanonicalSet failed for "${e.name}":`,
+          err instanceof Error ? err.message : String(err)
+        );
+        canonicalSet = new Set([e.name]);
+      }
+      for (const canonical of canonicalSet) {
+        const spaceId = getProjectAuthoritativeSpaceId(canonical);
+        if (!spaceId) continue;
+        const seenKey = `project_canonical::${canonical}`;
+        const seenSet = evidenceSeen.get(spaceId) ?? new Set<string>();
+        if (seenSet.has(seenKey)) continue;
+        seenSet.add(seenKey);
+        evidenceSeen.set(spaceId, seenSet);
+
+        const candidate: SpaceLinkHit = {
+          rank: tier.rank,           // project 档：rank=3
+          linkType: tier.linkType,   // 'about'
+          confidence: tier.confidence, // 0.8
+          reason: {
+            via: 'project_canonical',
+            sourceEntityId: entId,
+            sourceEntityName: canonical,
+          },
+        };
+        const current = bestPerSpace.get(spaceId);
+        if (
+          !current ||
+          candidate.rank > current.rank ||
+          (candidate.rank === current.rank && candidate.confidence > current.confidence)
+        ) {
+          bestPerSpace.set(spaceId, candidate);
+        }
       }
     }
   }

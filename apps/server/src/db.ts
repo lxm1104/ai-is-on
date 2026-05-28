@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import { config } from './config.js';
 
@@ -527,6 +528,131 @@ CREATE TABLE IF NOT EXISTS org_project_taxonomy (
 -- 反向索引粗筛：从 entity 名 → canonical_name，aliases_json 里 LIKE 匹配后应用层精确匹配
 CREATE INDEX IF NOT EXISTS idx_org_project_aliases ON org_project_taxonomy(aliases_json);
 `);
+
+// ============ MVP19: 项目 canonical 注册表与闭词表抽取 ============
+// 详见 docs/MVP19-项目canonical注册表与闭词表抽取技术方案.md §数据模型。
+//
+// D-1：把 org_project_taxonomy 升级为带 hierarchy 的 canonical 注册表：
+//   parent_canonical_name：归属的父 canonical（NULL = 顶层；禁止环，应用层校验）
+//   authoritative_space_id：本 canonical 直接对应一个 context_spaces.id（用于 ① ↔ ② 锚点反查）
+ensureColumn('org_project_taxonomy', 'parent_canonical_name', 'TEXT');
+ensureColumn('org_project_taxonomy', 'authoritative_space_id', 'TEXT');
+db.exec(`
+CREATE INDEX IF NOT EXISTS idx_opt_parent
+  ON org_project_taxonomy(parent_canonical_name);
+
+-- E-1：triage LLM 抽到的项目名不在 knownProjects 列表里时，进 pending 队列等审核。
+-- 同一 proposed_name 在 pending 状态下只能存在一行（partial unique index）；重复触发只
+-- bump occurrences + last_seen_at + 累加 source_unit_ids。reject 后再次同名可重新进 pending
+-- （pending 行已被 status 排除出 partial index，不会冲突）。
+CREATE TABLE IF NOT EXISTS project_canonical_proposals (
+  id TEXT PRIMARY KEY,
+  proposed_name TEXT NOT NULL,         -- LLM 原文抽出来的项目字符串
+  source_unit_ids_json TEXT NOT NULL,  -- JSON 数组：triage 出处 unit id（保留近 20 条）
+  source_event_id TEXT,                -- 触发 triage 的 raw event id，可选
+  occurrences INTEGER NOT NULL DEFAULT 1,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+    -- 'pending' | 'approved_new' | 'approved_alias' | 'rejected'
+  resolved_canonical_name TEXT,        -- approved 时填：归到哪个 canonical
+  resolved_as_parent_canonical TEXT,   -- approved_new 时可选：直接指定 parent
+  resolved_by TEXT,
+  resolved_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_pcp_proposed_pending
+  ON project_canonical_proposals(proposed_name)
+  WHERE status='pending';
+CREATE INDEX IF NOT EXISTS idx_pcp_status_lastseen
+  ON project_canonical_proposals(status, last_seen_at DESC);
+`);
+
+// MVP19 boot migration（一次性，幂等可重复启动）。
+// Step 2：扫所有现存 context_spaces（type='project'），同步到 org_project_taxonomy。
+// Step 3：把已知 Chatbot 业务线下的 7 个子 canonical 挂到 'Chatbot 产研协同'。
+// 两步都尽量惰性：Step 2 通过 INSERT/UPDATE 分支实现 idempotent；
+// Step 3 用 WHERE parent IS NULL 守卫，避免覆盖用户已设置的 parent。
+//
+// 直接 inline SQL 而非调用 contextSpaceService.syncSpaceToProjectTaxonomy，
+// 是为了避免 db.ts ← contextSpaceService.ts 循环导入；语义保持一致。
+(function runMvp19BootMigration() {
+  const nowIso = new Date().toISOString();
+
+  // ----- Step 2: spaces → taxonomy -----
+  const spaceRows = db
+    .prepare(
+      `SELECT id, name FROM context_spaces
+        WHERE type='project' AND (status IS NULL OR status='active')`
+    )
+    .all() as Array<{ id: string; name: string }>;
+  for (const sp of spaceRows) {
+    try {
+      const exists = db
+        .prepare(`SELECT 1 AS x FROM org_project_taxonomy WHERE canonical_name=?`)
+        .get(sp.name) as { x: number } | undefined;
+      if (!exists) {
+        db.prepare(
+          `INSERT INTO org_project_taxonomy
+             (canonical_name, aliases_json, summary, parsed_by, parsed_at,
+              parent_canonical_name, authoritative_space_id)
+           VALUES (?, ?, NULL, 'work_map_writer', ?, NULL, ?)`
+        ).run(sp.name, JSON.stringify([sp.name]), nowIso, sp.id);
+      } else {
+        // 仅 UPDATE 两列；aliases / parent / summary 一律不动
+        db.prepare(
+          `UPDATE org_project_taxonomy
+              SET parsed_by='work_map_writer',
+                  authoritative_space_id=?
+            WHERE canonical_name=?`
+        ).run(sp.id, sp.name);
+      }
+    } catch (err) {
+      console.warn(
+        `[MVP19 boot] failed to sync space "${sp.name}":`,
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  }
+
+  // ----- Step 3: Chatbot-* 7 兄弟收编为 'Chatbot 产研协同' 的子 -----
+  // 守卫：只在 parent 仍为 NULL 时设；用户手工改过就尊重。
+  // 'Chatbot 产研协同' 自身必须存在才有意义；若它还没在 taxonomy 里说明 Step 2
+  // 没把对应 space 同步进来（dev DB 上不存在该 space 时），此时跳过避免 dangling parent。
+  const parentExists = db
+    .prepare(
+      `SELECT 1 AS x FROM org_project_taxonomy
+        WHERE canonical_name='Chatbot 产研协同'`
+    )
+    .get();
+  if (parentExists) {
+    const chatbotChildren = [
+      'Chatbot',
+      'Chatbot Skill Market',
+      'Chatbot Agent Builder',
+      'Chatbot Badcase 收集跟进',
+      'Chatbot 接入 Workspace',
+      'Chatbot 支持在会话内分享',
+      'Chatbot一期',
+    ];
+    const stmt = db.prepare(
+      `UPDATE org_project_taxonomy
+          SET parent_canonical_name='Chatbot 产研协同'
+        WHERE canonical_name=?
+          AND parent_canonical_name IS NULL`
+    );
+    let updated = 0;
+    for (const child of chatbotChildren) {
+      const r = stmt.run(child);
+      if (r.changes > 0) updated++;
+    }
+    if (updated > 0) {
+      console.log(
+        `[MVP19 boot] Step 3: ${updated}/${chatbotChildren.length} Chatbot-* ` +
+          `canonical parented to 'Chatbot 产研协同'`
+      );
+    }
+  }
+})();
 
 // ============ MVP15B: 图语义化 ============
 // 详见 docs/MVP15B-Work-Map-图语义化与Attention接入技术方案.md §4。
@@ -2917,7 +3043,31 @@ export type OrgProjectTaxonomyRow = {
   summary: string | null;
   parsed_by: string;
   parsed_at: string;
+  // MVP19：层级注册表扩展。两列在迁移后存在但允许 NULL（老行 / 顶层 canonical / 未锚点 canonical）。
+  parent_canonical_name?: string | null; // 归属的父 canonical；NULL = 顶层。禁止环。
+  authoritative_space_id?: string | null; // 直接对应 context_spaces.id；通常仅父 canonical 填。
 };
+
+/**
+ * MVP19：alias 跨行唯一性冲突。
+ * upsertProjectTaxonomy 在写入前发现 proposed alias 已属于其他 canonical 时抛此错。
+ * 调用方应捕获后走显式合并流程（approve_alias / 人工 SQL 改 row），不要静默吞掉。
+ */
+export class AliasConflictError extends Error {
+  readonly alias: string;
+  readonly existingCanonical: string;
+  readonly proposedCanonical: string;
+  constructor(opts: { alias: string; existingCanonical: string; proposedCanonical: string }) {
+    super(
+      `alias "${opts.alias}" already belongs to canonical "${opts.existingCanonical}", ` +
+        `cannot also assign to "${opts.proposedCanonical}"`
+    );
+    this.name = 'AliasConflictError';
+    this.alias = opts.alias;
+    this.existingCanonical = opts.existingCanonical;
+    this.proposedCanonical = opts.proposedCanonical;
+  }
+}
 
 export function listProjectTaxonomy(): OrgProjectTaxonomyRow[] {
   return db
@@ -2929,8 +3079,57 @@ export function listProjectTaxonomy(): OrgProjectTaxonomyRow[] {
  * upsert 语义（增量解析关键）：如果 canonical_name 已存在，**aliases 取并集**而非覆盖。
  * 这样后续 LLM run 给同一 canonical 加了新 alias 不会把老 alias 丢掉。
  * summary 走"新值覆盖空值"策略——新 row.summary 非空就用，空则保留旧值。
+ *
+ * MVP19 扩展：
+ *  - 顶部加 alias 跨行唯一性检查（lower-case 比较）。如果 proposed alias 已属于
+ *    其他 canonical 行，throw AliasConflictError，要求显式合并。这是为了防止
+ *    LLM 把同一 alias 同时归到两个 canonical 引发后续 resolve 歧义。
+ *  - 接受可选 parent_canonical_name / authoritative_space_id；同样走"新值覆盖空值"，
+ *    且只在 row 显式传入（非 undefined）时才考虑覆盖；传 null 则强制清空。
  */
 export function upsertProjectTaxonomy(row: OrgProjectTaxonomyRow): void {
+  // ----- MVP19: alias 跨行唯一性检查 -----
+  let proposedAliases: string[] = [];
+  try {
+    const parsed = JSON.parse(row.aliases_json);
+    if (Array.isArray(parsed)) {
+      proposedAliases = parsed.filter((s): s is string => typeof s === 'string');
+    }
+  } catch {
+    // proposed aliases 解析失败时退到空集，不参与冲突检查
+  }
+  if (proposedAliases.length > 0) {
+    const proposedLowerSet = new Set(proposedAliases.map((s) => s.trim().toLowerCase()));
+    // SQLite LIKE 默认大小写不敏感（针对 ASCII），中文走字面包含；
+    // 我们只需要扫除自身以外的 row，应用层 lower 比对。
+    const others = db
+      .prepare(
+        `SELECT canonical_name, aliases_json FROM org_project_taxonomy
+          WHERE canonical_name <> ?`
+      )
+      .all(row.canonical_name) as Array<{ canonical_name: string; aliases_json: string }>;
+    for (const other of others) {
+      let otherAliases: unknown;
+      try {
+        otherAliases = JSON.parse(other.aliases_json);
+      } catch {
+        continue;
+      }
+      if (!Array.isArray(otherAliases)) continue;
+      for (const a of otherAliases) {
+        if (typeof a !== 'string') continue;
+        const lower = a.trim().toLowerCase();
+        if (proposedLowerSet.has(lower)) {
+          throw new AliasConflictError({
+            alias: a,
+            existingCanonical: other.canonical_name,
+            proposedCanonical: row.canonical_name,
+          });
+        }
+      }
+    }
+  }
+  // ----- 原有 upsert 路径 -----
   const existing = (
     db
       .prepare(`SELECT * FROM org_project_taxonomy WHERE canonical_name = ?`)
@@ -2939,9 +3138,19 @@ export function upsertProjectTaxonomy(row: OrgProjectTaxonomyRow): void {
   if (!existing) {
     db.prepare(
       `INSERT INTO org_project_taxonomy
-         (canonical_name, aliases_json, summary, parsed_by, parsed_at)
-       VALUES (@canonical_name, @aliases_json, @summary, @parsed_by, @parsed_at)`
-    ).run(row);
+         (canonical_name, aliases_json, summary, parsed_by, parsed_at,
+          parent_canonical_name, authoritative_space_id)
+       VALUES (@canonical_name, @aliases_json, @summary, @parsed_by, @parsed_at,
+               @parent_canonical_name, @authoritative_space_id)`
+    ).run({
+      canonical_name: row.canonical_name,
+      aliases_json: row.aliases_json,
+      summary: row.summary,
+      parsed_by: row.parsed_by,
+      parsed_at: row.parsed_at,
+      parent_canonical_name: row.parent_canonical_name ?? null,
+      authoritative_space_id: row.authoritative_space_id ?? null,
+    });
     return;
   }
   // 合并 aliases：并集
@@ -2964,15 +3173,27 @@ export function upsertProjectTaxonomy(row: OrgProjectTaxonomyRow): void {
     ].filter((s): s is string => typeof s === 'string'))
   );
   const mergedSummary = (row.summary && row.summary.trim()) || existing.summary;
+  // parent / authoritative_space_id：undefined = 保持现状；null = 显式清空；非空 = 覆盖
+  const mergedParent =
+    row.parent_canonical_name === undefined
+      ? existing.parent_canonical_name ?? null
+      : row.parent_canonical_name;
+  const mergedAuthSpace =
+    row.authoritative_space_id === undefined
+      ? existing.authoritative_space_id ?? null
+      : row.authoritative_space_id;
   db.prepare(
     `UPDATE org_project_taxonomy
-       SET aliases_json=?, summary=?, parsed_by=?, parsed_at=?
+       SET aliases_json=?, summary=?, parsed_by=?, parsed_at=?,
+           parent_canonical_name=?, authoritative_space_id=?
        WHERE canonical_name=?`
   ).run(
     JSON.stringify(merged),
     mergedSummary,
     row.parsed_by,
     row.parsed_at,
+    mergedParent,
+    mergedAuthSpace,
     row.canonical_name
   );
 }
@@ -2980,12 +3201,18 @@ export function upsertProjectTaxonomy(row: OrgProjectTaxonomyRow): void {
 /**
  * 给定 entity 名，返回对应 canonical_name；缓存里没找到返回原名（不做隐式合并）。
  * 实现：SQL LIKE 粗筛后应用层精确匹配（aliases_json 是 JSON 数组字符串）。
- * 性能：org_project_taxonomy 行数通常 ≤30，全表 LIKE 是 O(30)；不引入额外缓存。
+ * 性能：org_project_taxonomy 行数通常 ≤80，全表 LIKE 是 O(N)；不引入额外缓存。
+ *
+ * MVP19：alias 比较改为大小写不敏感（lower(input) === lower(alias)），
+ * 但注册表存储仍保持原始大小写（人类可读）。canonical_name 仍是 PK 大小写敏感，
+ * 避免 'Chatbot' 和 'chatbot' 共存两行——upsert 入口做规范化。
  */
 export function resolveProjectCanonical(entityName: string): string {
   const trimmed = entityName.trim();
   if (!trimmed) return entityName;
-  // 粗筛：LIKE 含 entity 名 substring 的行
+  const trimmedLower = trimmed.toLowerCase();
+  // 粗筛：LIKE 用 lower-case 输入；SQLite 默认 LIKE 大小写不敏感（针对 ASCII），
+  // 中文不受影响，仍走字面包含。比 substring 多查若干候选，应用层用 lower 精筛。
   const candidates = db
     .prepare(
       `SELECT canonical_name, aliases_json FROM org_project_taxonomy
@@ -3003,11 +3230,356 @@ export function resolveProjectCanonical(entityName: string): string {
       continue;
     }
     if (!Array.isArray(arr)) continue;
-    if (arr.some((a) => typeof a === 'string' && a.trim() === trimmed)) {
+    if (
+      arr.some(
+        (a) => typeof a === 'string' && a.trim().toLowerCase() === trimmedLower
+      )
+    ) {
       return c.canonical_name;
     }
   }
   return entityName;
+}
+
+// ----- MVP19：层级展开 helpers -----
+
+/**
+ * 从给定 canonical_name 沿 parent_canonical_name 上溯到 NULL 为止，
+ * 组成祖先链（不含自身）。canonical 不存在返回 []。
+ *
+ * 环防护：traversal 超过 32 层立刻 throw + 写 audit。
+ * （正常树深度远小于 32；触到这个边界一定是数据出错。）
+ */
+const PROJECT_ANCESTOR_MAX_DEPTH = 32;
+export function getProjectAncestorChain(canonical: string): string[] {
+  const chain: string[] = [];
+  let cur: string | null = canonical;
+  const seen = new Set<string>([canonical]);
+  for (let depth = 0; depth < PROJECT_ANCESTOR_MAX_DEPTH; depth++) {
+    const row = db
+      .prepare(
+        `SELECT parent_canonical_name FROM org_project_taxonomy
+          WHERE canonical_name = ?`
+      )
+      .get(cur) as { parent_canonical_name: string | null } | undefined;
+    if (!row) return chain; // canonical 不存在或无父
+    const parent = row.parent_canonical_name;
+    if (!parent) return chain;
+    if (seen.has(parent)) {
+      // 检测到环；写 audit 帮排查（auditLog 单独 import 太重，留 console.error + throw）
+      console.error(
+        `[projectTaxonomy] cycle detected at canonical="${cur}" -> parent="${parent}" ` +
+          `(chain so far: ${[...chain, parent].join(' -> ')})`
+      );
+      throw new Error(
+        `project canonical hierarchy cycle detected at "${parent}" (chain: ${chain.join(' -> ')})`
+      );
+    }
+    seen.add(parent);
+    chain.push(parent);
+    cur = parent;
+  }
+  // 超过最大深度也按异常处理
+  console.error(
+    `[projectTaxonomy] ancestor chain exceeded max depth ${PROJECT_ANCESTOR_MAX_DEPTH} ` +
+      `starting from "${canonical}", chain so far: ${chain.join(' -> ')}`
+  );
+  throw new Error(
+    `project canonical hierarchy depth exceeded ${PROJECT_ANCESTOR_MAX_DEPTH} starting from "${canonical}"`
+  );
+}
+
+/**
+ * 便利函数：resolveProjectCanonical(name) ∪ getProjectAncestorChain(canonical)。
+ * 给 selfCollaboratorRanking / resolveUnitToSpaces 等需要求"同业务大盘"交集的下游用。
+ */
+export function getProjectCanonicalSet(name: string): Set<string> {
+  const canonical = resolveProjectCanonical(name);
+  const set = new Set<string>([canonical]);
+  for (const ancestor of getProjectAncestorChain(canonical)) set.add(ancestor);
+  return set;
+}
+
+/**
+ * 反查：给定 canonical_name，返回它直接对应的 context_spaces.id（如有）。
+ * 不沿 parent 链向上找——调用方按需自己组合 getProjectAncestorChain。
+ */
+export function getProjectAuthoritativeSpaceId(canonical: string): string | null {
+  const row = db
+    .prepare(
+      `SELECT authoritative_space_id FROM org_project_taxonomy
+        WHERE canonical_name = ?`
+    )
+    .get(canonical) as { authoritative_space_id: string | null } | undefined;
+  return row?.authoritative_space_id ?? null;
+}
+
+/**
+ * MVP19 §E：渲染 <knownProjects> XML 块，注入到 triage user message。
+ *
+ * 顶层：parent_canonical_name IS NULL 的 canonical（即注册表里的"根"）。
+ *   排序：先有 authoritative_space_id 的（user-curated space），
+ *         然后按最近 30d 是否被 person_project edge 引用，
+ *         最后按 canonical_name 字母序兜底。
+ *   每行：`- "canonical" (alias: "a", "b")`
+ *         若有子：换行 `  sub: "child1", "child2", ...`
+ *
+ * 截断：当顶层超过 maxTopLevel（默认 100）行时按上述排序截断。
+ *       每条 alias 取前 5，sub 取前 8，超出 ` …`。
+ *
+ * 用途：仅 triagePrompt.buildTriageUserMessage 用。其他场景不要复用。
+ */
+export type BuildKnownProjectsOpts = {
+  maxTopLevel?: number;          // 默认 100
+  recentEdgeWindowMs?: number;   // "最近 30d" 默认 30*24h
+  now?: number;                  // 测试可注入
+};
+export function buildKnownProjectsBlock(opts: BuildKnownProjectsOpts = {}): string {
+  const maxTopLevel = opts.maxTopLevel ?? 100;
+  const recentMs = opts.recentEdgeWindowMs ?? 30 * 24 * 3600_000;
+  const nowMs = opts.now ?? Date.now();
+  const recentCutoff = new Date(nowMs - recentMs).toISOString();
+
+  type Row = {
+    canonical_name: string;
+    aliases_json: string;
+    authoritative_space_id: string | null;
+  };
+  const tops = db
+    .prepare(
+      `SELECT canonical_name, aliases_json, authoritative_space_id
+         FROM org_project_taxonomy
+        WHERE parent_canonical_name IS NULL`
+    )
+    .all() as Row[];
+
+  // 取每个顶层是否近期被 person_project edge 引用
+  const recentRefSet = new Set(
+    (
+      db
+        .prepare(
+          `SELECT DISTINCT to_id FROM entity_edges
+            WHERE edge_kind='person_project' AND last_seen_at >= ?`
+        )
+        .all(recentCutoff) as Array<{ to_id: string }>
+    ).map((r) => r.to_id)
+  );
+
+  // 排序：authoritative_space_id 优先，然后 recent edge ref，然后字母序
+  tops.sort((a, b) => {
+    const aHasSpace = a.authoritative_space_id ? 1 : 0;
+    const bHasSpace = b.authoritative_space_id ? 1 : 0;
+    if (aHasSpace !== bHasSpace) return bHasSpace - aHasSpace;
+    const aRecent = recentRefSet.has(a.canonical_name) ? 1 : 0;
+    const bRecent = recentRefSet.has(b.canonical_name) ? 1 : 0;
+    if (aRecent !== bRecent) return bRecent - aRecent;
+    return a.canonical_name.localeCompare(b.canonical_name);
+  });
+
+  const truncated = tops.length > maxTopLevel;
+  const renderTops = tops.slice(0, maxTopLevel);
+
+  // 拉所有 children（一次查询，按 parent 索引）
+  const allChildren = db
+    .prepare(
+      `SELECT canonical_name, parent_canonical_name FROM org_project_taxonomy
+        WHERE parent_canonical_name IS NOT NULL
+        ORDER BY canonical_name`
+    )
+    .all() as Array<{ canonical_name: string; parent_canonical_name: string }>;
+  const childrenByParent = new Map<string, string[]>();
+  for (const c of allChildren) {
+    const arr = childrenByParent.get(c.parent_canonical_name) ?? [];
+    arr.push(c.canonical_name);
+    childrenByParent.set(c.parent_canonical_name, arr);
+  }
+
+  const lines: string[] = [];
+  lines.push(`<knownProjects count="${tops.length}"${truncated ? ' truncated="true"' : ''}>`);
+  for (const t of renderTops) {
+    let aliases: string[] = [];
+    try {
+      const parsed = JSON.parse(t.aliases_json);
+      if (Array.isArray(parsed)) {
+        aliases = parsed.filter((s): s is string => typeof s === 'string' && s !== t.canonical_name);
+      }
+    } catch {}
+    const aliasPart =
+      aliases.length > 0
+        ? ` (alias: ${aliases.slice(0, 5).map((a) => `"${a}"`).join(', ')}${
+            aliases.length > 5 ? ' …' : ''
+          })`
+        : '';
+    lines.push(`- "${t.canonical_name}"${aliasPart}`);
+    const subs = childrenByParent.get(t.canonical_name) ?? [];
+    if (subs.length > 0) {
+      const subPart = subs.slice(0, 8).map((s) => `"${s}"`).join(', ');
+      const more = subs.length > 8 ? ' …' : '';
+      lines.push(`  sub: ${subPart}${more}`);
+    }
+  }
+  lines.push('</knownProjects>');
+  return lines.join('\n');
+}
+
+/**
+ * MVP19 §E-1：把 triage LLM 抽出的"不在 knownProjects 里的项目名"upsert 进
+ * project_canonical_proposals 队列。
+ *
+ * 语义：
+ *  - pending 状态下同名行最多一行（partial UNIQUE 保证）；
+ *  - 已存在 pending 行 → bump occurrences、更新 last_seen_at、
+ *    累加 source_unit_ids（保留近 20 条避免无限增长）；
+ *  - 不存在 pending 行 → INSERT 新行 status='pending', occurrences=1。
+ *
+ * idGen 默认走 randomUUID，测试可注入。
+ */
+export type UpsertProposalInput = {
+  proposedName: string;
+  sourceUnitIds: string[];
+  sourceEventId?: string | null;
+};
+const PROPOSAL_SOURCE_UNIT_IDS_CAP = 20;
+export function upsertProjectCanonicalProposal(
+  input: UpsertProposalInput,
+  opts: { idGen?: () => string; now?: () => string } = {}
+): { id: string; created: boolean; occurrences: number } {
+  const idGen = opts.idGen ?? (() => randomUUID());
+  const nowFn = opts.now ?? (() => new Date().toISOString());
+  const nowIso = nowFn();
+  const proposedName = input.proposedName.trim();
+  if (!proposedName) {
+    throw new Error('upsertProjectCanonicalProposal: proposedName empty');
+  }
+  const existing = db
+    .prepare(
+      `SELECT id, occurrences, source_unit_ids_json
+         FROM project_canonical_proposals
+        WHERE proposed_name = ? AND status = 'pending'`
+    )
+    .get(proposedName) as
+    | { id: string; occurrences: number; source_unit_ids_json: string }
+    | undefined;
+  if (existing) {
+    let oldIds: string[] = [];
+    try {
+      const parsed = JSON.parse(existing.source_unit_ids_json);
+      if (Array.isArray(parsed)) oldIds = parsed.filter((s): s is string => typeof s === 'string');
+    } catch {}
+    const mergedIds = Array.from(new Set([...oldIds, ...input.sourceUnitIds]))
+      .slice(-PROPOSAL_SOURCE_UNIT_IDS_CAP);
+    const newOcc = existing.occurrences + 1;
+    db.prepare(
+      `UPDATE project_canonical_proposals
+          SET occurrences=?, source_unit_ids_json=?, last_seen_at=?
+        WHERE id=?`
+    ).run(newOcc, JSON.stringify(mergedIds), nowIso, existing.id);
+    return { id: existing.id, created: false, occurrences: newOcc };
+  }
+  const id = idGen();
+  db.prepare(
+    `INSERT INTO project_canonical_proposals
+       (id, proposed_name, source_unit_ids_json, source_event_id, occurrences,
+        first_seen_at, last_seen_at, status)
+     VALUES (?, ?, ?, ?, 1, ?, ?, 'pending')`
+  ).run(
+    id,
+    proposedName,
+    JSON.stringify(input.sourceUnitIds.slice(-PROPOSAL_SOURCE_UNIT_IDS_CAP)),
+    input.sourceEventId ?? null,
+    nowIso,
+    nowIso
+  );
+  return { id, created: true, occurrences: 1 };
+}
+
+/**
+ * MVP19 §M4：列出待审核 proposals（status='pending'），按 last_seen_at 倒序。
+ */
+export type ProjectCanonicalProposalRow = {
+  id: string;
+  proposed_name: string;
+  source_unit_ids_json: string;
+  source_event_id: string | null;
+  occurrences: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  status: 'pending' | 'approved_new' | 'approved_alias' | 'rejected';
+  resolved_canonical_name: string | null;
+  resolved_as_parent_canonical: string | null;
+  resolved_by: string | null;
+  resolved_at: string | null;
+};
+export function listPendingProjectProposals(
+  limit = 200
+): ProjectCanonicalProposalRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM project_canonical_proposals
+        WHERE status='pending'
+        ORDER BY last_seen_at DESC
+        LIMIT ?`
+    )
+    .all(limit) as ProjectCanonicalProposalRow[];
+}
+
+export function getProjectProposal(id: string): ProjectCanonicalProposalRow | null {
+  const r = db
+    .prepare(`SELECT * FROM project_canonical_proposals WHERE id=?`)
+    .get(id) as ProjectCanonicalProposalRow | undefined;
+  return r ?? null;
+}
+
+/**
+ * 把一条 proposal 标记为已处理。调用方负责事先做实际的 taxonomy 写入
+ * （insert canonical / append alias），本函数只更新 proposal 行的 status/resolved_* 字段。
+ *
+ * status:
+ *  - 'approved_new'   → resolution.canonical = 新 canonical 名（通常 = proposed_name）
+ *                       resolution.parentCanonical 可选
+ *  - 'approved_alias' → resolution.canonical = 已存在的 target canonical
+ *  - 'rejected'       → resolution 可省略
+ */
+export type ResolveProposalInput =
+  | { id: string; status: 'approved_new'; canonical: string; parentCanonical?: string | null; resolvedBy?: string }
+  | { id: string; status: 'approved_alias'; canonical: string; resolvedBy?: string }
+  | { id: string; status: 'rejected'; resolvedBy?: string };
+
+export function resolveProjectProposalStatus(input: ResolveProposalInput): void {
+  const nowIso = new Date().toISOString();
+  if (input.status === 'rejected') {
+    db.prepare(
+      `UPDATE project_canonical_proposals
+          SET status='rejected', resolved_by=?, resolved_at=?
+        WHERE id=?`
+    ).run(input.resolvedBy ?? 'user', nowIso, input.id);
+    return;
+  }
+  if (input.status === 'approved_alias') {
+    db.prepare(
+      `UPDATE project_canonical_proposals
+          SET status='approved_alias',
+              resolved_canonical_name=?,
+              resolved_by=?, resolved_at=?
+        WHERE id=?`
+    ).run(input.canonical, input.resolvedBy ?? 'user', nowIso, input.id);
+    return;
+  }
+  // approved_new
+  db.prepare(
+    `UPDATE project_canonical_proposals
+        SET status='approved_new',
+            resolved_canonical_name=?,
+            resolved_as_parent_canonical=?,
+            resolved_by=?, resolved_at=?
+      WHERE id=?`
+  ).run(
+    input.canonical,
+    input.parentCanonical ?? null,
+    input.resolvedBy ?? 'user',
+    nowIso,
+    input.id
+  );
 }
 
 // ============================================================================

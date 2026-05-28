@@ -16,7 +16,12 @@
  * 空 self（settings 里没有 self_person_entity_id）→ 返回 []，不抛。
  */
 
-import { db, listEntityEdges, getContextEntityById } from '../db.js';
+import {
+  db,
+  listEntityEdges,
+  getContextEntityById,
+  getProjectCanonicalSet,
+} from '../db.js';
 import { resolveAliased } from './entityResolver.js';
 import {
   parsePersonAttributesFromRow,
@@ -80,12 +85,21 @@ export function buildSelfCollaboratorRanking(
     return _cache.entries.slice(0, limit);
   }
 
-  // self 自己的 person_project 集合（canonical name set）
-  const selfProjects = new Set(
-    listEntityEdges({ kind: 'person_project', fromId: selfId, limit: 200 }).map(
-      (e) => e.to_id
-    )
-  );
+  // self 自己的 person_project 集合（canonical name set）。
+  // MVP19：展开每条边的 canonical 及其祖先链，让 sub-canonical 命中能算到父级。
+  // 例：self 边里只有 "Chatbot 产研协同"，展开后还是 {"Chatbot 产研协同"}；
+  //     若有边写到 "Chatbot Skill Market"，展开后 = {"Chatbot Skill Market",
+  //     "Chatbot 产研协同"}，跟 other 求交时两侧都能匹配上。
+  const selfProjects = new Set<string>();
+  for (const e of listEntityEdges({
+    kind: 'person_project',
+    fromId: selfId,
+    limit: 200,
+  })) {
+    for (const name of getProjectCanonicalSet(e.to_id)) {
+      selfProjects.add(name);
+    }
+  }
 
   // self self attrs（一次性加载用于 orgRole 比较）
   const selfAttrs = loadAttrs(selfId);
@@ -184,13 +198,19 @@ function makeEntry(
   const otherRow = getContextEntityById(otherId);
   const otherAttrs = otherRow ? parsePersonAttributesFromRow(otherRow as never) : null;
 
-  // 共同 project：otherId 的 person_project ∩ selfProjects
-  const otherProjects = listEntityEdges({
+  // 共同 project：otherId 的 person_project ∩ selfProjects（双方都已展开过祖先链）。
+  // MVP19：other 这边同样展开。注意去重——getProjectCanonicalSet 已带自身。
+  const otherProjectsExpanded = new Set<string>();
+  for (const edge of listEntityEdges({
     kind: 'person_project',
     fromId: otherId,
     limit: 200,
-  }).map((edge) => edge.to_id);
-  const shared = otherProjects.filter((p) => selfProjects.has(p));
+  })) {
+    for (const name of getProjectCanonicalSet(edge.to_id)) {
+      otherProjectsExpanded.add(name);
+    }
+  }
+  const shared = [...otherProjectsExpanded].filter((p) => selfProjects.has(p));
 
   const orgRole = otherAttrs ? computeOrgRoleFromMe(selfAttrs, otherAttrs) : undefined;
   const hint = decisionRoleHintFor(otherId);
