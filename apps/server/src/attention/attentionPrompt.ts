@@ -287,7 +287,13 @@ function renderUnitsBlock(
   return lines.join('\n');
 }
 
-function renderUnitOneLine(u: ContextUnit, opts: RenderUnitsOpts): string {
+// MVP20 §M4: 行尾可能追加 [role=requester] 等 self-role 标签——派生字段在
+// agentContextAssembler 装配 commitments 时挂的（CommitmentInPacket）。
+// 本 PR (PR2) 只暴露标签让 LLM 自发学习；铁律 13 在 PR3 加入。
+function renderUnitOneLine(
+  u: ContextUnit & { selfRoleOnUnit?: 'executor' | 'requester' | 'reviewer' | 'observer' | null },
+  opts: RenderUnitsOpts
+): string {
   const parts: string[] = [`- [${u.id}] (${u.kind})`];
   parts.push(u.title);
   if (opts.showTime && u.time?.occurredAt) {
@@ -304,6 +310,10 @@ function renderUnitOneLine(u: ContextUnit, opts: RenderUnitsOpts): string {
     .map((e) => `${e.type}:${e.name}`);
   if (ents.length) parts.push(`{${ents.join(', ')}}`);
   if (u.meaning && u.meaning.length <= 60) parts.push(`-- ${u.meaning}`);
+  // MVP20 §M4: self 在这条 unit 上的角色（仅 commitment 派生，goal/uncertainty 不挂）
+  if (u.selfRoleOnUnit) {
+    parts.push(`[role=${u.selfRoleOnUnit}]`);
+  }
   return parts.join(' ');
 }
 
