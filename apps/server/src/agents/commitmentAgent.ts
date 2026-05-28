@@ -1,10 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import {
   type ActionProposalRow,
+  getSetting,
   insertActionProposal,
 } from '../db.js';
 import { createCardFromProposal } from '../cards/cardsService.js';
 import { recommendHandling } from '../context/agentContextAssembler.js';
+import { resolveAliased } from '../context/entityResolver.js';
+import {
+  computeSelfRoleOnUnit,
+  type SelfRoleOnUnit,
+} from '../context/selfRoleOnUnit.js';
 import type { AgentHandler } from './agentRegistry.js';
 
 /**
@@ -49,6 +55,57 @@ export const trackCommitmentHandler: AgentHandler = async ({
   const entities =
     payload?.entities ?? unit?.entities?.map((e) => ({ type: e.type, name: e.name })) ?? [];
 
+  // MVP20 §M5.1: self 在这条 commitment 上是什么角色？
+  // 派生函数自给自足，不依赖 packet（AgentContextPacket 跟 GlobalContextPacket 是两个类型）。
+  let selfRole: SelfRoleOnUnit | null = null;
+  if (unit?.id) {
+    const selfRawId = getSetting('self_person_entity_id') ?? '';
+    const selfCanonical = selfRawId ? resolveAliased(selfRawId) : '';
+    selfRole = computeSelfRoleOnUnit(unit.id, selfCanonical);
+  }
+
+  // MVP20 §M5.2: 跟 requester / observer 相关的"是否该出 card"判定。
+  // 不依赖 relatedContext / recentEvents slice（commitmentAgent 没装配），
+  // 仅用 unit 自身字段：actionability、createdAt、updatedAt、dueAt。
+  const isUrgentAsk =
+    unit?.actionability === 'ask' || unit?.actionability === 'act';
+  const nowMs = Date.now();
+  const recentlyUpdated =
+    !!unit?.updatedAt &&
+    nowMs - new Date(unit.updatedAt).getTime() < 6 * 3600_000;
+  const createdMs = unit?.createdAt
+    ? new Date(unit.createdAt).getTime()
+    : null;
+  const dueMs = dueAt ? new Date(dueAt).getTime() : null;
+  const stalled =
+    !!createdMs &&
+    !!dueMs &&
+    dueMs > createdMs &&
+    nowMs - createdMs > (dueMs - createdMs) * 0.5;
+
+  // ②.4 MVP20: selfRole 早退判定 —— observer 默认沉默 / requester 无信号沉默
+  if (selfRole === 'observer' && !isUrgentAsk) {
+    return {
+      summary: `commitment skipped (observer, no ask signal)`,
+      proposalIds: [],
+      cardIds: [],
+      data: { skipped: 'observer_digest_only', selfRole },
+    };
+  }
+  if (
+    selfRole === 'requester' &&
+    !recentlyUpdated &&
+    !isUrgentAsk &&
+    !stalled
+  ) {
+    return {
+      summary: `commitment skipped (requester, no progress signal)`,
+      proposalIds: [],
+      cardIds: [],
+      data: { skipped: 'requester_silent', selfRole },
+    };
+  }
+
   // ② priority：考虑 Space critical / subject 责任覆盖度
   let priority: 'P0' | 'P1' | 'P2' | 'P3' = overdue || hours < 24 ? 'P1' : 'P2';
   const criticalSpace = packet?.spaces?.find((s) => s.priority === 'critical');
@@ -69,7 +126,34 @@ export const trackCommitmentHandler: AgentHandler = async ({
   }
   // at_risk 不动 — 已经是 P1/P2 不需再升
 
-  const cardTitle = overdue ? `承诺已逾期：${title}` : `承诺即将到期：${title}`;
+  // ②.6 MVP20 §M5.3: selfRole 调权 —— 放在 graphContext 调权之后（unit 级覆盖项目级）
+  // 项目逾期但我只是 requester，仍然降到 P2，避免把不是我做的事推到 P0。
+  if (selfRole === 'requester') {
+    // 上限 P2
+    if (priority === 'P0' || priority === 'P1') priority = 'P2';
+  } else if (selfRole === 'observer') {
+    // 走到这里 = isUrgentAsk=true（前面早退过滤了 default observer）→ 升 P2
+    priority = 'P2';
+  } else if (selfRole === 'reviewer') {
+    // 上限 P1
+    if (priority === 'P0') priority = 'P1';
+  }
+  // selfRole === 'executor' / null → 现状逻辑
+
+  // MVP20 §M5.2: 按 selfRole 改 cardTitle 文案
+  let cardTitle: string;
+  if (selfRole === 'requester') {
+    cardTitle = overdue
+      ? `你提的需求逾期未响应：${title}`
+      : `你提的需求还没动静：${title}`;
+  } else if (selfRole === 'reviewer') {
+    cardTitle = overdue ? `等你审（已逾期）：${title}` : `等你审：${title}`;
+  } else if (selfRole === 'observer') {
+    cardTitle = `进展同步：${title}`;
+  } else {
+    // executor / null — 现状文案
+    cardTitle = overdue ? `承诺已逾期：${title}` : `承诺即将到期：${title}`;
+  }
 
   const bodyLines: string[] = [];
   bodyLines.push(overdue ? `已逾期约 ${hours} 小时。` : `还有 ${hours} 小时到期。`);
@@ -123,9 +207,28 @@ export const trackCommitmentHandler: AgentHandler = async ({
     }
   }
 
-  const baseSuggestion = overdue
-    ? '建议：检查是否已经完成；若未完成，向相关方说明并给新时间。'
-    : '建议：今天内主动推进或确认进展。';
+  // MVP20 §M5.2: baseSuggestion 按 selfRole 分支
+  let baseSuggestion: string;
+  if (selfRole === 'requester') {
+    // 找 entities 里非 self 的第一个 person 作为追单对象
+    const otherPerson = entities.find((e) => e.type === 'person' && e.name !== '我');
+    const target = otherPerson ? `@${otherPerson.name}` : '执行方';
+    baseSuggestion = overdue
+      ? `建议：${target} 已经逾期未响应；要不要在相关群里催一下，或重新对齐时间？`
+      : `建议：要不要在相关群里追问 ${target} 进展？`;
+  } else if (selfRole === 'reviewer') {
+    baseSuggestion = overdue
+      ? '建议：花 5min 看一下并打回或确认；执行方还等着。'
+      : '建议：花 5min 审一下并给反馈。';
+  } else if (selfRole === 'observer') {
+    // 走到这里 = isUrgentAsk → 有问题需要回应
+    baseSuggestion = '注意：原文有疑问/请求，可能需要你回应一下。';
+  } else {
+    // executor / null — 现状文案
+    baseSuggestion = overdue
+      ? '建议：检查是否已经完成；若未完成，向相关方说明并给新时间。'
+      : '建议：今天内主动推进或确认进展。';
+  }
   bodyLines.push(
     suggestedActionHint ? `${baseSuggestion} ${suggestedActionHint}` : baseSuggestion
   );
@@ -186,6 +289,8 @@ export const trackCommitmentHandler: AgentHandler = async ({
       boundaryBlocked: !card,
       recommendedHandling: handlingRec?.handling,
       spacePriority: criticalSpace?.priority ?? null,
+      // MVP20: 让下游/调试能看到角色判定
+      selfRole,
     },
   };
 };
