@@ -43,6 +43,10 @@ import {
 import { buildSelfCollaboratorRanking } from './selfCollaboratorRanking.js';
 import { listEntityEdges as listEntityEdgesFromDb } from '../db.js';
 import { resolveAliased as resolveAliasedCanonical } from './entityResolver.js';
+import {
+  computeSelfRolesOnUnits,
+  type SelfRoleOnUnit,
+} from './selfRoleOnUnit.js';
 
 export type PacketSlice =
   | 'subject'
@@ -733,6 +737,15 @@ export type MyTopCollaboratorInPacket = {
   decisionRoleHint?: 'co_owner' | 'reviewer' | 'contributor' | 'observer';
 };
 
+/**
+ * MVP20 §3.1：commitment 在 GlobalContextPacket 里多挂一个派生字段 `selfRoleOnUnit`，
+ * 回答"self 对这一条具体 commitment 是什么角色"。计算见 selfRoleOnUnit.ts。
+ * 不污染核心 ContextUnit 类型，packet 层独立扩展。
+ */
+export type CommitmentInPacket = ContextUnit & {
+  selfRoleOnUnit?: SelfRoleOnUnit | null;
+};
+
 export type GlobalContextPacket = {
   packetAssemblerVersion: number;
   generatedAt: string;
@@ -740,7 +753,7 @@ export type GlobalContextPacket = {
   subject: SubjectInPacket | null;
   spaces: GlobalSpaceInPacket[];
   goals: ContextUnit[];
-  commitments: ContextUnit[];
+  commitments: CommitmentInPacket[];
   uncertainties: ContextUnit[];
   recentEvents: ContextUnit[];
   topActive: ContextUnit[];
@@ -801,12 +814,30 @@ export function assembleGlobalContextPacket(
   const allActive = listActiveContextUnits({ limit: 500 });
 
   // commitments：取全部 kind='commitment' 而非仅 workMap 内的，按 score+due 排
-  const commitments = allActive
+  const commitmentsRaw = allActive
     .filter((u) => u.kind === 'commitment')
     .map((u) => ({ u, s: scoreContextUnit(u, now) }))
     .sort((a, b) => b.s - a.s)
     .slice(0, GLOBAL_SLICE_CAPS.commitments)
     .map((x) => x.u);
+
+  // MVP20 §M3: 给每条 commitment 派生 selfRoleOnUnit（self 在这条 unit 上的角色）。
+  // 复用 buildMyTopCollaboratorsSlice 的 self 解析模式。selfCanonical='' 时
+  // computeSelfRolesOnUnits 仍可走 B 路（name='我'）兜底。
+  const selfRow = db
+    .prepare(`SELECT value FROM settings WHERE key='self_person_entity_id'`)
+    .get() as { value: string } | undefined;
+  const selfCanonicalForRoles = selfRow?.value
+    ? resolveAliasedCanonical(selfRow.value)
+    : '';
+  const selfRoles = computeSelfRolesOnUnits(
+    commitmentsRaw.map((u) => u.id),
+    selfCanonicalForRoles
+  );
+  const commitments: CommitmentInPacket[] = commitmentsRaw.map((u) => ({
+    ...u,
+    selfRoleOnUnit: selfRoles.get(u.id) ?? null,
+  }));
 
   const goals = allActive
     .filter((u) => u.kind === 'goal')
