@@ -1,13 +1,15 @@
 import { useState } from 'react';
 import type { CardAction, ContextUnit, SignalCard as SignalCardT } from '../types';
 import {
-  fetchAttentionSignals,
+  fetchAttentionOriginItems,
   fetchCardContext,
   postCardLarkTask,
   postActionItemsConfirm,
   postAttentionFeedback,
   postCardCorrection,
   postContextFeedback,
+  type AttentionConversation,
+  type AttentionOriginItem,
   type AttentionSignalDetail,
   type LarkTaskCreateResult,
   type CorrectionApplyResult,
@@ -97,15 +99,21 @@ export function SignalCardView(props: {
   const [taskResult, setTaskResult] = useState<LarkTaskCreateResult | null>(null);
 
   // "查看原始信息"：抽屉里列出 signalIds 对应的原始 events（含飞书原文 URL）
+  // items 是混排块（IM conversation 合并 + 其他单条 signal，按最新动静倒序）；
+  // originSignals 留着给"为什么相关"做 signalId → url 反查。
   const [originOpen, setOriginOpen] = useState(false);
-  const [originList, setOriginList] = useState<AttentionSignalDetail[] | null>(null);
+  const [originItems, setOriginItems] = useState<AttentionOriginItem[] | null>(null);
+  const [originSignals, setOriginSignals] = useState<AttentionSignalDetail[] | null>(null);
   const [originErr, setOriginErr] = useState<string | null>(null);
+  // 单条原始信号是否展开成完整原文（默认收起，只显示一行 excerpt）
+  const [originExpanded, setOriginExpanded] = useState<Record<string, boolean>>({});
 
   async function ensureOriginLoaded() {
-    if (originList !== null) return;
+    if (originItems !== null) return;
     try {
-      const list = await fetchAttentionSignals(card.id);
-      setOriginList(list);
+      const { items, signals } = await fetchAttentionOriginItems(card.id);
+      setOriginItems(items);
+      setOriginSignals(signals);
     } catch (e) {
       setOriginErr(e instanceof Error ? e.message : String(e));
     }
@@ -117,10 +125,10 @@ export function SignalCardView(props: {
     if (next) await ensureOriginLoaded();
   }
 
-  // "为什么相关"列表项尝试匹配到 originList 里的 url（两个面板共享底层 signalIds）
+  // "为什么相关"列表项尝试匹配到 signal 的 url（两个面板共享底层 signalIds）
   function urlForUnit(unitId: string): string | undefined {
-    if (!originList) return undefined;
-    const hit = originList.find((d) => d.signalId === unitId);
+    if (!originSignals) return undefined;
+    const hit = originSignals.find((d) => d.signalId === unitId);
     return hit?.url;
   }
 
@@ -362,43 +370,35 @@ export function SignalCardView(props: {
             aria-expanded={originOpen}
           >
             {originOpen ? '▾' : '▸'} 查看原始信息
-            {originList !== null && originList.length > 0 ? ` · ${originList.length}` : ''}
+            {originItems !== null && originItems.length > 0
+              ? ` · ${originItems.length}`
+              : ''}
           </button>
           {originOpen && (
             <div className="card__origin-body">
               {originErr && <div className="card__origin-err">{originErr}</div>}
-              {originList === null && !originErr && (
+              {originItems === null && !originErr && (
                 <div className="card__origin-empty">加载中…</div>
               )}
-              {originList !== null && originList.length === 0 && !originErr && (
+              {originItems !== null && originItems.length === 0 && !originErr && (
                 <div className="card__origin-empty">未找到关联的原始信号。</div>
               )}
-              {originList && originList.length > 0 && (
-                <ul className="card__origin-list">
-                  {originList.map((d) => (
-                    <li key={d.signalId} className="card__origin-item">
-                      <span className={`ctx-kind ctx-kind--${d.kind}`}>
-                        {d.source ?? d.kind}
-                      </span>
-                      <span className="card__origin-title">{d.title}</span>
-                      {d.occurredAt && (
-                        <span className="card__origin-time">{fmtTime(d.occurredAt)}</span>
-                      )}
-                      {d.url ? (
-                        <a
-                          className="card__origin-link"
-                          href={d.url}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          打开 ↗
-                        </a>
-                      ) : (
-                        <span className="card__origin-nourl">无原文链接</span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+              {originItems && originItems.length > 0 && (
+                <div className="card__origin-list">
+                  {originItems.map((item) =>
+                    item.kind === 'conversation'
+                      ? renderConversation(item.conversation)
+                      : renderSignal(
+                          item.signal,
+                          !!originExpanded[item.signal.signalId],
+                          (next) =>
+                            setOriginExpanded((m) => ({
+                              ...m,
+                              [item.signal.signalId]: next,
+                            }))
+                        )
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -492,14 +492,14 @@ export function SignalCardView(props: {
                       disabled={!!attnFbBusy}
                       onClick={() => void submitAttentionFeedback('not_relevant', {})}
                     >
-                      {attnFbBusy === 'not_relevant' ? '…' : '这条没用'}
+                      {attnFbBusy === 'not_relevant' ? '…' : '忽略并降权'}
                     </button>
                     <button
                       type="button"
                       className="btn btn--ghost card__ctx-fb-chip"
                       onClick={() => setPrefMode(true)}
                     >
-                      我以后不想看这类
+                      写条偏好规则…
                     </button>
                   </>
                 ) : (
@@ -755,4 +755,117 @@ function statusIcon(s: SignalCardT['status']) {
     default:
       return '';
   }
+}
+
+/**
+ * "查看原始信息"：把 imCollector 写入的 "HH:MM" 时间字符串渲染到分钟。
+ * events.text 里的时间一般是 "2026-05-27 21:07" 这种本地化字符串，已是分钟级，
+ * 这里只截尾 5 位（"21:07"）。无法解析时原样回退。
+ */
+function fmtConvTime(t: string): string {
+  // 已经是 "HH:MM" 形式
+  if (/^\d{2}:\d{2}$/.test(t)) return t;
+  // "YYYY-MM-DD HH:MM" 形式
+  const m = t.match(/(\d{2}:\d{2})(?::\d{2})?$/);
+  if (m) return m[1];
+  return t;
+}
+
+function renderConversation(conv: AttentionConversation) {
+  return (
+    <div key={conv.groupKey} className="card__origin-conv">
+      <div className="card__origin-conv-head">
+        <span className="ctx-kind ctx-kind--event">{conv.source}</span>
+        <span className="card__origin-title">{conv.chatName}</span>
+        <span className="card__origin-time">{conv.messages.length} 条</span>
+        {conv.url ? (
+          <a
+            className="card__origin-link"
+            href={conv.url}
+            target="_blank"
+            rel="noreferrer"
+          >
+            打开聊天 ↗
+          </a>
+        ) : (
+          <span className="card__origin-nourl">无原文链接</span>
+        )}
+      </div>
+      <ul className="card__origin-conv-msgs">
+        {conv.messages.map((m, i) => (
+          <li
+            key={`${conv.groupKey}:${i}`}
+            className={`card__origin-msg${m.isFocus ? ' card__origin-msg--focus' : ''}`}
+          >
+            <span className="card__origin-msg-time">{fmtConvTime(m.time)}</span>
+            <span className="card__origin-msg-sender">{m.sender}</span>
+            <span className="card__origin-msg-content">{m.content}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function renderSignal(
+  d: AttentionSignalDetail,
+  expanded: boolean,
+  setExpanded: (next: boolean) => void
+) {
+  const hasMore = !!d.text && d.text.length > (d.excerpt?.length ?? 0);
+  return (
+    <div key={d.signalId} className="card__origin-item">
+      <div className="card__origin-row">
+        <span className={`ctx-kind ctx-kind--${d.kind}`}>{d.source ?? d.kind}</span>
+        <span className="card__origin-title">{d.title}</span>
+        {d.occurredAt && (
+          <span className="card__origin-time">
+            {(() => {
+              try {
+                return new Date(d.occurredAt).toLocaleTimeString('zh-CN', {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                });
+              } catch {
+                return '';
+              }
+            })()}
+          </span>
+        )}
+        {d.url ? (
+          <a className="card__origin-link" href={d.url} target="_blank" rel="noreferrer">
+            打开 ↗
+          </a>
+        ) : (
+          <span className="card__origin-nourl">无原文链接</span>
+        )}
+      </div>
+      {d.excerpt && !expanded && (
+        <div className="card__origin-excerpt-row">
+          <span className="card__origin-excerpt">{d.excerpt}</span>
+          {hasMore && (
+            <button
+              type="button"
+              className="card__origin-more"
+              onClick={() => setExpanded(true)}
+            >
+              展开
+            </button>
+          )}
+        </div>
+      )}
+      {expanded && d.text && (
+        <div className="card__origin-full-row">
+          <pre className="card__origin-full">{d.text}</pre>
+          <button
+            type="button"
+            className="card__origin-more"
+            onClick={() => setExpanded(false)}
+          >
+            收起
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }

@@ -15,7 +15,10 @@ import {
   type AttentionFeedbackType,
 } from '../attention/attentionFeedback.js';
 import type { AttentionStatus } from '../attention/attentionTypes.js';
-import { resolveAttentionSignalDetails } from '../cards/contextProjection.js';
+import {
+  resolveAttentionOriginItems,
+  resolveAttentionSignalDetails,
+} from '../cards/contextProjection.js';
 
 export const attentionRouter = Router();
 
@@ -32,8 +35,10 @@ attentionRouter.get('/attention/cards', (_req, res) => {
   res.json({ cards });
 });
 
-// "查看原始信息"：把卡片的 signalIds 解开成可点击的原始信号列表
-// （events.url 优先；缺 url 时退化为标题/摘要）。
+// "查看原始信息"：把卡片的 signalIds 解开成可点击的原始信号列表。
+// 同 chat 的 IM signals 合并成 conversation（按时间顺序的对话块），
+// 其他来源保持单条 signal。块间按"最新动静"时间倒序。
+// 保留 signals 字段向后兼容（旧前端用），新前端读 items。
 attentionRouter.get('/attention/:id/signals', (req, res) => {
   const id = req.params.id;
   const item = getAttentionItem(id);
@@ -42,7 +47,8 @@ attentionRouter.get('/attention/:id/signals', (req, res) => {
     return;
   }
   const signals = resolveAttentionSignalDetails(item.signalIds);
-  res.json({ attentionId: id, signals });
+  const items = resolveAttentionOriginItems(item.signalIds);
+  res.json({ attentionId: id, signals, items });
 });
 
 attentionRouter.get('/attention/last-run', (_req, res) => {

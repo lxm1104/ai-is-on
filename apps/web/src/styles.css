@@ -1141,17 +1141,87 @@ body { background: var(--bg); color: var(--text); }
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
-.card__origin-item {
+/* 对话合并块：一个聊天为一个块，块头部 chat 名 + 打开聊天链接，下面按时间列出消息 */
+.card__origin-conv {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px;
+  background: rgba(147,197,253,0.06);
+  border-radius: 6px;
+  border-left: 2px solid rgba(147,197,253,0.4);
+}
+.card__origin-conv-head {
   display: flex;
   gap: 8px;
   align-items: center;
+  min-width: 0;
+}
+.card__origin-conv-msgs {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.card__origin-msg {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 1px 0;
+  min-width: 0;
+}
+.card__origin-msg--focus {
+  background: rgba(252, 211, 77, 0.10);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.card__origin-msg-time {
+  flex: 0 0 auto;
+  font-size: 11px;
+  opacity: 0.55;
+  font-variant-numeric: tabular-nums;
+  min-width: 40px;
+}
+.card__origin-msg-sender {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--accent, #93c5fd);
+  font-weight: 500;
+}
+.card__origin-msg-content {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+.card__origin-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   padding: 4px 6px;
   background: rgba(147,197,253,0.04);
   border-radius: 6px;
+  min-width: 0;
 }
-.card__origin-title { flex: 1; font-size: 12px; }
+.card__origin-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+.card__origin-title {
+  flex: 1;
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .card__origin-time { font-size: 11px; opacity: 0.6; }
 .card__origin-link {
   font-size: 11px;
@@ -1163,6 +1233,53 @@ body { background: var(--bg); color: var(--text); }
 }
 .card__origin-link:hover { background: rgba(147,197,253,0.24); }
 .card__origin-nourl { font-size: 11px; opacity: 0.4; }
+.card__origin-excerpt-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding-left: 4px;
+}
+.card__origin-excerpt {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card__origin-more {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: var(--accent, #93c5fd);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 1px 4px;
+}
+.card__origin-more:hover { text-decoration: underline; }
+.card__origin-full-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-end;
+  padding-left: 4px;
+}
+.card__origin-full {
+  align-self: stretch;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(147,197,253,0.06);
+  padding: 6px 8px;
+  border-radius: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+  font-family: inherit;
+}
 
 .status-bar__active-ctx {
   font-size: 11px;
