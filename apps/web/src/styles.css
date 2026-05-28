@@ -271,6 +271,69 @@ body { background: var(--bg); color: var(--text); }
   background: var(--panel-2);
 }
 
+/* 历史会话下拉 —— Stage 3 修补：恢复历史会话入口 */
+.tab-history {
+  position: relative;
+  flex: 0 0 auto;
+}
+.tab--history {
+  color: var(--text-dim);
+}
+.tab--history:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.tab-history__popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 280px;
+  max-width: 360px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  z-index: 50;
+  padding: 4px;
+}
+.tab-history__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.tab-history__row:hover {
+  background: var(--panel-2);
+}
+.tab-history__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tab-history__time {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.tab-history__more {
+  padding: 6px 9px;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-align: center;
+}
+
 /* card list */
 .cards {
   flex: 1;

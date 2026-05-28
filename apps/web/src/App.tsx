@@ -8,7 +8,7 @@ import { SpacesPanel } from './components/SpacesPanel';
 import { RulesPanel } from './components/RulesPanel';
 import { WorkMapPanel } from './components/WorkMapPanel';
 import { MyCollaboratorsPanel } from './components/MyCollaboratorsPanel';
-import { TabBar, type Tab } from './components/TabBar';
+import { TabBar, type HistoryTopic, type Tab } from './components/TabBar';
 import {
   fetchAttentionCards,
   fetchCollectors,
@@ -405,6 +405,16 @@ export function App() {
     setActiveTopicId(persistActive(null));
   }
 
+  /** 从"⏱ 历史"下拉打开一条历史会话：加进 openTopicIds + 切过去。
+   *  与 selectTab 不同——selectTab 假设 id 已经在 openTopicIds 里；这里负责"先加再切"。
+   *  消息懒加载靠 activeTopicId useEffect 命中 fetch。 */
+  function openHistoricTopic(id: string) {
+    setOpenTopicIds((prev) =>
+      prev.includes(id) ? prev : persistOpen([...prev, id])
+    );
+    setActiveTopicId(persistActive(id));
+  }
+
   // 构造 TabBar 渲染数据
   const tabs: Tab[] = openTopicIds
     .map((id) => {
@@ -418,6 +428,16 @@ export function App() {
       } as Tab;
     })
     .filter((x): x is Tab => x !== null);
+
+  // 历史会话 = topics 里所有还没在 openTopicIds 的，按 lastMessageAt 倒序
+  const historyTopics: HistoryTopic[] = topics
+    .filter((t) => !openTopicIds.includes(t.id))
+    .map((t) => ({
+      id: t.id,
+      title: t.title,
+      lastMessageAt: t.lastMessageAt ?? t.updatedAt ?? t.createdAt,
+      status: topicStatus[t.id] ?? 'idle',
+    }));
 
   // MVP18 Stage 2: lastMsg / thinking 从 activeMessages（桶视图）计算
   const lastMsg = activeMessages[activeMessages.length - 1];
@@ -482,6 +502,8 @@ export function App() {
             onClose={closeTab}
             onNew={newTab}
             isNewActive={activeTopicId === null}
+            history={historyTopics}
+            onOpenHistory={openHistoricTopic}
           />
           <MessageList messages={activeMessages} thinking={thinking} />
           <Composer
