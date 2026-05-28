@@ -347,7 +347,29 @@ export type AttentionSignalDetail = {
   occurredAt?: string;
   url?: string;
   excerpt?: string;
+  text?: string;
 };
+
+export type ParsedImMessage = {
+  time: string;
+  sender: string;
+  content: string;
+  isFocus: boolean;
+};
+
+export type AttentionConversation = {
+  groupKey: string;
+  source: 'im';
+  chatName: string;
+  url?: string;
+  latestAt?: string;
+  messages: ParsedImMessage[];
+  signalIds: string[];
+};
+
+export type AttentionOriginItem =
+  | { kind: 'conversation'; conversation: AttentionConversation; sortKey: string }
+  | { kind: 'signal'; signal: AttentionSignalDetail; sortKey: string };
 
 export async function fetchAttentionSignals(
   attentionId: string
@@ -356,6 +378,20 @@ export async function fetchAttentionSignals(
   if (!r.ok) throw new Error(`attention/${attentionId}/signals ${r.status}`);
   const j = await r.json();
   return (j.signals ?? []) as AttentionSignalDetail[];
+}
+
+// 新前端用：一次拉到混排 items（conversation + signal，按"最新动静"时间倒序）
+// 同时附带扁平 signals，给"为什么相关"通过 signalId 查 url 用。
+export async function fetchAttentionOriginItems(
+  attentionId: string
+): Promise<{ items: AttentionOriginItem[]; signals: AttentionSignalDetail[] }> {
+  const r = await fetch(`/api/attention/${encodeURIComponent(attentionId)}/signals`);
+  if (!r.ok) throw new Error(`attention/${attentionId}/signals ${r.status}`);
+  const j = await r.json();
+  return {
+    items: (j.items ?? []) as AttentionOriginItem[],
+    signals: (j.signals ?? []) as AttentionSignalDetail[],
+  };
 }
 
 export type ContextSpace = {
