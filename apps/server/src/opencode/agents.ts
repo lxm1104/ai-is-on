@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../config.js';
 
+import { buildSelfProfilePrompt } from '../context/selfProfile.js';
 import { SYSTEM_PROMPT as CHAT_SYSTEM_PROMPT } from '../claude/prompts.js';
 import { TRIAGE_SYSTEM_PROMPT } from '../triage/triagePrompt.js';
 import { CARING_SYSTEM_PROMPT } from '../caring/caringPrompt.js';
@@ -171,8 +172,25 @@ function renderAgentFile(def: AgentDef): string {
 /** Boot 时调用：把所有 agent 同步到磁盘，覆盖式写入以保持 prompt 与代码一致。 */
 export function syncOpencodeAgents(): void {
   fs.mkdirSync(config.opencodeAgentDir, { recursive: true });
+
+  // 主聊天额外把"我"（当前用户本人）的身份画像拼进 system prompt，
+  // 让模型读飞书日历/消息/邮件时能判断哪个是我。取不到则为 ''（不拼）。
+  let selfProfile = '';
+  try {
+    selfProfile = buildSelfProfilePrompt();
+  } catch (err) {
+    console.warn(
+      '[opencode] buildSelfProfilePrompt failed, chat agent will lack self identity:',
+      err instanceof Error ? err.message : String(err)
+    );
+  }
+
   for (const def of AGENTS) {
+    const prompt =
+      def.name === 'aiisn-chat' && selfProfile
+        ? `${def.prompt}\n\n${selfProfile}`
+        : def.prompt;
     const file = path.join(config.opencodeAgentDir, `${def.name}.md`);
-    fs.writeFileSync(file, renderAgentFile(def), 'utf8');
+    fs.writeFileSync(file, renderAgentFile({ ...def, prompt }), 'utf8');
   }
 }
