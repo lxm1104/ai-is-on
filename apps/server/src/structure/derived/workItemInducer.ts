@@ -17,6 +17,7 @@
  *   - dryRun=true 第一周默认（self-审 §9 #9）
  */
 
+// MVP21 S5.1: 本文件从 context/ 迁到 structure/derived/。
 import { randomUUID } from 'node:crypto';
 import {
   db,
@@ -26,7 +27,7 @@ import {
   purgeStaleEntityEdges,
   upsertWorkItemEdge,
   type WorkItemEdgeRow,
-} from '../db.js';
+} from '../../db.js';
 
 export type WorkItemInducerSummary = {
   written: number;        // 新建/更新的 follows 边数

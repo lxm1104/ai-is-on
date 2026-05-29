@@ -11,10 +11,14 @@
  * Throttle: 5 分钟。/api/graph/* 路由懒触发；server boot 后 10s 异步预热。
  */
 
+// MVP21 S5.1: 本文件从 context/ 迁到 structure/derived/。
+//   - 同目录兄弟 (./xxx) 保持
+//   - util / context 留下的兄弟 → ../../{util,context}/...
+//   - inducerRegistry 在 structure/ 上层 → ../inducerRegistry
 import {
   refreshProjectTaxonomyIfNeeded,
   type RefreshResult,
-} from '../util/projectTaxonomy.js';
+} from '../../util/projectTaxonomy.js';
 import { inducePersonProjectEdges } from './personProjectInducer.js';
 import { inducePersonPersonEdges } from './personPersonInducer.js';
 import {
@@ -25,9 +29,9 @@ import {
 // MVP15B D12：inducer 写完 entity_edges 后必须 invalidate SCR + graphContext cache，
 // 否则前端 panel 和 attention prompt 在 60s 内看到的还是没标签的旧数据。
 import { __internal as scrInternal } from './selfCollaboratorRanking.js';
-import { __internal as gcInternal } from './graphContextAssembler.js';
+import { __internal as gcInternal } from '../../context/graphContextAssembler.js';
 // MVP21 S5: 注册表观测（只元数据，不接管调度，throttle/cache 仍由本文件自管）
-import { registerInducer, reportInducerRun } from '../structure/inducerRegistry.js';
+import { registerInducer, reportInducerRun } from '../inducerRegistry.js';
 
 const THROTTLE_MS = 5 * 60_000;
 let lastRunAt = 0;

@@ -16,19 +16,20 @@
  * 空 self（settings 里没有 self_person_entity_id）→ 返回 []，不抛。
  */
 
+// MVP21 S5.1: 本文件从 context/ 迁到 structure/derived/。
 import {
   db,
   listEntityEdges,
   getContextEntityById,
   getProjectCanonicalSet,
-} from '../db.js';
-import { resolveAliased } from './entityResolver.js';
+} from '../../db.js';
+import { resolveAliased } from '../../context/entityResolver.js';
 import {
   parsePersonAttributesFromRow,
   type OrgRoleFromMe,
   type PersonAttributes,
-} from './personAttributes.js';
-import { computeOrgRoleFromMe } from './personOrgRole.js';
+} from '../../context/personAttributes.js';
+import { computeOrgRoleFromMe } from '../../context/personOrgRole.js';
 
 export type DecisionRoleHint =
   | 'co_owner'

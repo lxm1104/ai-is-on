@@ -116,7 +116,7 @@ test('listInducers 返回拷贝：消费方修改不影响内部状态', () => {
 test('import graphInducer 后 graph_inducer 自动注册', async () => {
   _resetRegistryForTest();
   // 故意延迟到这里 import，触发模块顶部 registerInducer 副作用
-  await import('../src/context/graphInducer.js');
+  await import('../src/structure/derived/graphInducer.js');
   const list = listInducers();
   const graph = list.find((x) => x.name === 'graph_inducer');
   assert.ok(graph, 'graphInducer 应已注册');

@@ -16,18 +16,19 @@
  *   - 'me' / 'Me' / '我' placeholder 过滤
  */
 
+// MVP21 S5.1: 本文件从 context/ 迁到 structure/derived/。
 import { randomUUID } from 'node:crypto';
 import {
   db,
   listEntityEdges,
   upsertEntityEdge,
   type EntityEdgeRow,
-} from '../db.js';
-import { resolveAliased } from './entityResolver.js';
+} from '../../db.js';
+import { resolveAliased } from '../../context/entityResolver.js';
 import {
   parsePersonAttributesFromRow,
   type PersonAttributes,
-} from './personAttributes.js';
+} from '../../context/personAttributes.js';
 
 export type BusinessRelation =
   | 'same_business'
