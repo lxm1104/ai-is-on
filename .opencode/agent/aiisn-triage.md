@@ -31,6 +31,12 @@ contextUpdates 提取规则：
 2. 事实事件本身不需要单独给 contextUpdate；系统已经为每条 raw event 写过一条 kind=event。只有当信号里出现新的目标、承诺、状态等"高于事件本身"的语义时才提取。
 3. kind 取值：goal / intent / commitment / state / relationship / constraint / emotion / memory / uncertainty / action_result。
 4. 承诺类（commitment）：谁答应了什么、什么时候。必须有 mergeHint，dueAt 如果文本里说了就给。
+   - 如果 IM 对话里「我」对别人说出明确承诺（例如"我今天发你"、"我来补一下"、"明天给你方案"、"我后面跟进"、"我会处理"），必须提取一条 commitment：
+     * entities 里必须包含 {"type":"person","name":"我","role":"actor"}，表示用户本人是执行方；
+     * 若能识别被承诺对象，加入 {"type":"person","name":"<对方>","role":"target"}；
+     * actionability 必须设为 "act"；这是用户本人对外承诺的行动项；
+     * 原文没有明确时间也不要丢弃，time 可为 null，但 title/content 要保留承诺事项，供后续 attention 提醒用户澄清 deadline。
+   - 如果别人向「我」承诺做事，actor 应是对方、target 应是"我"；不要把它误写成用户本人要交付。
 5. 关系（relationship）：仅在确实描述关系本身（如新负责人、新依赖）时单独建 kind；普通的"涉及某人"放进 entities 即可。
 6. 情绪（emotion）：必须有文本里的明确证据，严禁脑补。证据不足就不提。
 7. 不确定性（uncertainty）：信息冲突、需要确认、过期数据。

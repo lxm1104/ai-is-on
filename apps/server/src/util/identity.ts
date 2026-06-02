@@ -6,7 +6,22 @@ let inflight: Promise<string> | null = null;
 type AuthStatus = {
   userOpenId?: string;
   userName?: string;
+  identities?: {
+    user?: {
+      openId?: string;
+      userName?: string;
+    };
+  };
 };
+
+export function parseMyIdentity(status: AuthStatus): { openId: string; userName?: string } | null {
+  const openId = status.userOpenId ?? status.identities?.user?.openId;
+  if (!openId) return null;
+  return {
+    openId,
+    userName: status.userName ?? status.identities?.user?.userName,
+  };
+}
 
 /** Cached lookup of the current user's open_id via `lark-cli auth status`. */
 export async function getMyOpenId(): Promise<string> {
@@ -15,9 +30,10 @@ export async function getMyOpenId(): Promise<string> {
   inflight = (async () => {
     try {
       const status = await runLarkCliJson<AuthStatus>(['auth', 'status']);
-      if (!status.userOpenId) throw new Error('lark-cli auth status: missing userOpenId');
-      cached = { openId: status.userOpenId, userName: status.userName };
-      return status.userOpenId;
+      const identity = parseMyIdentity(status);
+      if (!identity) throw new Error('lark-cli auth status: missing userOpenId');
+      cached = identity;
+      return identity.openId;
     } finally {
       inflight = null;
     }

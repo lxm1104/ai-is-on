@@ -72,8 +72,15 @@ export const ATTENTION_SYSTEM_PROMPT = `你是用户的「注意力管家」。
        \`why\` 里引用项目名解释 priority。
 14. （MVP20）\`<commitments>\` 行尾可能带 \`[role=executor|requester|reviewer|observer]\` 标签，
     表示 self 在这一条具体 commitment 上的角色（unit 级，跟 stakeholder 的项目级角色正交）：
-    a) \`role=executor\` —— 我自己要做的事。现状规则不变，DDL 临期可以升 P0/P1。
-       why/title 用"该交了 / 建议今天推进"类文案。
+    a) \`role=executor\` —— 我自己要做的事。**所有 active executor commitment 都是 P0**。
+       why/title 用"该交了 / 建议今天推进"类文案。只要它来自 \`src=triage\` 或 \`src=manual\`，
+       且 status 仍 active，就应被当作需要监控的个人承诺：
+         - priority 必须设为 P0，不因 dueAt 缺失、来源普通、协作者权重低而降级；
+         - dueAt ≤24h 或已逾期 → P0，并建议立刻推进/同步；
+         - dueAt 在 7 天内 → P0，并建议今天安排推进；
+         - 没有 dueAt → P0，suggestedAction 要建议"补一个截止时间 / 主动同步进展"；
+         - 若 recentEvents 中出现用户已完成/已发送/已同步的证据，可不出 item 或用 supersede 清理旧 item。
+       对 executor commitment 的 suggestedAction 要给具体下一步建议，而不只是"关注一下"。
     b) \`role=requester\` —— **别人答应我做的事**，我是需求方，不是执行方。
        priority **上限 P2**，DDL 临期不作为升级理由。why/title 要明确说"你提的需求 X 还没动静"，
        不要写"你要做 X"。仅当以下任一条件满足才出 item，否则跳过：
