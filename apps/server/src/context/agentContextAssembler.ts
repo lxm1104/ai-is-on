@@ -760,6 +760,27 @@ export type UncertaintyInPacket = ContextUnit & {
   _layerHint?: ContextLayerHint;
 };
 
+/**
+ * MVP5：飞书任务 slice。任务底层仍存为 kind='commitment' 的 ContextUnit（挂
+ * {type:'task', name:'lark_task:<guid>'} entity），但在装配层单独拎进 tasks slice、
+ * 从 commitments 桶剔除，避免任务（actionability='act' 打分高）挤占 commitments cap。
+ * 不挂 selfRoleOnUnit（任务无需"我的角色"判断）。
+ */
+export type TaskInPacket = ContextUnit & {
+  _layerHint?: ContextLayerHint;
+};
+
+/**
+ * 判定一条 ContextUnit 是否为「飞书任务」：挂了 type='task' 且 name 前缀 lark_task: 的 entity。
+ * collector 建的（origin='system'）与 card 路径建的（origin='card_action'）都满足，
+ * 二者本质都是飞书任务，统一归入 tasks slice。commitments 桶用同一判据做反向剔除。
+ */
+export function isLarkTaskUnit(u: ContextUnit): boolean {
+  return u.entities.some(
+    (e) => e.type === 'task' && e.name.startsWith('lark_task:')
+  );
+}
+
 export type GlobalContextPacket = {
   packetAssemblerVersion: number;
   generatedAt: string;
@@ -768,6 +789,7 @@ export type GlobalContextPacket = {
   spaces: GlobalSpaceInPacket[];
   goals: GoalInPacket[];
   commitments: CommitmentInPacket[];
+  tasks: TaskInPacket[];                // MVP5：飞书任务独立 slice
   uncertainties: UncertaintyInPacket[];
   recentEvents: ContextUnit[];
   topActive: ContextUnit[];
@@ -787,6 +809,8 @@ const GLOBAL_SLICE_CAPS = {
   spaces: 8,
   goals: 6,
   commitments: 10,
+  // MVP5：飞书任务量大且已独立成 slice、不挤 commitments，给到 15。
+  tasks: 15,
   uncertainties: 6,
   recentEvents: 20,
   topActive: 15,
@@ -828,12 +852,23 @@ export function assembleGlobalContextPacket(
   const allActive = listActiveContextUnits({ limit: 500 });
 
   // commitments：取全部 kind='commitment' 而非仅 workMap 内的，按 score+due 排
+  // MVP5：剔除飞书任务（它们走独立 tasks slice），避免 actionability='act' 的任务挤占 cap。
   const commitmentsRaw = allActive
     .filter((u) => u.kind === 'commitment')
+    .filter((u) => !isLarkTaskUnit(u))
     .map((u) => ({ u, s: scoreContextUnit(u, now) }))
     .sort((a, b) => b.s - a.s)
     .slice(0, GLOBAL_SLICE_CAPS.commitments)
     .map((x) => x.u);
+
+  // MVP5：tasks slice —— kind='commitment' 且挂 lark_task: entity 的飞书任务，
+  // 按 score+due 排，独立 cap。不挂 selfRoleOnUnit（任务无需"我的角色"判断）。
+  const tasks: TaskInPacket[] = allActive
+    .filter((u) => u.kind === 'commitment' && isLarkTaskUnit(u))
+    .map((u) => ({ u, s: scoreContextUnit(u, now) }))
+    .sort((a, b) => b.s - a.s)
+    .slice(0, GLOBAL_SLICE_CAPS.tasks)
+    .map((x) => ({ ...x.u, _layerHint: classifyContextUnit(x.u) }));
 
   // MVP20 §M3: 给每条 commitment 派生 selfRoleOnUnit（self 在这条 unit 上的角色）。
   // 复用 buildMyTopCollaboratorsSlice 的 self 解析模式。selfCanonical='' 时
@@ -980,6 +1015,7 @@ export function assembleGlobalContextPacket(
     spaces,
     goals,
     commitments,
+    tasks,
     uncertainties,
     recentEvents,
     topActive,
@@ -1015,6 +1051,7 @@ export function assembleGlobalContextPacket(
       .sort((a, b) => a.id.localeCompare(b.id)),
     goals: unitFingerprints(goals),
     commitments: unitFingerprints(commitments),
+    tasks: unitFingerprints(tasks),
     uncertainties: unitFingerprints(uncertainties),
     recentEvents: unitFingerprints(recentEvents),
     topActive: unitFingerprints(topActive),
@@ -1048,6 +1085,7 @@ export function assembleGlobalContextPacket(
     spaces,
     goals,
     commitments,
+    tasks,
     uncertainties,
     recentEvents,
     topActive,
@@ -1131,6 +1169,7 @@ function estimateGlobalPacketTokens(input: {
   spaces: GlobalSpaceInPacket[];
   goals: ContextUnit[];
   commitments: ContextUnit[];
+  tasks: ContextUnit[];
   uncertainties: ContextUnit[];
   recentEvents: ContextUnit[];
   topActive: ContextUnit[];
@@ -1157,6 +1196,7 @@ function estimateGlobalPacketTokens(input: {
   for (const u of [
     ...input.goals,
     ...input.commitments,
+    ...input.tasks,
     ...input.uncertainties,
     ...input.recentEvents,
     ...input.topActive,

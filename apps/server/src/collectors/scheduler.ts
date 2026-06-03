@@ -13,6 +13,7 @@ import { driveCollector } from './driveCollector.js';
 import { driveCommentCollector } from './driveCommentCollector.js';
 import { meetingArtifactCollector } from './meetingArtifactCollector.js';
 import { larkOrgCollector } from './larkOrgCollector.js';
+import { larkTaskCollector } from './larkTaskCollector.js';
 import { enqueueEvents } from '../triage/triageQueue.js';
 import type { Collector } from './types.js';
 import { insertMinimalEventContextUnit } from '../context/contextStore.js';
@@ -60,6 +61,10 @@ export function startCollectorScheduler() {
   }
   if (config.meetingArtifactEnabled) {
     scheduled.push({ collector: meetingArtifactCollector, running: false });
+  }
+  // MVP5 飞书任务 collector：拉 my-tasks ∪ related(created-by-me)，落成 commitment（独立 tasks slice）。
+  if (config.taskCollectorEnabled) {
+    scheduled.push({ collector: larkTaskCollector, running: false });
   }
   // MVP15 §4: lark org info（self + 已存 person entity 的 attributes 刷新）
   // 不挡其他 collector，无任何 feature flag —— 失败会自动 retry，permission_denied

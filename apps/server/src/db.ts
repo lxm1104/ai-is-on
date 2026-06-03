@@ -1506,6 +1506,25 @@ export function listEntitiesForUnit(contextUnitId: string): ContextUnitEntityRow
     .all(contextUnitId) as ContextUnitEntityRow[];
 }
 
+/**
+ * MVP5：列出所有 active 的「任务 commitment」—— kind='commitment' 且关联了
+ * type='task' 的 entity。供 task collector 做集合差对账（本地有、但本轮未完成全集里
+ * 没有的 → 标 superseded）。用 entity-join 直查、不受 listActiveContextUnits 的 limit 影响。
+ * caller（larkTaskCollector）会 hydrate 后再校验 name 前缀 lark_task: 并取 guid，
+ * 故此处只按 type='task' 粗筛即可。
+ */
+export function listActiveLarkTaskCommitmentRows(): ContextUnitRow[] {
+  return db
+    .prepare(
+      `SELECT DISTINCT cu.* FROM context_units cu
+       JOIN context_unit_entities cue ON cu.id = cue.context_unit_id
+       JOIN context_entities ce ON cue.entity_id = ce.id
+       WHERE cu.kind = 'commitment' AND cu.status = 'active' AND ce.type = 'task'
+       ORDER BY cu.updated_at DESC`
+    )
+    .all() as ContextUnitRow[];
+}
+
 // -------- context_relations: REMOVED in MVP14 Phase 1c --------
 // 物理表 CREATE TABLE 保留在上方 schema（零行无害；DROP 需写迁移）。
 // 应用层无 caller。"关系" 走 ContextUnit.kind='relationship'，参见

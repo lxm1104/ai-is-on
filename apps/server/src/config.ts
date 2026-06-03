@@ -84,6 +84,11 @@ export const config = {
   driveCommentMaxDocsPerTick: envInt('DRIVE_COMMENT_MAX_DOCS_PER_TICK', 30),
   driveCommentMaxCommentsPerDoc: envInt('DRIVE_COMMENT_MAX_COMMENTS_PER_DOC', 100),
 
+  // MVP5 飞书任务 collector — 采集 get-my-tasks ∪ get-related-tasks，落成 kind='commitment'。
+  taskCollectorEnabled: envBool('TASK_COLLECTOR_ENABLED', true),
+  taskIntervalMs: envInt('TASK_COLLECTOR_INTERVAL_MS', 300_000),
+  taskMaxPerTick: envInt('TASK_MAX_PER_TICK', 200),
+
   // MVP11.1 meeting artifact collector
   meetingArtifactEnabled: envBool('MEETING_ARTIFACT_COLLECTOR_ENABLED', true),
   meetingArtifactIntervalMs: envInt('MEETING_ARTIFACT_COLLECTOR_INTERVAL_MS', 600_000),
