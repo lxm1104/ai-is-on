@@ -37,6 +37,8 @@ type ChatListChat = {
   description?: string;
   external?: boolean;
   chat_status?: string;
+  // MVP24: present on chat-list --types=p2p results; used to defensively keep p2p only.
+  chat_mode?: string;
 };
 
 type ChatListResp = {
@@ -274,6 +276,18 @@ function derivePeerChatName(msgs: ImMessage[], chatId: string): string {
   return `单聊 · 未命名会话 #${tail}`;
 }
 
+// MVP24: p2p 会话显示名。外部单聊用 chat-list 拿到的真实名 + （外部）标记；
+// 否则回退到 derivePeerChatName（从 sender.name 推断）。纯函数，便于单测。
+export function p2pChatDisplayName(
+  chatId: string,
+  msgs: ImMessage[],
+  externalNames: Map<string, string>
+): string {
+  const explicit = externalNames.get(chatId);
+  if (explicit) return `单聊 · ${explicit}（外部）`;
+  return derivePeerChatName(msgs, chatId);
+}
+
 function summarizeOne(msg: ImMessage, chatName: string): string {
   const lines: string[] = [];
   if (chatName) lines.push(`会话：${chatName}`);
@@ -402,6 +416,64 @@ async function listAllGroups(): Promise<ChatListChat[]> {
     pageToken = resp.data.page_token;
   }
   return out;
+}
+
+// ---------- external p2p (MVP24) ----------
+
+// MVP24: 从 chat-list 结果中挑出"正常状态的外部单聊"，并施加硬上限。
+// 纯函数（无 IO，便于单测）。external=false 的内部单聊已由 messages-search 覆盖，这里剔除。
+export function selectExternalP2pChats(
+  chats: ChatListChat[],
+  max: number
+): ChatListChat[] {
+  const out: ChatListChat[] = [];
+  for (const c of chats) {
+    if (c.chat_status && c.chat_status !== 'normal') continue;
+    if (c.chat_mode && c.chat_mode !== 'p2p') continue; // 防御：仅 p2p
+    if (!c.external) continue; // 内部单聊跳过
+    if (!c.chat_id) continue;
+    out.push(c);
+    if (out.length >= max) break; // 硬上限早停
+  }
+  return out;
+}
+
+// MVP24: 外部联系人单聊枚举。messages-search --chat-type p2p 不返回跨租户单聊，
+// 必须通过 chat-list --types=p2p 显式枚举 external 会话，再逐个 chat-messages-list。
+// 刻意不带 --exclude-muted：群聊降噪用它，但外部单聊是用户主动诉求，静音的也要采。
+async function listExternalP2pChats(): Promise<ChatListChat[]> {
+  const collected: ChatListChat[] = [];
+  let pageToken: string | undefined;
+  for (let page = 0; page < config.imChatListMaxPages; page++) {
+    const args: string[] = [
+      'im',
+      '+chat-list',
+      '--as',
+      'user',
+      '--types',
+      'p2p',
+      '--sort-type',
+      'ByActiveTimeDesc',
+      '--page-size',
+      '100',
+      '--format',
+      'json',
+    ];
+    if (pageToken) args.push('--page-token', pageToken);
+    const resp = await runLarkCliJson<ChatListResp>(args);
+    if (!resp.ok || !resp.data) break;
+    collected.push(...(resp.data.chats ?? []));
+    // 已累计够上限就不必再翻页（selectExternalP2pChats 会再精确截断）
+    if (
+      selectExternalP2pChats(collected, config.imExternalP2pMaxChats).length >=
+      config.imExternalP2pMaxChats
+    ) {
+      break;
+    }
+    if (!resp.data.has_more || !resp.data.page_token) break;
+    pageToken = resp.data.page_token;
+  }
+  return selectExternalP2pChats(collected, config.imExternalP2pMaxChats);
 }
 
 // ---------- per-chat fetch ----------
@@ -699,8 +771,37 @@ export const imCollector: Collector = {
     // MVP16-A: pass through prepareMessages so me-side msgs get is_me tagged,
     // thread_replies flattened, and stable sort applied. Lark's messages-search
     // --chat-type p2p returns both sides by default — no extra call needed.
+    //
+    // MVP24: messages-search --chat-type p2p 不返回跨租户(external)单聊。补一条路径：
+    // chat-list --types=p2p 枚举 external 会话，逐个 chat-messages-list 拿双向，
+    // 再 merge 进内部结果。内部 p2p 路径(listP2pMessages)完全不变，纯增量。
+    const internalP2pRaw = await listP2pMessages(startLocal, endLocal);
+
+    let externalP2pRaw: ImMessage[] = [];
+    const externalP2pNames = new Map<string, string>(); // chat_id → 真实会话名
+    if (config.imEnableExternalP2p) {
+      try {
+        const extChats = await listExternalP2pChats();
+        const hits = await fetchInParallel(
+          extChats,
+          async (chat): Promise<ImMessage[]> => {
+            if (!chat.chat_id) return [];
+            if (chat.name?.trim()) externalP2pNames.set(chat.chat_id, chat.name.trim());
+            return listMessagesInChat(chat.chat_id, sinceIso, now.toISOString());
+          },
+          config.imChatFetchConcurrency
+        );
+        externalP2pRaw = hits.flatMap((h) => h ?? []); // fetchInParallel 失败项为 undefined
+      } catch (err) {
+        // soft-fail：外部 p2p 整体失败不影响内部 p2p（与 listMyGroupMessages 一致）
+        console.warn(
+          `[im] external p2p fetch failed (internal p2p continues): ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
+
     const p2pMsgs = prepareMessages(
-      await listP2pMessages(startLocal, endLocal),
+      mergeMessagesByMessageId(internalP2pRaw, externalP2pRaw),
       myOpenId
     );
     // Group p2p messages by chat_id for aggregation
@@ -713,7 +814,9 @@ export const imCollector: Collector = {
     }
     for (const [chatId, msgs] of p2pByChat) {
       // msgs is already stably sorted by prepareMessages.
-      const chatName = derivePeerChatName(msgs, chatId);
+      // MVP24: external p2p uses real chat name + （外部）marker; internal falls
+      // back to derivePeerChatName (externalP2pNames.get returns undefined).
+      const chatName = p2pChatDisplayName(chatId, msgs, externalP2pNames);
       const chatEnt = chatEntity(chatId, chatName);
       // MVP16-A: aggregation triggered by peer messages only — me-side messages
       // provide context but do not signal "对方在密集表达". peerMsgs also drives

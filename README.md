@@ -102,7 +102,8 @@ docs/                       # 设计文档
 逐 chat 增量拉取（§13.6 MVP2 路线）：
 
 - 群消息：`lark-cli im +chat-list --as user --exclude-muted --sort-type ByActiveTimeDesc`（最多 5 页 × 100）→ 并发 `chat-messages-list --chat-id --start <last_scan>` 拉每个群的增量
-- 单聊：`lark-cli im +messages-search --as user --chat-type p2p --start <last_scan>`（messages-search 没有 unread 维度，靠 last_scan 增量过滤）
+- 单聊（内部）：`lark-cli im +messages-search --as user --chat-type p2p --start <last_scan>`（messages-search 没有 unread 维度，靠 last_scan 增量过滤）
+- 单聊（外部联系人，MVP24）：messages-search 不返回跨租户单聊，改用 `lark-cli im +chat-list --as user --types p2p --sort-type ByActiveTimeDesc` 枚举 `external:true` 会话（上限 `IM_EXTERNAL_P2P_MAX_CHATS`，默认 20），再逐个 `chat-messages-list --chat-id`（单聊默认返回双向）→ merge 进内部 p2p；开关 `IM_ENABLE_EXTERNAL_P2P`（默认开）
 - 过滤：剔除我自己发的消息（`sender.id == myOpenId`）、`msg_type=system`、`deleted=true`
 - 聚合：单 chat 一轮内新消息 ≥`IM_AGGREGATE_THRESHOLD`（默认 3）→ 合并为 1 条「群 X · 新增 N 条」信号；否则按条入库
 - 信号优先级标签：`at_me`、`group_burst_at_me`、`p2p` / `p2p_burst`、`group_burst`、`group_message`

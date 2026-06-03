@@ -77,6 +77,11 @@ export const config = {
   // MVP16-A: page-limit for the my-group messages-search call. page-size = 50,
   // so default 5 = 250 msgs/scan upper bound (well within a 3-minute window).
   imMyGroupMessagesPageLimit: envInt('IM_MY_GROUP_MESSAGES_PAGE_LIMIT', 5),
+  // MVP24: 外部联系人单聊接入。messages-search --chat-type p2p 不返回跨租户单聊，
+  //   需 chat-list --types=p2p 枚举 external + 逐个 chat-messages-list 拿双向。
+  imEnableExternalP2p: envBool('IM_ENABLE_EXTERNAL_P2P', true),
+  // MVP24: 单轮最多处理多少个外部单聊（按 ByActiveTimeDesc 取前 N），防止外部单聊过多打爆。
+  imExternalP2pMaxChats: envInt('IM_EXTERNAL_P2P_MAX_CHATS', 20),
   // MVP11.0-b drive comment collector
   driveCommentEnabled: envBool('DRIVE_COMMENT_COLLECTOR_ENABLED', true),
   driveCommentIntervalMs: envInt('DRIVE_COMMENT_COLLECTOR_INTERVAL_MS', 300_000),
