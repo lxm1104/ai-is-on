@@ -16,3 +16,6 @@ apps/server/test/fixtures/*/last_run.raw.txt
 # (open_id / 邮箱 / 部门)。注入逻辑在 apps/server/src/context/selfProfile.ts。
 # 其他 aiisn-*.md（attention/triage/work-map/...）不含 PII，仍随 prompt 修改同步入库。
 .opencode/agent/aiisn-chat.md
+# aiisn-sync-draft.md 注入了「模仿」语气画像（apps/server/src/context/toneProfile.ts），
+# 用户在面板编辑后会含个人化/PII 内容，同样不入库。基底 prompt 在 syncDraftAgent.ts。
+.opencode/agent/aiisn-sync-draft.md

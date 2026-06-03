@@ -936,3 +936,27 @@ export async function resolveProjectProposal(
   return { ok: true };
 }
 
+
+// 「模仿」模块：语气画像读写。
+export type ToneProfile = {
+  md: string;
+  customized: boolean;
+  default: string;
+};
+
+export async function fetchToneProfile(): Promise<ToneProfile> {
+  const r = await fetch('/api/tone-profile');
+  if (!r.ok) throw new Error(`tone-profile ${r.status}`);
+  return (await r.json()) as ToneProfile;
+}
+
+export async function saveToneProfile(md: string): Promise<ToneProfile> {
+  const r = await fetch('/api/tone-profile', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ md }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as { error?: string }).error || `tone-profile ${r.status}`);
+  return j as ToneProfile;
+}

@@ -987,6 +987,40 @@ body { background: var(--bg); color: var(--text); }
   border-radius: 6px;
   margin-bottom: 6px;
 }
+/* 「模仿」语气画像编辑面板 */
+.ctx-panel__hint {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0 0 8px;
+  line-height: 1.5;
+}
+.tone-editor {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  resize: vertical;
+}
+.tone-editor:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.tone-editor__actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+.tone-editor__saved {
+  font-size: 12px;
+  color: var(--accent);
+}
 .ctx-units, .ctx-entities, .ctx-relations {
   list-style: none;
   margin: 0;

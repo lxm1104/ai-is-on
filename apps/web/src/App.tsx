@@ -7,6 +7,7 @@ import { ContextPanel } from './components/ContextPanel';
 import { SpacesPanel } from './components/SpacesPanel';
 import { ProjectProposalsPanel } from './components/ProjectProposalsPanel';
 import { RulesPanel } from './components/RulesPanel';
+import { TonePanel } from './components/TonePanel';
 import { WorkMapPanel } from './components/WorkMapPanel';
 import { MyCollaboratorsPanel } from './components/MyCollaboratorsPanel';
 import { TabBar, type HistoryTopic, type Tab } from './components/TabBar';
@@ -490,6 +491,7 @@ export function App() {
           <WorkMapPanel
             onBootstrapChange={(t) => setBootstrapCompletedAt(t)}
           />
+          <TonePanel />
           <MyCollaboratorsPanel />
           <SpacesPanel />
           <ProjectProposalsPanel />

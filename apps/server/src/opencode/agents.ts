@@ -13,6 +13,7 @@ import path from 'node:path';
 import { config } from '../config.js';
 
 import { buildSelfProfilePrompt } from '../context/selfProfile.js';
+import { buildToneProfilePrompt } from '../context/toneProfile.js';
 import { SYSTEM_PROMPT as CHAT_SYSTEM_PROMPT } from '../claude/prompts.js';
 import { TRIAGE_SYSTEM_PROMPT } from '../triage/triagePrompt.js';
 import { CARING_SYSTEM_PROMPT } from '../caring/caringPrompt.js';
@@ -169,6 +170,13 @@ function renderAgentFile(def: AgentDef): string {
   ].join('\n');
 }
 
+// 「模仿」模块：会替我产出对外文字的 agent 注入"我的说话风格"画像。
+// MVP 先覆盖主聊天和同步草稿这两个最直接的用户可感知点。
+const TONE_CONSUMERS: ReadonlySet<OpencodeAgentName> = new Set<OpencodeAgentName>([
+  'aiisn-chat',
+  'aiisn-sync-draft',
+]);
+
 /** Boot 时调用：把所有 agent 同步到磁盘，覆盖式写入以保持 prompt 与代码一致。 */
 export function syncOpencodeAgents(): void {
   fs.mkdirSync(config.opencodeAgentDir, { recursive: true });
@@ -185,11 +193,25 @@ export function syncOpencodeAgents(): void {
     );
   }
 
+  // 「模仿」：我的说话风格画像（静态种子 + 用户编辑覆盖）。取不到则为 ''。
+  let toneProfile = '';
+  try {
+    toneProfile = buildToneProfilePrompt();
+  } catch (err) {
+    console.warn(
+      '[opencode] buildToneProfilePrompt failed, agents will lack tone imitation:',
+      err instanceof Error ? err.message : String(err)
+    );
+  }
+
   for (const def of AGENTS) {
-    const prompt =
-      def.name === 'aiisn-chat' && selfProfile
-        ? `${def.prompt}\n\n${selfProfile}`
-        : def.prompt;
+    let prompt = def.prompt;
+    if (def.name === 'aiisn-chat' && selfProfile) {
+      prompt = `${prompt}\n\n${selfProfile}`;
+    }
+    if (toneProfile && TONE_CONSUMERS.has(def.name)) {
+      prompt = `${prompt}\n\n${toneProfile}`;
+    }
     const file = path.join(config.opencodeAgentDir, `${def.name}.md`);
     fs.writeFileSync(file, renderAgentFile({ ...def, prompt }), 'utf8');
   }
