@@ -900,7 +900,9 @@ CREATE TABLE IF NOT EXISTS decisions (
 ### 7.5 后端任务
 
 - [ ] 新增 drive/wiki collector，先使用 `lark-cli drive +search --edited-since`。
-- [ ] 新增 task collector 或从 ContextUnit 中提取 `commitment` 作为任务替代。
+- [x] 新增 task collector 或从 ContextUnit 中提取 `commitment` 作为任务替代。
+      （已实现 `larkTaskCollector`：get-my-tasks ∪ get-related-tasks → kind='commitment' →
+      attention 独立 tasks slice；集合差对账。详见 `docs/飞书任务Collector实现计划.md`。）
 - [ ] 新增 `contextSpaceResolver.ts`，把相关 event/context 归入项目空间。
 - [ ] 新增 `divergenceDetector.ts`，**MVP5 只覆盖两类不一致**（其余作为 MVP5.x 延伸）：
   - **承诺逾期但状态未更新**：context_units `kind=commitment, dueAt < now`，且关联 `kind=action_result` 缺失 / 文档未更新 timestamp 老于 dueAt。
