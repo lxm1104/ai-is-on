@@ -19,3 +19,6 @@ apps/server/test/fixtures/*/last_run.raw.txt
 # aiisn-sync-draft.md 注入了「模仿」语气画像（apps/server/src/context/toneProfile.ts），
 # 用户在面板编辑后会含个人化/PII 内容，同样不入库。基底 prompt 在 syncDraftAgent.ts。
 .opencode/agent/aiisn-sync-draft.md
+
+# MVP25 会议纪要逐字稿临时下载目录（每轮 collect 清理）
+.cache/meeting-minutes/
