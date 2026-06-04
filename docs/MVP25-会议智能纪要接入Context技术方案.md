@@ -2,6 +2,8 @@
 
 > 修复 MVP11.1（`meetingArtifactCollector`）的失效实现。MVP11.1 的设计与字段全部基于**假想的 lark-cli schema**，与真实返回对不上，导致上线至今 `events` 表 `source='minutes'` **零条**。本方案换发现入口、按真实 schema 重写解析，把"我参与的所有有智能纪要的会议"接入 context。
 
+> **MVP25.1 修订（去 skipTriage）**：初版给会议信号打了 `skipTriage:true`，使其整段总结塞成一个 `kind='event'` blob、不经语义拆解——与 IM/文档（过 triage、拆成独立 commitment/goal unit）不一致。实测发现 attention 会把多场会议的 event blob 跨会议**打包成一张"N 场会议待办"meta 卡**。修订：**移除 `skipTriage`，让会议纪要和 IM/文档一样过 triage**，把总结/待办拆成独立 unit（挂到对应人/项目），由 attention 统一处理、与相关 commitment 合并，而非按"会议"这个类别聚合。下文凡标注 `skipTriage:true` 处以本修订为准。
+
 ## 背景
 
 用户诉求：与他人开视频会议后，会议的**智能纪要（总结 / 待办）**应作为 context 的一部分，进入 attention 判断。
@@ -400,9 +402,9 @@ const recentEvents = allActive
 
 ## 下游消费者盘点
 
-- 产出 kind 仍是 `meeting_artifact`、`skipTriage:true`，与 MVP11.1 契约一致；无新增 kind、无 dispatch 改动。
+- 产出 kind 仍是 `meeting_artifact`；**MVP25.1 起不再 `skipTriage`** —— 会议事件进 triage 队列（与 IM/文档同路），triage 抽出 `commitment/goal/...` 独立 unit（`origin.kind='event'`），同时仍保留 `insertMinimalEventContextUnit` 的 `kind='event'` 单元（与 IM 一致）。无新增 kind。
 - `entities`：会议 → `type:'meeting'`；organizer → `type:'person'`（进 Work-Map，与其它 collector 同人逻辑一致）。
-- attention：纪要进 `recentEvents`，`attentionPrompt` 已支持渲染并要求 `[S#]` 引用 —— 待办带 DDL ≤24h 可升 P0/P1，决定关联现有 commitment 可升优先级（MVP11.1 设计意图，本方案首次真正喂入数据）。
+- attention：会议待办经 triage 成为独立 commitment，进 `<commitments>` 与相关项目/人合并处理；event blob 仍进 `recentEvents`。`attentionPrompt` 的合并去重规则负责把同一会议/同一 commitment 的信号收敛成一条，避免跨会议聚合成"N 场会议"meta 卡。
 
 ## 验证
 

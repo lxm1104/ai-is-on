@@ -395,7 +395,9 @@ export const meetingArtifactCollector: Collector = {
             has_action_items: hasActionItems,
             owner_is_me: ownerIsMe,
           },
-          skipTriage: true,
+          // MVP25.1: 不再 skipTriage —— 会议纪要和 IM/文档一样过 triage，
+          // 把总结/待办拆成独立的 commitment/goal 等 unit（挂到对应人/项目），
+          // 而不是当成一个 event blob 让 attention 跨会议打包成"N场会议"meta 卡。
         });
       }
     } finally {
