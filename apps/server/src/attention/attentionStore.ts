@@ -26,6 +26,7 @@ import type {
   AttentionRunStatus,
   AttentionRunTrigger,
   AttentionInputSummary,
+  ProcessingOption,
 } from './attentionTypes.js';
 
 // ---------- 反序列化辅助 ----------
@@ -39,6 +40,32 @@ function parseJsonArray(s: string | null | undefined, field: string): string[] {
   } catch {
     console.warn(`[attentionStore] failed to parse JSON array for ${field}: ${s}`);
     return [];
+  }
+}
+
+// MVP23：反序列化处理角度。空/坏/非数组 → null（卡片退回单按钮）。
+function parseActionOptions(s: string | null | undefined): ProcessingOption[] | null {
+  if (!s) return null;
+  try {
+    const v = JSON.parse(s);
+    if (!Array.isArray(v)) return null;
+    const out: ProcessingOption[] = [];
+    for (const o of v) {
+      if (
+        o &&
+        typeof o.id === 'string' &&
+        typeof o.label === 'string' &&
+        typeof o.directive === 'string'
+      ) {
+        const opt: ProcessingOption = { id: o.id, label: o.label, directive: o.directive };
+        if (o.executor === 'create_task') opt.executor = 'create_task';
+        out.push(opt);
+      }
+    }
+    return out.length ? out : null;
+  } catch {
+    console.warn(`[attentionStore] failed to parse action_options_json: ${s}`);
+    return null;
   }
 }
 
@@ -76,6 +103,7 @@ export function rowToAttentionItem(row: AttentionItemRow): AttentionItem {
     status: coerceStatus(row.status),
     expiresAt: row.expires_at,
     sourceKind: row.source_kind,
+    actionOptions: parseActionOptions(row.action_options_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -114,6 +142,10 @@ export function insertAttentionItem(input: InsertAttentionItemInput): AttentionI
     status: 'live',
     expires_at: llmItem.expiresAt ?? null,
     source_kind: 'attention',
+    // MVP23：处理角度；长度 0 也归一成 null（卡片退回单按钮）
+    action_options_json: llmItem.processingOptions?.length
+      ? JSON.stringify(llmItem.processingOptions)
+      : null,
     raw_json: JSON.stringify(llmItem),
     created_at: now,
     updated_at: now,

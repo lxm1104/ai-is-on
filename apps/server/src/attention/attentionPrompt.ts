@@ -11,6 +11,8 @@ import type {
   AttentionItem,
   AttentionLLMItem,
   AttentionPriority,
+  ProcessingOption,
+  ProcessingExecutor,
 } from './attentionTypes.js';
 
 export const ATTENTION_PROMPT_VERSION = 'attention.v1';
@@ -109,6 +111,18 @@ export const ATTENTION_SYSTEM_PROMPT = `你是用户的「注意力管家」。
     d) \`src=manual\` / \`src=card_action\` / \`src=agent_run\` / \`src=system_feedback\` ——
        用户或 agent 显式写入，按内容本身判断。
     e) 缺 \`[src=...]\` 标签 = 装配未注入或未知来源，按内容判断，不作来源加权。
+【处理角度 processingOptions】（仅 priority='P0' 或 'P1' 的 item 才生成；P2/P3 一律省略此字段）
+为高优 item 给出 2–3 个**彼此不重叠**的「处理角度」，描述这条可以怎么交给 AI 处理。每个角度：
+  - \`label\`：≤6 字动词短语（如「起草回复」「梳理要点」「拟成待办」）；
+  - \`id\`：小写蛇形稳定标识（如 'draft_reply' / 'summarize' / 'to_task'）；
+  - \`directive\`：一句话，告诉**执行时的 AI** 具体做什么。约束：
+      (1) **必须是自包含的自然语言，严禁出现 \`S#\` 引用编号或任何 id**（执行时拿不到 packet）；
+      (2) 默认只产草稿 / 做分析 / 整理，**不发送、不写库**——除非该角度用了 executor='create_task'（见下）。
+  - \`executor\`：可选，取值 'claude_topic'（默认，把 directive 交给右侧 AI 出草稿/分析）
+      或 'create_task'（该角度点击后**直接在飞书创建一条任务**，适合「拟成待办 / 加入任务」这类角度；
+      仍会弹确认框，directive 用作任务的处理意图说明）。最多 1 个角度用 'create_task'。
+  角度之间差异要清晰；凑不出第二个有区分度的角度，给 1 个也行，不要硬造。
+  用 \`recommendedAgent\` 当线索但不被它限制；可结合其他承诺 / 用户偏好给跨卡片角度。
 
 输出 schema：
 {
@@ -123,10 +137,16 @@ export const ATTENTION_SYSTEM_PROMPT = `你是用户的「注意力管家」。
       "relatedSpaceIds": [],
       "recommendedAgent": null,
       "expiresAt": null,
-      "supersedeIds": []
+      "supersedeIds": [],
+      "processingOptions": [
+        { "id": "draft_reply", "label": "起草回复", "directive": "基于我当前进度，起草一条可直接发出的回复，仅草稿。" },
+        { "id": "summarize", "label": "梳理要点", "directive": "把这条对话/事件浓缩成 3 条要点供我快速决策。" },
+        { "id": "to_task", "label": "拟成待办", "directive": "本周交付 API 给李四：明确截止与验收点。", "executor": "create_task" }
+      ]
     }
   ]
 }
+（P2/P3 的 item 不要带 processingOptions 字段。）
 
 如果用户当前没有任何值得关注的事（信号、commitments 全空），输出 { "items": [] }。`;
 
@@ -493,6 +513,35 @@ function coerceStringArray(raw: unknown): string[] {
   return out;
 }
 
+// MVP23：处理角度防御解析。坏/空 → undefined（落库 null → 卡片单按钮）。
+// 任何异常只丢这个字段，绝不让 item 解析失败。
+const REF_TOKEN_IN_TEXT = /\bS\d+\b/; // directive 误含 S# 引用编号 → 丢弃（resolveAttentionRefs 不处理该字段）
+function coerceProcessingOptions(raw: unknown): ProcessingOption[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: ProcessingOption[] = [];
+  const seenIds = new Set<string>();
+  let createTaskUsed = false; // 最多 1 个角度用 create_task
+  for (const v of raw) {
+    if (out.length >= 3) break; // 最多 3 个（前端：前 2 直出，第 3 收进「⋯更多」）
+    if (!v || typeof v !== 'object') continue;
+    const o = v as Record<string, unknown>;
+    const idRaw = typeof o.id === 'string' ? o.id.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_') : '';
+    const label = typeof o.label === 'string' ? o.label.trim().slice(0, 8) : '';
+    const directive = typeof o.directive === 'string' ? o.directive.trim().slice(0, 200) : '';
+    if (!idRaw || !label || !directive) continue;
+    if (REF_TOKEN_IN_TEXT.test(directive)) continue; // 防 S# 泄漏
+    if (seenIds.has(idRaw)) continue;
+    let executor: ProcessingExecutor | undefined;
+    if (o.executor === 'create_task' && !createTaskUsed) {
+      executor = 'create_task';
+      createTaskUsed = true;
+    }
+    seenIds.add(idRaw);
+    out.push(executor ? { id: idRaw, label, directive, executor } : { id: idRaw, label, directive });
+  }
+  return out.length ? out : undefined;
+}
+
 function coerceItem(raw: unknown): AttentionLLMItem | null {
   if (!raw || typeof raw !== 'object') return null;
   const o = raw as Record<string, unknown>;
@@ -525,6 +574,8 @@ function coerceItem(raw: unknown): AttentionLLMItem | null {
     recommendedAgent,
     expiresAt,
     supersedeIds: coerceStringArray(o.supersedeIds),
+    // MVP23：仅当 LLM 给了有效角度才带上；P2/P3 或缺失 → undefined → 单按钮
+    processingOptions: coerceProcessingOptions(o.processingOptions),
   };
 }
 

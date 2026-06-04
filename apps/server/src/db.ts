@@ -772,6 +772,7 @@ CREATE TABLE IF NOT EXISTS attention_items (
   status TEXT NOT NULL DEFAULT 'live',          -- 'live' | 'acted' | 'dismissed' | 'superseded' | 'expired'
   expires_at TEXT,
   source_kind TEXT NOT NULL DEFAULT 'attention',
+  action_options_json TEXT,                     -- MVP23：处理角度 ProcessingOption[]；null=单按钮
   raw_json TEXT NOT NULL,                       -- 完整 LLM 原始 item，留底审计
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -780,6 +781,10 @@ CREATE INDEX IF NOT EXISTS idx_attention_status ON attention_items(status);
 CREATE INDEX IF NOT EXISTS idx_attention_input_hash ON attention_items(input_hash);
 CREATE INDEX IF NOT EXISTS idx_attention_generation ON attention_items(generation);
 CREATE INDEX IF NOT EXISTS idx_attention_expires_at ON attention_items(expires_at);
+-- MVP23：attention 卡片处理角度（ProcessingOption[] JSON，nullable=单按钮）。
+-- 注：必须在 attention_items 建表语句之后调用 ensureColumn。`);
+ensureColumn('attention_items', 'action_options_json', 'TEXT');
+db.exec(`
 
 -- 用户对 attention item 的轻量交互日志。
 -- 这些记录会进入下一轮 attention prompt，但不作为长期 ContextUnit，避免污染记忆层。
@@ -2565,6 +2570,7 @@ export type AttentionItemRow = {
   status: string;                  // 'live' | 'acted' | 'dismissed' | 'superseded' | 'expired'
   expires_at: string | null;
   source_kind: string;
+  action_options_json: string | null;  // MVP23：ProcessingOption[] JSON；null=单按钮
   raw_json: string;
   created_at: string;
   updated_at: string;
@@ -2575,12 +2581,12 @@ export function insertAttentionItem(row: AttentionItemRow): void {
     `INSERT INTO attention_items
        (id, generation, llm_run_id, input_hash, priority, title, why, suggested_action,
         signal_ids_json, related_entity_ids_json, related_space_ids_json,
-        recommended_agent, status, expires_at, source_kind, raw_json,
+        recommended_agent, status, expires_at, source_kind, action_options_json, raw_json,
         created_at, updated_at)
      VALUES
        (@id, @generation, @llm_run_id, @input_hash, @priority, @title, @why, @suggested_action,
         @signal_ids_json, @related_entity_ids_json, @related_space_ids_json,
-        @recommended_agent, @status, @expires_at, @source_kind, @raw_json,
+        @recommended_agent, @status, @expires_at, @source_kind, @action_options_json, @raw_json,
         @created_at, @updated_at)`
   ).run(row);
 }

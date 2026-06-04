@@ -28,6 +28,9 @@ export type CreateLarkTaskInput = {
   dueAt?: string;
   tasklistId?: string;
   confirm: boolean;
+  /** MVP23 M2：attention 卡片「拟成待办」角度的 id（形如 'opt:to_task'）。
+   *  传入时用该角度的 directive 作为任务处理意图，写进描述。 */
+  optionId?: string;
 };
 
 export type CreateLarkTaskResult = {
@@ -72,7 +75,12 @@ export async function createLarkTaskFromCard(
   const source = resolveCardSource(input.cardId);
   const summary = sanitizeSummary(input.summary ?? source.title);
   if (!summary) throw new Error('task summary is required');
-  const description = buildDescription(source, input.description);
+  // M2：若来自「拟成待办」角度，取该角度的 directive 作为处理意图（用户未显式给 description 时）。
+  const optionDirective = resolveOptionDirective(source, input.optionId);
+  const description = buildDescription(
+    source,
+    input.description ?? optionDirective
+  );
   const idempotencyKey = buildIdempotencyKey(source, summary);
 
   const existing = getExternalTaskBindingByIdempotency('lark', idempotencyKey);
@@ -194,6 +202,18 @@ export async function createLarkTaskFromCard(
     card,
     reused: false,
   };
+}
+
+// M2：从 attention 卡片解析「拟成待办」角度（opt:<id>）的 directive，作为任务处理意图。
+function resolveOptionDirective(
+  source: CardSource,
+  optionId?: string
+): string | undefined {
+  if (!optionId || source.sourceKind !== 'attention') return undefined;
+  const attn = getAttentionItem(source.sourceRefId);
+  const oid = optionId.startsWith('opt:') ? optionId.slice(4) : optionId;
+  const opt = attn?.actionOptions?.find((o) => o.id === oid);
+  return opt ? `处理意图：${opt.directive}` : undefined;
 }
 
 function resolveCardSource(cardId: string): CardSource {

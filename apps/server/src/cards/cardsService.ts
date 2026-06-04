@@ -323,10 +323,20 @@ async function applyAttentionAction(
     // Step 3 修：action 触发时实时展开 signal/space/entity 真实内容，让右侧 Claude 不再看光秃秃的 id。
     const userPrompt = opts?.extraPrompt?.trim();
     const rich = buildRichAskAgentPrompt(attn);
-    // 若用户在前端额外打了字，把它附在 rich prompt 后面（用户输入优先表达，但仍带 context）
-    const prompt = userPrompt
-      ? `${rich}\n\n【用户补充】${userPrompt}`
-      : rich;
+    // MVP23：角度按钮 id 形如 'opt:<oid>'，从后端持有的 actionOptions 取回该角度 directive。
+    //   directive 不经前端传递，避免被篡改、并与 projection 保持一致。
+    let directive: string | undefined;
+    if (actionId.startsWith('opt:')) {
+      directive = attn.actionOptions?.find((o) => `opt:${o.id}` === actionId)?.directive;
+    }
+    // 拼装顺序：rich 上下文 → 角度指令（置末尾、强语气，抵消 rich 较长的注意力稀释）→ 用户补充
+    const prompt = [
+      rich,
+      directive ? `\n【本次处理角度（请只做这一件）】${directive}` : '',
+      userPrompt ? `\n【用户补充】${userPrompt}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
     try {
       // MVP18 Stage 0: sendTopicMessage 同步返回，turn 后台跑。
       // 产品语义变更：用户点完立即标 acted，turn 失败不回滚 acted 状态

@@ -97,6 +97,7 @@ export function SignalCardView(props: {
   const [prefText, setPrefText] = useState('');
   const [taskBusy, setTaskBusy] = useState(false);
   const [taskResult, setTaskResult] = useState<LarkTaskCreateResult | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false); // MVP23 M1.5：角度「⋯更多」溢出菜单
 
   // "查看原始信息"：抽屉里列出 signalIds 对应的原始 events（含飞书原文 URL）
   // items 是混排块（IM conversation 合并 + 其他单条 signal，按最新动静倒序）；
@@ -285,14 +286,15 @@ export function SignalCardView(props: {
     }
   }
 
-  async function createLarkTask() {
+  // MVP23 M2：opt 参数来自「拟成待办」角度（create_task 执行器）；缺省=常驻「加入任务」按钮。
+  async function createLarkTask(opt?: { optionId: string; label: string }) {
     const ok = window.confirm(`确认把「${card.title}」加入飞书任务？`);
     if (!ok) return;
     setTaskBusy(true);
     setErr(null);
     setTaskResult(null);
     try {
-      const result = await postCardLarkTask({ cardId: card.id });
+      const result = await postCardLarkTask({ cardId: card.id, optionId: opt?.optionId });
       setTaskResult(result);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -306,11 +308,15 @@ export function SignalCardView(props: {
   // For acked/snoozed cards keep only "active" actions (the ones that still make
   // sense after you've already ack'd — i.e. ask agent / draft reply), and add a
   // reopen button so it's obvious the state changed and can be undone.
+  // MVP23：已处理卡若有多个处理角度（opt:* 按钮），折叠成单个「再让 AI 处理」，
+  //   避免在「已处理」抽屉里平铺三四个角度按钮。
+  const ackedAskActions = (() => {
+    const asks = card.actions.filter((a) => a.kind === 'ask_agent' || a.kind === 'draft_reply');
+    if (asks.length <= 1) return asks;
+    return [{ id: asks[0].id, label: '再让 AI 处理', kind: asks[0].kind }];
+  })();
   const visibleActions: CardAction[] = isAcked
-    ? [
-        ...card.actions.filter((a) => a.kind === 'ask_agent' || a.kind === 'draft_reply'),
-        REOPEN_ACTION,
-      ]
+    ? [...ackedAskActions, REOPEN_ACTION]
     : card.actions;
 
   return (
@@ -656,43 +662,96 @@ export function SignalCardView(props: {
         >
           {taskBusy ? '…' : '加入任务'}
         </button>
-        {visibleActions.map((a) => {
-          const isAsk = a.kind === 'ask_agent' || a.kind === 'draft_reply';
-          if (!isAsk) {
-            return (
-              <button
-                key={a.id}
-                className={`btn btn--card btn--${a.kind} ${a.id === '__reopen' ? 'btn--reopen' : ''}`}
-                onClick={() => run(a.id, a.kind)}
-                disabled={!!busy}
-              >
-                {busy === a.id ? '…' : a.label}
-              </button>
-            );
-          }
-          // MVP11.0-b：ask_agent / draft_reply 旁边带可选指令输入
-          return (
-            <div key={a.id} className="card__ask-inline">
-              <input
-                type="text"
-                className="card__ask-input"
-                placeholder="（可选）额外指令，留空走默认 prompt"
-                value={askPrompts[a.id] ?? ''}
-                onChange={(e) =>
-                  setAskPrompts((p) => ({ ...p, [a.id]: e.target.value }))
-                }
-                disabled={!!busy}
-              />
-              <button
-                className={`btn btn--card btn--${a.kind}`}
-                onClick={() => run(a.id, a.kind)}
-                disabled={!!busy}
-              >
-                {busy === a.id ? '…' : a.label}
-              </button>
-            </div>
+        {(() => {
+          // MVP23：把「处理角度」按钮（id 以 opt: 开头）单独分组，
+          //   前 2 个直出、第 3+ 收进「⋯更多」；非角度动作（ack/dismiss/单个 ask_agent）按原样渲染。
+          const isAngle = (a: CardAction) => a.id.startsWith('opt:');
+          const angles = visibleActions.filter(isAngle);
+          const firstAngleIdx = visibleActions.findIndex(isAngle);
+          const leading = firstAngleIdx >= 0 ? visibleActions.slice(0, firstAngleIdx) : visibleActions;
+          const trailing =
+            firstAngleIdx >= 0 ? visibleActions.slice(firstAngleIdx + angles.length) : [];
+          const inlineAngles = angles.slice(0, 2);
+          const overflowAngles = angles.slice(2);
+
+          // 角度按钮：紧凑（无内联指令输入）。create_task 角度走建任务通道，其余走右侧 Claude。
+          const renderAngle = (a: CardAction) => (
+            <button
+              key={a.id}
+              className={`btn btn--card btn--${a.kind === 'create_task' ? 'create-task' : 'ask_agent'} btn--angle`}
+              onClick={() =>
+                a.kind === 'create_task'
+                  ? void createLarkTask({ optionId: a.id, label: a.label })
+                  : void run(a.id, a.kind)
+              }
+              disabled={!!busy || taskBusy}
+              title={a.kind === 'create_task' ? '创建飞书任务' : '让 AI 按这个角度处理'}
+            >
+              {busy === a.id ? '…' : a.label}
+            </button>
           );
-        })}
+
+          // 非角度动作：沿用原有渲染（单个 ask_agent/draft_reply 带可选指令输入；其余纯按钮）。
+          const renderOther = (a: CardAction) => {
+            const isAsk = a.kind === 'ask_agent' || a.kind === 'draft_reply';
+            if (!isAsk) {
+              return (
+                <button
+                  key={a.id}
+                  className={`btn btn--card btn--${a.kind} ${a.id === '__reopen' ? 'btn--reopen' : ''}`}
+                  onClick={() => run(a.id, a.kind)}
+                  disabled={!!busy}
+                >
+                  {busy === a.id ? '…' : a.label}
+                </button>
+              );
+            }
+            return (
+              <div key={a.id} className="card__ask-inline">
+                <input
+                  type="text"
+                  className="card__ask-input"
+                  placeholder="（可选）额外指令，留空走默认 prompt"
+                  value={askPrompts[a.id] ?? ''}
+                  onChange={(e) => setAskPrompts((p) => ({ ...p, [a.id]: e.target.value }))}
+                  disabled={!!busy}
+                />
+                <button
+                  className={`btn btn--card btn--${a.kind}`}
+                  onClick={() => run(a.id, a.kind)}
+                  disabled={!!busy}
+                >
+                  {busy === a.id ? '…' : a.label}
+                </button>
+              </div>
+            );
+          };
+
+          return (
+            <>
+              {leading.map(renderOther)}
+              {inlineAngles.map(renderAngle)}
+              {overflowAngles.length > 0 && (
+                <div className="card__more">
+                  <button
+                    type="button"
+                    className="btn btn--card btn--more"
+                    onClick={() => setMoreOpen((v) => !v)}
+                    disabled={!!busy || taskBusy}
+                  >
+                    ⋯更多
+                  </button>
+                  {moreOpen && (
+                    <div className="card__more-menu" onMouseLeave={() => setMoreOpen(false)}>
+                      {overflowAngles.map(renderAngle)}
+                    </div>
+                  )}
+                </div>
+              )}
+              {trailing.map(renderOther)}
+            </>
+          );
+        })()}
       </footer>
       {taskResult && (
         <div className="card__task-done">
