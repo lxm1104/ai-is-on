@@ -94,12 +94,18 @@ export const config = {
   taskIntervalMs: envInt('TASK_COLLECTOR_INTERVAL_MS', 300_000),
   taskMaxPerTick: envInt('TASK_MAX_PER_TICK', 200),
 
-  // MVP11.1 meeting artifact collector
+  // MVP11.1 / MVP25 meeting artifact collector（MVP25 改 vc +search 发现入口）
   meetingArtifactEnabled: envBool('MEETING_ARTIFACT_COLLECTOR_ENABLED', true),
   meetingArtifactIntervalMs: envInt('MEETING_ARTIFACT_COLLECTOR_INTERVAL_MS', 600_000),
-  meetingArtifactLookbackDays: envInt('MEETING_ARTIFACT_LOOKBACK_DAYS', 3),
+  // MVP25: 稳态 7 天——补上"距上次成功采集之间开过的会"，又把回填洪峰控制在小范围
+  //   （见 docs/MVP25 §recentEvents 时序语义与首次回填）。一次性回填历史可临时调大。
+  meetingArtifactLookbackDays: envInt('MEETING_ARTIFACT_LOOKBACK_DAYS', 7),
   meetingArtifactMaxPerTick: envInt('MEETING_ARTIFACT_MAX_PER_TICK', 50),
   meetingArtifactRawCapBytes: envInt('MEETING_ARTIFACT_RAW_CAP_BYTES', 256 * 1024),
+  // MVP25: vc +search 分页上限（30/页），防极端用户失控
+  meetingArtifactSearchMaxPages: envInt('MEETING_ARTIFACT_SEARCH_MAX_PAGES', 10),
+  // MVP25: 仅采 display_info 标注"智能纪要"的会议（已确认）
+  meetingArtifactOnlyWithMinutes: envBool('MEETING_ARTIFACT_ONLY_WITH_MINUTES', true),
   // Triage queue concurrency. Keep at 1 (each round spawns a fresh Claude process).
   triageQueueConcurrency: envInt('TRIAGE_QUEUE_CONCURRENCY', 1),
   // Per-round triage timeout (one-shot Claude subprocess)
