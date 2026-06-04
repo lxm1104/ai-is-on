@@ -224,12 +224,14 @@ export async function postCardLarkTask(input: {
   description?: string;
   dueAt?: string;
   tasklistId?: string;
+  optionId?: string;
 }): Promise<LarkTaskCreateResult> {
   const body: Record<string, unknown> = { confirm: true };
   if (input.summary?.trim()) body.summary = input.summary.trim();
   if (input.description?.trim()) body.description = input.description.trim();
   if (input.dueAt?.trim()) body.dueAt = input.dueAt.trim();
   if (input.tasklistId?.trim()) body.tasklistId = input.tasklistId.trim();
+  if (input.optionId?.trim()) body.optionId = input.optionId.trim();
   const r = await fetch(`/api/cards/${encodeURIComponent(input.cardId)}/lark-task`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

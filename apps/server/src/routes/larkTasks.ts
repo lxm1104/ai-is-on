@@ -13,6 +13,7 @@ larkTasksRouter.post('/cards/:id/lark-task', async (req, res) => {
       dueAt: typeof body.dueAt === 'string' ? body.dueAt : undefined,
       tasklistId: typeof body.tasklistId === 'string' ? body.tasklistId : undefined,
       confirm: body.confirm === true,
+      optionId: typeof body.optionId === 'string' ? body.optionId : undefined,
     });
     res.json({ ok: true, ...result });
   } catch (err) {

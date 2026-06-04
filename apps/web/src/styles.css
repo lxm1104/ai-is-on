@@ -594,6 +594,27 @@ body { background: var(--bg); color: var(--text); }
 .btn--card { font-size: 12px; padding: 4px 10px; min-width: 0; }
 .btn--create-task { background: var(--panel-2); color: var(--text); }
 .btn--create-task:hover:not(:disabled) { border-color: var(--accent); }
+
+/* MVP23：处理角度按钮 + 「⋯更多」溢出菜单 */
+.btn--angle { background: var(--panel-2); color: var(--text); }
+.btn--angle:hover:not(:disabled) { border-color: var(--accent); }
+.card__more { position: relative; display: inline-flex; }
+.btn--more { color: var(--text-dim); }
+.card__more-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+.card__more-menu .btn--angle { white-space: nowrap; text-align: left; }
 .btn--ask_agent { background: var(--accent); border-color: var(--accent); color: white; }
 .btn--ask_agent:hover:not(:disabled) { background: var(--accent-strong); }
 .btn--draft_reply { background: var(--accent); border-color: var(--accent); color: white; }

@@ -51,7 +51,8 @@ export type CardActionKind =
   | 'draft_reply'
   | 'open_source'
   | 'mark_done'
-  | 'auto_henceforth';
+  | 'auto_henceforth'
+  | 'create_task';   // MVP23 M2：处理角度的结构化执行器，点击走建任务确认通道
 
 export type CardAction = {
   id: string;

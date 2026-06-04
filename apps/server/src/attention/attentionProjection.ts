@@ -68,15 +68,20 @@ export function defaultAttentionActions(item: AttentionItem): CardAction[] {
     { id: 'ack', label: '知道了', kind: 'ack' },
   ];
 
-  if (item.recommendedAgent) {
-    actions.push({
-      id: 'ask_agent',
-      label: '让 AI 处理',
-      kind: 'ask_agent',
-      prompt: buildAskAgentPrompt(item),
-    });
+  // MVP23：有处理角度 → 逐个投影成 'opt:<id>' 角度按钮（kind 仍是 ask_agent，复用执行通道）。
+  //   directive 不下发前端，由 applyAttentionAction 按 id 在后端取回。
+  // 无角度（未生成/已降级）→ 退回单个通用「让 AI 处理」。
+  if (item.actionOptions?.length) {
+    for (const opt of item.actionOptions) {
+      actions.push({
+        id: `opt:${opt.id}`,
+        label: opt.label,
+        // M2：create_task 角度投影成 'create_task' kind，前端路由到建任务确认通道；
+        //   其余角度仍是 ask_agent，走右侧 Claude 出草稿。
+        kind: opt.executor === 'create_task' ? 'create_task' : 'ask_agent',
+      });
+    }
   } else {
-    // 没明确推荐 agent 也给个通用 "让 AI 处理"
     actions.push({
       id: 'ask_agent',
       label: '让 AI 处理',
