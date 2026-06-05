@@ -29,6 +29,7 @@ import {
 } from '../context/contextStore.js';
 import type { ContextEntityRef, ContextScope } from '../context/ContextUnit.js';
 import { isCaringPaused } from '../caring/caringSettings.js';
+import { recordMatterObservation } from '../matter/matterStore.js';
 
 function scopeForEvent(ev: EventRow): ContextScope {
   switch (ev.source) {
@@ -163,21 +164,54 @@ async function processBatch(events: EventRow[]) {
 // LLM 输出里的 priority/title/summary/reason/cardActions 字段在 enrichment 链路里被丢弃；
 // "现在该看什么、为什么"现在由 attentionEngine 全局推理产出。
 function persistOne(ev: EventRow, item: TriageItem) {
+  let createdUnitIds: string[] = [];
   try {
-    persistContextUpdates(ev, item);
+    createdUnitIds = persistContextUpdates(ev, item);
   } catch (err) {
     console.warn(
       `[context] persist contextUpdates failed for event ${ev.id}:`,
       err instanceof Error ? err.message : String(err)
     );
   }
+  // MVP29：matterObservations 独立于 contextUpdates 落库——有些 event 只表达"某事项被推进/完成"，
+  // 没有新的长期 ContextUnit（§8 注意），所以这里单独处理、不受空 contextUpdates 提前 return 影响。
+  try {
+    persistMatterObservations(ev, item, createdUnitIds);
+  } catch (err) {
+    console.warn(
+      `[matter] persist matterObservations failed for event ${ev.id}:`,
+      err instanceof Error ? err.message : String(err)
+    );
+  }
 }
 
-function persistContextUpdates(ev: EventRow, item: TriageItem) {
+function persistMatterObservations(ev: EventRow, item: TriageItem, createdUnitIds: string[]) {
+  if (!item.matterObservations || item.matterObservations.length === 0) return;
+  const now = new Date().toISOString();
+  const eventCtxId = findEventContextUnitId(ev.id);
+  const contextUnitIds = [...createdUnitIds];
+  if (eventCtxId && !contextUnitIds.includes(eventCtxId)) contextUnitIds.push(eventCtxId);
+  for (const obs of item.matterObservations) {
+    recordMatterObservation({
+      sourceEventId: ev.id,
+      contextUnitIds,
+      observationType: obs.observationType,
+      matterType: obs.matterType,
+      title: obs.title,
+      lifecycleEffect: obs.lifecycleEffect ?? null,
+      evidence: obs.evidence,
+      confidence: obs.confidence,
+      now,
+    });
+  }
+}
+
+// 返回本次为该 event 创建的语义 unit id（供 matterObservations 关联）。
+function persistContextUpdates(ev: EventRow, item: TriageItem): string[] {
   if (!item.contextUpdates || item.contextUpdates.length === 0) {
     // 即便没有 contextUpdates，item.proposedNewProjects 仍可能需要落库
     persistProposedNewProjects(ev, item, []);
-    return;
+    return [];
   }
   const scope = scopeForEvent(ev);
   const eventCtxId = findEventContextUnitId(ev.id);
@@ -253,6 +287,7 @@ function persistContextUpdates(ev: EventRow, item: TriageItem) {
 
   // MVP2.1: triage 已经为这条 event 完成了 context 富化
   markEventContextExtracted(ev.id, new Date().toISOString());
+  return createdUnitIds;
 }
 
 function persistProposedNewProjects(

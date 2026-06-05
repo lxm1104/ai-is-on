@@ -60,6 +60,15 @@ contextUpdates 提取规则：
       便于把它关联回原事项；mergeHint 以"做某事"为核心，不要写"我说了/我同步了"这种过程措辞。
     - 若只是随口寒暄、与任何事项无关，contextUpdates 给 []，不要硬凑 action_result。
     - 隐私边界同上：不要把「我」的私人原文长期写进 content。
+13. （MVP29）matterObservations（可选）：当这条 event 看起来在**创建 / 推进 / 完成 / 阻塞**某件
+    "正在进行的事"时，额外给一条观察（**不改变事项状态，仅供系统归并**）。每条：
+    - observationType：possible_new_matter（像新事项）/ progress（在推进）/ resolution（像已完成）/
+      blocker（被阻塞）/ reopen（已完成的又被提）/ status_hint；
+    - matterType：follow_up / discussion / review / delivery / decision / coordination / blocker / other；
+    - title：该事项的规范化标题（≤20 字，去"我说 / 对方催"等事件化措辞，保留动作核心 + 关键对象）；
+    - lifecycleEffect（可选）：create / advance / resolve / block / reopen；
+    - evidence：≤60 字引用原文片段；confidence ∈ [0,1]。
+    没有就给 []。普通寒暄、纯信息、与任何事项无关的不要硬造。
 
 输出 schema：
 {
@@ -102,6 +111,16 @@ contextUpdates 提取规则：
           "name": "<原文里出现但 knownProjects 里没有的项目名>",
           "evidence": "<≤60 字、引用原文片段>",
           "suggestedParent": "<可选；若你确信属于 knownProjects 里某顶层 canonical>"
+        }
+      ],
+      "matterObservations": [
+        {
+          "observationType": "resolution",
+          "matterType": "discussion",
+          "title": "安排与 yufan 讨论",
+          "lifecycleEffect": "resolve",
+          "evidence": "<≤60 字原文片段>",
+          "confidence": 0.8
         }
       ]
     }

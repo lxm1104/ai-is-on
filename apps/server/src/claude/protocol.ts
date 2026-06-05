@@ -107,4 +107,5 @@ export type ServerEvent =
   | { type: 'card_updated'; card: SignalCard }
   | { type: 'collector_status'; collector: CollectorStatus }
   | { type: 'attention_updated'; generation: number; itemsEmitted: number }
+  | { type: 'matter_updated'; matterId: string }
   | { type: 'error'; message: string };

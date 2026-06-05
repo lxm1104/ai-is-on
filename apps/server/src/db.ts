@@ -479,6 +479,25 @@ CREATE TABLE IF NOT EXISTS matter_transitions (
 );
 CREATE INDEX IF NOT EXISTS idx_matter_transitions_matter ON matter_transitions(matter_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_matter_transitions_context ON matter_transitions(trigger_context_unit_id);
+
+-- MVP29 §5.5：Triage 直出的 MatterObservation（"这条 event 看起来在创建/推进/完成/阻塞某事项"）。
+-- Reducer 可优先消费它降低 LLM 调用；也作为审计。即便该 event 没有新 contextUpdate 也会落。
+CREATE TABLE IF NOT EXISTS matter_observations (
+  id TEXT PRIMARY KEY,
+  source_event_id TEXT NOT NULL,
+  context_unit_ids_json TEXT NOT NULL DEFAULT '[]',
+  observation_type TEXT NOT NULL,
+  matter_type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  lifecycle_effect TEXT,
+  evidence TEXT NOT NULL,
+  confidence REAL NOT NULL DEFAULT 0.7,
+  candidate_matter_ids_json TEXT NOT NULL DEFAULT '[]',
+  raw_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_matter_observations_event ON matter_observations(source_event_id);
+CREATE INDEX IF NOT EXISTS idx_matter_observations_type ON matter_observations(observation_type);
 `);
 
 // Forward-compat: add columns that may be missing in databases created by an earlier MVP0 boot.
@@ -3947,6 +3966,14 @@ export function listMatterLinksForContextUnit(contextUnitId: string): MatterCont
     .all(contextUnitId) as MatterContextLinkRow[];
 }
 
+// MVP29：用户纠错（wrong-evidence / split）需要把某 (matter, unit) 的所有关系行删掉再重写。
+export function deleteMatterContextLinksForPair(matterId: string, contextUnitId: string): number {
+  const r = db
+    .prepare(`DELETE FROM matter_context_links WHERE matter_id = ? AND context_unit_id = ?`)
+    .run(matterId, contextUnitId);
+  return r.changes;
+}
+
 // -------- matter_transitions --------
 
 export type MatterTransitionRow = {
@@ -3973,4 +4000,39 @@ export function listMatterTransitionRows(matterId: string): MatterTransitionRow[
   return db
     .prepare(`SELECT * FROM matter_transitions WHERE matter_id = ? ORDER BY created_at ASC`)
     .all(matterId) as MatterTransitionRow[];
+}
+
+// -------- matter_observations (MVP29) --------
+
+export type MatterObservationRow = {
+  id: string;
+  source_event_id: string;
+  context_unit_ids_json: string;
+  observation_type: string;
+  matter_type: string;
+  title: string;
+  lifecycle_effect: string | null;
+  evidence: string;
+  confidence: number;
+  candidate_matter_ids_json: string;
+  raw_json: string;
+  created_at: string;
+};
+
+export function insertMatterObservation(row: MatterObservationRow): void {
+  db.prepare(
+    `INSERT INTO matter_observations
+       (id, source_event_id, context_unit_ids_json, observation_type, matter_type, title,
+        lifecycle_effect, evidence, confidence, candidate_matter_ids_json, raw_json, created_at)
+     VALUES (@id, @source_event_id, @context_unit_ids_json, @observation_type, @matter_type, @title,
+             @lifecycle_effect, @evidence, @confidence, @candidate_matter_ids_json, @raw_json, @created_at)`
+  ).run(row);
+}
+
+export function listMatterObservationsBySourceEvent(eventId: string): MatterObservationRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM matter_observations WHERE source_event_id = ? ORDER BY created_at ASC`
+    )
+    .all(eventId) as MatterObservationRow[];
 }

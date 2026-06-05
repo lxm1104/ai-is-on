@@ -9,7 +9,18 @@
  */
 import { Router } from 'express';
 import { projectMatterDetail, projectMatters } from '../matter/matterProjection.js';
-import { listMattersForContextUnit } from '../matter/matterStore.js';
+import {
+  listMatterObservationsForEvent,
+  listMattersForContextUnit,
+} from '../matter/matterStore.js';
+import {
+  markWrongEvidence,
+  mergeMatters,
+  splitEvidence,
+  userDropMatter,
+  userReopenMatter,
+  userResolveMatter,
+} from '../matter/matterActions.js';
 import type { MatterStatus } from '../matter/matterTypes.js';
 
 export const mattersRouter = Router();
@@ -44,6 +55,76 @@ mattersRouter.get('/context/units/:id/matters', (req, res) => {
   const items = listMattersForContextUnit(req.params.id);
   res.json({ items });
 });
+
+// 一条 event 的 triage MatterObservation（debug / 审计）
+mattersRouter.get('/matter-observations/by-event/:eventId', (req, res) => {
+  res.json({ items: listMatterObservationsForEvent(req.params.eventId) });
+});
+
+// ---- MVP29 §10.7 Matter 级用户动作 ----
+
+mattersRouter.post('/matters/:id/resolve', (req, res) => {
+  const m = userResolveMatter(req.params.id, strOrUndef(req.body?.reason));
+  if (!m) return notFound(res);
+  res.json({ matter: m });
+});
+
+mattersRouter.post('/matters/:id/drop', (req, res) => {
+  const m = userDropMatter(req.params.id, strOrUndef(req.body?.reason));
+  if (!m) return notFound(res);
+  res.json({ matter: m });
+});
+
+mattersRouter.post('/matters/:id/reopen', (req, res) => {
+  const m = userReopenMatter(req.params.id, strOrUndef(req.body?.reason));
+  if (!m) return notFound(res);
+  res.json({ matter: m });
+});
+
+mattersRouter.post('/matters/merge', (req, res) => {
+  const sourceId = strOrUndef(req.body?.sourceId);
+  const targetId = strOrUndef(req.body?.targetId);
+  if (!sourceId || !targetId) {
+    res.status(400).json({ error: 'sourceId and targetId required' });
+    return;
+  }
+  const result = mergeMatters(sourceId, targetId);
+  if (!result) {
+    res.status(400).json({ error: 'merge failed (not found or same matter)' });
+    return;
+  }
+  res.json(result);
+});
+
+mattersRouter.post('/matters/:id/split', (req, res) => {
+  const contextUnitId = strOrUndef(req.body?.contextUnitId);
+  if (!contextUnitId) {
+    res.status(400).json({ error: 'contextUnitId required' });
+    return;
+  }
+  const created = splitEvidence(req.params.id, contextUnitId, strOrUndef(req.body?.title));
+  if (!created) return notFound(res);
+  res.json({ matter: created });
+});
+
+mattersRouter.post('/matters/:id/wrong-evidence', (req, res) => {
+  const contextUnitId = strOrUndef(req.body?.contextUnitId);
+  if (!contextUnitId) {
+    res.status(400).json({ error: 'contextUnitId required' });
+    return;
+  }
+  const ok = markWrongEvidence(req.params.id, contextUnitId, strOrUndef(req.body?.reason));
+  if (!ok) return notFound(res);
+  res.json({ ok: true });
+});
+
+function notFound(res: import('express').Response): void {
+  res.status(404).json({ error: 'not found' });
+}
+
+function strOrUndef(v: unknown): string | undefined {
+  return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+}
 
 function parseStatuses(v: unknown): MatterStatus[] | undefined {
   if (typeof v !== 'string' || !v.trim()) return undefined;

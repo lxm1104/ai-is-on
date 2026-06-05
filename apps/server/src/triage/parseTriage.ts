@@ -20,12 +20,30 @@ export type TriageItem = {
   // MVP19 §E：LLM 在原文里看到的项目名但不在 <knownProjects> 列表里。
   // 走单独 proposal 队列等审核（不是 entities，不参与 unit→space 路由）。
   proposedNewProjects: ProposedNewProject[];
+  // MVP29 §4.5：LLM 对"这条 event 看起来在创建/推进/完成/阻塞某事项"的观察。
+  // 不直接改 Matter 状态（裁决仍归 Matter Reducer），只作候选/审计。
+  matterObservations: MatterObservationDraft[];
 };
 
 export type ProposedNewProject = {
   name: string;
   evidence?: string;
   suggestedParent?: string;
+};
+
+export type MatterObservationDraft = {
+  observationType:
+    | 'possible_new_matter'
+    | 'progress'
+    | 'resolution'
+    | 'blocker'
+    | 'reopen'
+    | 'status_hint';
+  matterType: string;
+  title: string;
+  lifecycleEffect?: 'create' | 'advance' | 'resolve' | 'block' | 'reopen';
+  evidence: string;
+  confidence: number;
 };
 
 export type TriageResult = { items: TriageItem[] };
@@ -139,7 +157,50 @@ function coerceItem(raw: unknown): TriageItem | null {
     cardActions,
     contextUpdates: coerceContextUpdates(o.contextUpdates),
     proposedNewProjects: coerceProposedNewProjects(o.proposedNewProjects),
+    matterObservations: coerceMatterObservations(o.matterObservations),
   };
+}
+
+const OBS_TYPES = new Set([
+  'possible_new_matter',
+  'progress',
+  'resolution',
+  'blocker',
+  'reopen',
+  'status_hint',
+]);
+const OBS_LIFECYCLE = new Set(['create', 'advance', 'resolve', 'block', 'reopen']);
+
+function coerceMatterObservations(raw: unknown): MatterObservationDraft[] {
+  if (!Array.isArray(raw)) return [];
+  const out: MatterObservationDraft[] = [];
+  for (const item of raw) {
+    if (out.length >= 5) break;
+    if (!item || typeof item !== 'object') continue;
+    const o = item as Record<string, unknown>;
+    const observationType = typeof o.observationType === 'string' ? o.observationType : '';
+    if (!OBS_TYPES.has(observationType)) continue;
+    const title = typeof o.title === 'string' ? o.title.trim() : '';
+    if (!title) continue;
+    const matterType =
+      typeof o.matterType === 'string' && o.matterType.trim() ? o.matterType.trim() : 'other';
+    const lifecycleEffect =
+      typeof o.lifecycleEffect === 'string' && OBS_LIFECYCLE.has(o.lifecycleEffect)
+        ? (o.lifecycleEffect as MatterObservationDraft['lifecycleEffect'])
+        : undefined;
+    const evidence = typeof o.evidence === 'string' ? o.evidence.trim().slice(0, 200) : '';
+    const confidence =
+      typeof o.confidence === 'number' ? Math.max(0, Math.min(1, o.confidence)) : 0.6;
+    out.push({
+      observationType: observationType as MatterObservationDraft['observationType'],
+      matterType,
+      title,
+      lifecycleEffect,
+      evidence,
+      confidence,
+    });
+  }
+  return out;
 }
 
 function coerceProposedNewProjects(raw: unknown): ProposedNewProject[] {

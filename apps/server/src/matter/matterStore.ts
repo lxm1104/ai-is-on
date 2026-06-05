@@ -12,16 +12,19 @@ import { randomUUID } from 'node:crypto';
 import {
   type MatterContextLinkRow,
   type MatterEntityRow,
+  type MatterObservationRow,
   type MatterRow,
   type MatterTransitionRow,
   getActiveMatterByCanonicalKey,
   getMatter,
   getMatterByCreatedFrom,
   insertMatter,
+  insertMatterObservation,
   insertMatterTransition,
   listMatterContextLinkRows,
   listMatterEntityRows,
   listMatterLinksForContextUnit,
+  listMatterObservationsBySourceEvent,
   listMatterRows,
   listMatterTransitionRows,
   updateMatter,
@@ -339,6 +342,40 @@ export function listMatterContextLinks(matterId: string): MatterContextLink[] {
 
 export function listMatterTransitions(matterId: string): MatterTransition[] {
   return listMatterTransitionRows(matterId).map(rowToTransition);
+}
+
+// ============ MVP29 matter_observations ============
+
+export function recordMatterObservation(input: {
+  sourceEventId: string;
+  contextUnitIds: string[];
+  observationType: string;
+  matterType: string;
+  title: string;
+  lifecycleEffect?: string | null;
+  evidence: string;
+  confidence?: number;
+  candidateMatterIds?: string[];
+  now?: string;
+}): void {
+  insertMatterObservation({
+    id: randomUUID(),
+    source_event_id: input.sourceEventId,
+    context_unit_ids_json: JSON.stringify(input.contextUnitIds ?? []),
+    observation_type: input.observationType,
+    matter_type: input.matterType,
+    title: input.title,
+    lifecycle_effect: input.lifecycleEffect ?? null,
+    evidence: input.evidence,
+    confidence: typeof input.confidence === 'number' ? input.confidence : 0.7,
+    candidate_matter_ids_json: JSON.stringify(input.candidateMatterIds ?? []),
+    raw_json: JSON.stringify(input),
+    created_at: input.now ?? new Date().toISOString(),
+  });
+}
+
+export function listMatterObservationsForEvent(eventId: string): MatterObservationRow[] {
+  return listMatterObservationsBySourceEvent(eventId);
 }
 
 /** /api/context/units/:id/matters：一条 ContextUnit 影响了哪些 Matter（含 link 关系）。 */
