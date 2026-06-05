@@ -5,6 +5,9 @@ import type {
   ContextEntity,
   ContextUnit,
   CooccurrenceItem,
+  Matter,
+  MatterDetail,
+  MatterListItem,
   RelationshipItem,
   SignalCard,
   TopicStatus,
@@ -961,4 +964,59 @@ export async function saveToneProfile(md: string): Promise<ToneProfile> {
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error((j as { error?: string }).error || `tone-profile ${r.status}`);
   return j as ToneProfile;
+}
+
+// ============ MVP28/29 Matter 事务状态层 ============
+
+export async function fetchMatters(statuses?: string[], limit = 100): Promise<MatterListItem[]> {
+  const qs = new URLSearchParams();
+  if (statuses?.length) qs.set('status', statuses.join(','));
+  qs.set('limit', String(limit));
+  const r = await fetch(`/api/matters?${qs}`);
+  if (!r.ok) throw new Error(`matters ${r.status}`);
+  const j = await r.json();
+  return (j.items ?? []) as MatterListItem[];
+}
+
+export async function fetchMatterDetail(id: string): Promise<MatterDetail> {
+  const r = await fetch(`/api/matters/${encodeURIComponent(id)}`);
+  if (!r.ok) throw new Error(`matter ${r.status}`);
+  const j = await r.json();
+  return j.matter as MatterDetail;
+}
+
+async function postMatterAction(pathSuffix: string, body?: Record<string, unknown>): Promise<unknown> {
+  const r = await fetch(`/api/matters/${pathSuffix}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j as { error?: string }).error || `matter action ${r.status}`);
+  return j;
+}
+
+export async function postMatterResolve(id: string, reason?: string): Promise<Matter> {
+  const j = (await postMatterAction(`${encodeURIComponent(id)}/resolve`, { reason })) as { matter: Matter };
+  return j.matter;
+}
+export async function postMatterDrop(id: string, reason?: string): Promise<Matter> {
+  const j = (await postMatterAction(`${encodeURIComponent(id)}/drop`, { reason })) as { matter: Matter };
+  return j.matter;
+}
+export async function postMatterReopen(id: string, reason?: string): Promise<Matter> {
+  const j = (await postMatterAction(`${encodeURIComponent(id)}/reopen`, { reason })) as { matter: Matter };
+  return j.matter;
+}
+export async function postMatterMerge(sourceId: string, targetId: string): Promise<void> {
+  await postMatterAction('merge', { sourceId, targetId });
+}
+export async function postMatterSplit(id: string, contextUnitId: string, title?: string): Promise<Matter> {
+  const j = (await postMatterAction(`${encodeURIComponent(id)}/split`, { contextUnitId, title })) as {
+    matter: Matter;
+  };
+  return j.matter;
+}
+export async function postMatterWrongEvidence(id: string, contextUnitId: string): Promise<void> {
+  await postMatterAction(`${encodeURIComponent(id)}/wrong-evidence`, { contextUnitId });
 }

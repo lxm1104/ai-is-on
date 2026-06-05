@@ -1779,3 +1779,65 @@ body { background: var(--bg); color: var(--text); }
 .mc-tag--fn  { background: rgba(34,197,94,0.15); color: #86efac; }
 .mc-tag--hint { background: rgba(245,158,11,0.18); color: #fcd34d; }
 .mc-tag--shared { background: rgba(59,130,246,0.18); color: #93c5fd; }
+
+/* ============ MVP29B Matter Panel ============ */
+.matter-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.matter-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  cursor: pointer;
+}
+.matter-item:hover { border-color: var(--accent); }
+.matter-item.is-selected { border-color: var(--accent); }
+.matter-item__head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.matter-item__title { font-weight: 600; font-size: 13px; color: var(--text); }
+.matter-item__meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; font-size: 11px; color: var(--text-dim); }
+.matter-type { text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.8; }
+.matter-due { color: var(--p1); }
+.matter-chip { padding: 1px 6px; border-radius: 999px; background: rgba(255,255,255,0.06); border: 1px solid var(--border); }
+.matter-ev-count { opacity: 0.7; }
+
+.matter-status { font-size: 10px; padding: 1px 6px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.5px; }
+.matter-status--open,
+.matter-status--acknowledged { color: #93c5fd; border: 1px solid #93c5fd44; }
+.matter-status--in_progress { color: #5b8cff; border: 1px solid #5b8cff55; }
+.matter-status--waiting { color: #fbbf24; border: 1px solid #fbbf2444; }
+.matter-status--blocked { color: #f87171; border: 1px solid #f8717155; }
+.matter-status--resolved { color: #34d399; border: 1px solid #34d39944; }
+.matter-status--dropped { color: var(--text-dim); border: 1px solid var(--border); }
+
+.matter-prio { font-size: 10px; font-weight: 700; padding: 0 5px; border-radius: 4px; }
+.matter-prio--P0 { color: var(--p0); }
+.matter-prio--P1 { color: var(--p1); }
+.matter-prio--P2 { color: var(--p2); }
+.matter-prio--P3 { color: var(--p3); }
+
+.matter-detail { border-top: 1px dashed var(--border); margin-top: 6px; padding: 8px 4px 4px; font-size: 12px; }
+.matter-detail__summary { color: var(--text); margin-bottom: 4px; }
+.matter-detail__next { color: var(--text-dim); margin-bottom: 4px; }
+.matter-detail__spaces { color: var(--accent); font-size: 11px; margin-bottom: 6px; }
+.matter-detail__section { margin-top: 8px; }
+.matter-detail__head { font-weight: 600; color: var(--text-dim); margin-bottom: 4px; font-size: 11px; }
+
+.matter-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 6px 0; }
+.matter-merge { display: inline-flex; gap: 4px; align-items: center; }
+.matter-merge select {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 6px; font-size: 12px; font-family: inherit; max-width: 130px;
+}
+
+.matter-evlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.matter-ev-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+.matter-ev-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.matter-ev-rel { font-size: 10px; color: var(--accent); }
+.matter-ev-kind { font-size: 10px; opacity: 0.7; }
+.matter-ev-title { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.matter-ev-actions { display: flex; gap: 4px; flex-shrink: 0; }
+
+.matter-timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.matter-timeline__item { display: flex; gap: 8px; align-items: baseline; border-left: 2px solid var(--border); padding: 2px 0 2px 8px; }
+.matter-tl-status { color: var(--text); font-weight: 600; white-space: nowrap; }
+.matter-tl-reason { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.matter-tl-at { color: var(--text-dim); opacity: 0.7; white-space: nowrap; }

@@ -208,4 +208,99 @@ export type ServerEvent =
   | { type: 'card_updated'; card: SignalCard }
   | { type: 'collector_status'; collector: CollectorStatus }
   | { type: 'attention_updated'; generation: number; itemsEmitted: number }
+  | { type: 'matter_updated'; matterId: string }
   | { type: 'error'; message: string };
+
+// ============ MVP28/29 Matter 事务状态层（前端镜像 server matterTypes/matterProjection）============
+
+export type MatterType =
+  | 'follow_up'
+  | 'discussion'
+  | 'review'
+  | 'delivery'
+  | 'decision'
+  | 'coordination'
+  | 'blocker'
+  | 'other';
+
+export type MatterStatus =
+  | 'open'
+  | 'acknowledged'
+  | 'in_progress'
+  | 'waiting'
+  | 'blocked'
+  | 'resolved'
+  | 'dropped';
+
+export type MatterPriority = 'P0' | 'P1' | 'P2' | 'P3';
+
+export type Matter = {
+  id: string;
+  subjectId: string;
+  scope: 'personal' | 'work' | 'team';
+  type: MatterType;
+  title: string;
+  canonicalKey: string;
+  status: MatterStatus;
+  priority: MatterPriority;
+  ownerEntityId?: string | null;
+  primarySpaceId?: string | null;
+  dueAt?: string | null;
+  currentSummary: string;
+  nextAction?: string | null;
+  createdFromContextUnitId: string;
+  lastEvidenceContextUnitId?: string | null;
+  lastEvidenceAt?: string | null;
+  confidence: number;
+  reopenedCount: number;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  resolvedAt?: string | null;
+  droppedAt?: string | null;
+};
+
+export type MatterEntityView = {
+  entityId: string;
+  role: string;
+  confidence: number;
+  type?: string;
+  name?: string;
+};
+
+export type MatterEvidenceView = {
+  contextUnitId: string;
+  relation: string;
+  effect: string;
+  confidence: number;
+  reason: string;
+  at: string;
+  kind?: string;
+  title?: string;
+};
+
+export type MatterTimelineView = {
+  id: string;
+  fromStatus: MatterStatus | null;
+  toStatus: MatterStatus;
+  effect: string;
+  reason: string;
+  confidence: number;
+  triggerContextUnitId: string;
+  at: string;
+};
+
+export type MatterSpaceView = { id: string; name: string };
+
+export type MatterListItem = Matter & {
+  entities: MatterEntityView[];
+  spaces: MatterSpaceView[];
+  evidenceCount: number;
+};
+
+export type MatterDetail = Matter & {
+  entities: MatterEntityView[];
+  evidence: MatterEvidenceView[];
+  timeline: MatterTimelineView[];
+  spaces: MatterSpaceView[];
+};

@@ -4,6 +4,7 @@ import { MessageList } from './components/MessageList';
 import { Composer } from './components/Composer';
 import { CardList } from './components/CardList';
 import { ContextPanel } from './components/ContextPanel';
+import { MatterPanel } from './components/MatterPanel';
 import { SpacesPanel } from './components/SpacesPanel';
 import { ProjectProposalsPanel } from './components/ProjectProposalsPanel';
 import { RulesPanel } from './components/RulesPanel';
@@ -130,6 +131,8 @@ export function App() {
   const [topError, setTopError] = useState<string | null>(null);
   const [bootstrapCompletedAt, setBootstrapCompletedAt] = useState<string | null>(null);
   const [bootstrapBannerDismissed, setBootstrapBannerDismissed] = useState(false);
+  // MVP29B：matter_updated WS 事件递增此计数，触发 MatterPanel 重拉。
+  const [matterTick, setMatterTick] = useState(0);
   // MVP18 Stage 2: refs 给 WS handler 看，避免空依赖 useEffect 闭包过期
   const openIdsRef = useRef<string[]>([]);
   const messagesByTopicRef = useRef<Record<string, ChatMessage[]>>({});
@@ -246,6 +249,10 @@ export function App() {
             fetchAttentionCards()
               .then((cs) => setCards(cs))
               .catch(() => {});
+            return;
+          case 'matter_updated':
+            // MVP29B：Matter 状态变了（reducer 或用户动作），让 MatterPanel 重拉。
+            setMatterTick((t) => t + 1);
             return;
           case 'error':
             setTopError(e.message);
@@ -496,6 +503,7 @@ export function App() {
           <SpacesPanel />
           <ProjectProposalsPanel />
           <RulesPanel />
+          <MatterPanel refreshSignal={matterTick} />
           <ContextPanel />
         </aside>
         <section className="pane pane--chat">
