@@ -82,6 +82,10 @@ export const config = {
   imEnableExternalP2p: envBool('IM_ENABLE_EXTERNAL_P2P', true),
   // MVP24: 单轮最多处理多少个外部单聊（按 ByActiveTimeDesc 取前 N），防止外部单聊过多打爆。
   imExternalP2pMaxChats: envInt('IM_EXTERNAL_P2P_MAX_CHATS', 20),
+  // MVP26.5: 把「我」在 IM 里主动推进事项的消息升格成可 triage 的 im_self_action 信号
+  //   （给 Matter Reducer 接上 action_result 输入）。kill switch，默认开。
+  //   依赖 imIncludeMyMessages=true（否则 me-side 消息在 prepareMessages 就被滤掉）。
+  imSelfActionEnabled: envBool('IM_SELF_ACTION_ENABLED', true),
   // MVP11.0-b drive comment collector
   driveCommentEnabled: envBool('DRIVE_COMMENT_COLLECTOR_ENABLED', true),
   driveCommentIntervalMs: envInt('DRIVE_COMMENT_COLLECTOR_INTERVAL_MS', 300_000),

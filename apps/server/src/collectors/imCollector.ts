@@ -385,6 +385,147 @@ export function summarizeAggregate(
   return lines.join('\n');
 }
 
+// ---------- MVP26.5: self-initiated action signal ----------
+//
+// 「我」在 IM 里主动推进事项的消息（已拉群 / @某人同步 / 发出方案 / 约时间）默认不出卡，
+// 但它是 Matter 自动止催的关键 action_result 输入。detectSelfAction 只按消息**内在特征**
+// 判断"这条我方消息像不像一个推进动作"，不查 Matter、不读 Matter 状态（避免 Matter→Event
+// 反向依赖）；具体命中哪条 Matter 交给下游 triage + Matter Reducer。保守优先：宁可漏，也不要
+// 把"我来 / 我同步"这类高频口语全部灌进 triage（§13.4）。
+
+// 强完成态动作：过去式、明确工作动作，单独即可成信号。
+const SELF_ACTION_STRONG = [
+  '已发', '已发出', '发你了', '发出去了', '已拉群', '拉了群', '建好了群', '已建群',
+  '已同步', '同步好了', '已联系', '联系好了', '已约', '约好了', '已创建', '已提交',
+  '已发起', '已通知', '已确认', '已对接', '已安排', '已排期', '发方案了', '方案发你',
+  '已艾特', '已@',
+];
+// 兜底正则：捕捉"已经…<动作>"这种动词与"已经"不相邻的完成态（如"已经在群里同步了"）。
+const SELF_ACTION_STRONG_RE =
+  /已经?[^。！？!?\n]{0,10}(发出|发你|拉群|拉了群|建群|建好群|同步|联系|约好|约了|创建|提交|发起|通知|确认|对接|安排好|安排了|艾特|@)/;
+
+// 高频口语推进动词：需配合 disambiguator（mention / 链接 / 工作语义对象 / 对侧工作上下文）才成信号。
+const SELF_ACTION_WEAK = [
+  '我来', '我处理', '我同步', '我去', '我跟进', '我安排', '我对接', '我推进',
+  '我负责', '我搞定', '我弄', '我发', '我约', '我建群', '我拉群', '我确认',
+];
+
+// 工作语义 token：用于 disambiguate weak 动词、判断对侧上下文是否工作相关。
+const WORK_SEMANTIC = [
+  '任务', '同步', '确认', '对齐', '评审', '审核', '方案', '排期', '会议', '日程',
+  '对接', '跟进', '进度', '文档', '需求', '上线', '发布', '部署', '审批', '纪要',
+  '复盘', '立项', '里程碑', '汇报', '评估', '拉群', '建群', '讨论', '对一下',
+  '过一遍', '约', '提案', '验收',
+];
+
+// 寒暄 / 短 ack：供内部判定与测试可见。
+const CASUAL_ACK = [
+  '好的', '好', '收到', '嗯', '嗯嗯', 'ok', 'okay', '可以', '行', '是的', '对',
+  '哈哈', '谢谢', '感谢', '辛苦了', '没问题', '好嘞', '好哒',
+];
+
+// Lark mention：content 里保留 @_user_/@_all/open_id（见 isAtMe），或渲染成 @名字。
+const MENTION_RE = /@_user_|@_all|@[一-龥A-Za-z0-9]/;
+const FEISHU_LINK_RE = /https?:\/\/[^\s]*(?:feishu\.cn|larksuite\.com|larkoffice\.com)\//;
+
+export type SelfActionDetection = {
+  kind: 'im_self_action' | 'im_self_action_with_context';
+  reason: string;
+};
+
+function includesAny(hay: string, needles: string[]): boolean {
+  return needles.some((n) => hay.includes(n));
+}
+
+/**
+ * 判断一条「我」侧消息是否像一个 self-initiated 推进动作。
+ * 返回 null = 不产信号（按 MVP16-A 原则照常跳过）。纯函数，便于单测。
+ */
+export function detectSelfAction(
+  m: ImMessage,
+  chatMsgs: ImMessage[],
+  _myOpenId: string
+): SelfActionDetection | null {
+  if (!m.is_me) return null;
+  const content = m.content ?? '';
+  const text = content.trim();
+  if (!text) return null; // 纯结构动作（只建群/加人、无文本）不产信号（§不做）
+
+  const lower = text.toLowerCase();
+  const hasStrong =
+    includesAny(text, SELF_ACTION_STRONG) || SELF_ACTION_STRONG_RE.test(text);
+  const hasWeak = includesAny(text, SELF_ACTION_WEAK);
+  const hasMention = MENTION_RE.test(content);
+  const hasLink = FEISHU_LINK_RE.test(text) || extractFeishuDocEntities(text).length > 0;
+  const hasWorkSemantic =
+    includesAny(text, WORK_SEMANTIC) || includesAny(lower, ['deadline', 'ddl']);
+  // 同 chat 近窗口是否存在 peer-side 工作消息（→ with_context 变体 + weak disambiguator）
+  const hasPeerWorkContext = chatMsgs.some(
+    (p) => !p.is_me && includesAny(p.content ?? '', WORK_SEMANTIC)
+  );
+
+  const mk = (reason: string): SelfActionDetection => ({
+    kind: hasPeerWorkContext ? 'im_self_action_with_context' : 'im_self_action',
+    reason,
+  });
+
+  if (hasStrong) return mk('strong_action_verb');
+  if (hasLink) return mk('work_object_link');
+  if (hasMention && hasWorkSemantic) return mk('mention_with_work_semantic');
+  if (hasWeak && (hasMention || hasLink || hasWorkSemantic || hasPeerWorkContext)) {
+    return mk('weak_action_verb_with_disambiguator');
+  }
+  if (hasPeerWorkContext && hasWorkSemantic) return mk('peer_work_context');
+  return null;
+}
+
+/**
+ * 把命中的 self-action 渲染成 RawSignal。保留 chat routing entity 方便 Matter 召回；
+ * actionability=record（不抬事件本身优先级）、skipTriage=false（必须过 triage 抽 action_result）、
+ * semanticTags 标 signal_kind 让 triage / evaluator 区分。collector 不碰 Matter。
+ */
+function buildSelfActionSignal(
+  det: SelfActionDetection,
+  m: ImMessage,
+  chatMsgs: ImMessage[],
+  chatName: string,
+  chatEnt: ContextEntityRef | null,
+  raw: unknown
+): RawSignal {
+  const text = summarizeOneWithContext(m, chatMsgs, chatName);
+  const entities: ContextEntityRef[] = [];
+  if (chatEnt) entities.push(chatEnt);
+  entities.push(...extractFeishuDocEntities(text));
+  return {
+    source: 'im',
+    sourceId: m.message_id!,
+    kind: det.kind,
+    occurredAt: parseCreateTime(m.create_time),
+    title: chatName,
+    text,
+    actor: '我',
+    url: m.message_app_link,
+    raw,
+    contentHash: shortHash(
+      `selfaction|${m.message_id}|${m.content ?? ''}|${m.create_time ?? ''}`
+    ),
+    entities: dedupEntities(entities),
+    actionability: 'record',
+    semanticTags: { signal_kind: det.kind, is_me: true, self_action_reason: det.reason },
+    skipTriage: false,
+  };
+}
+
+// 测试可见性
+export const __selfActionInternal = {
+  SELF_ACTION_STRONG,
+  SELF_ACTION_STRONG_RE,
+  SELF_ACTION_WEAK,
+  WORK_SEMANTIC,
+  CASUAL_ACK,
+  buildSelfActionSignal,
+};
+
 // ---------- chat-list paging ----------
 
 async function listAllGroups(): Promise<ChatListChat[]> {
@@ -740,8 +881,22 @@ export const imCollector: Collector = {
         });
       } else {
         for (const m of msgs) {
-          // MVP16-A: me-side single messages never become signals on their own.
-          if (m.is_me) continue;
+          // MVP16-A: me-side single messages never become signals on their own —
+          // 除非 MVP26.5 判定它是一个 self-initiated 推进动作（用户在别处办了事），
+          // 那时升格成 im_self_action 信号，给 Matter Reducer 当 action_result 输入。
+          if (m.is_me) {
+            if (!config.imSelfActionEnabled) continue;
+            const det = detectSelfAction(m, msgs, myOpenId);
+            if (!det) continue;
+            signals.push(
+              buildSelfActionSignal(det, m, msgs, chatName, chatEnt, {
+                chat,
+                msg: m,
+                contextMsgs: msgs,
+              })
+            );
+            continue;
+          }
           // MVP16-A hotfix: render with surrounding chat context so Triage can
           // see double-sided exchange even when only 1-2 peer msgs in window.
           const text = summarizeOneWithContext(m, msgs, chatName);
@@ -848,7 +1003,21 @@ export const imCollector: Collector = {
           // attention cards about themselves talking. peerMsgs.length=0 case
           // is also covered: the burst branch above is skipped, and this loop
           // produces zero signals.
-          if (m.is_me) continue;
+          // MVP26.5: 例外——若该 me-side 消息像一个 self-initiated 推进动作，升格成
+          // im_self_action 信号（给 Matter Reducer 当 action_result 输入）。
+          if (m.is_me) {
+            if (!config.imSelfActionEnabled) continue;
+            const det = detectSelfAction(m, msgs, myOpenId);
+            if (!det) continue;
+            signals.push(
+              buildSelfActionSignal(det, m, msgs, chatName, chatEnt, {
+                chatId,
+                msg: m,
+                contextMsgs: msgs,
+              })
+            );
+            continue;
+          }
           // MVP16-A hotfix: render with surrounding double-sided context so
           // Triage can see whether the user already responded to this message.
           // raw.msg stays the single focused message; raw.contextMsgs carries
@@ -886,6 +1055,9 @@ export const imCollector: Collector = {
         p2p: 1,
         group_burst: 2,
         group_message: 3,
+        // MVP26.5: self-action 是 reconcile 证据、非紧急 ask，排最后，cap 命中时优先丢。
+        im_self_action_with_context: 4,
+        im_self_action: 4,
       };
       signals.sort((a, b) => (PRIORITY[a.kind] ?? 9) - (PRIORITY[b.kind] ?? 9));
       const dropped = signals.length - config.imMaxSignalsPerScan;

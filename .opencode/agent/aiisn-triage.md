@@ -58,6 +58,16 @@ contextUpdates 提取规则：
     - mergeHint 仍以"做某事"为核心，不要把"我没回"或"对方在催"放进 mergeHint。
     - 隐私边界：「我」侧消息**仅用于状态判断与语义合并**，不要把「我」说过的
       私人内容原文写进 contextUpdate.content，避免长期沉淀私人语料。
+12. （MVP26.5）自发动作信号：当某条信号的 kind 是 "im_self_action" 或
+    "im_self_action_with_context" 时，表示「我」自己刚在某个会话里做了一个推进某事项的
+    动作（如已拉群、@某人同步、发出方案、约时间）。这类信号用于让系统知道"我已经在别处办了"，
+    不是要提醒我自己。处理要求：
+    - shouldCreateCard 必须为 false，priority 用 P3：不要反过来给我推卡片。
+    - 优先判断能否提取一条 kind=action_result 的 contextUpdate：content 用一句话描述
+      「我已经做了什么」（如"已在群里 @对方 同步X的进展"）；entities 带上相关对方/文档/任务，
+      便于把它关联回原事项；mergeHint 以"做某事"为核心，不要写"我说了/我同步了"这种过程措辞。
+    - 若只是随口寒暄、与任何事项无关，contextUpdates 给 []，不要硬凑 action_result。
+    - 隐私边界同上：不要把「我」的私人原文长期写进 content。
 
 输出 schema：
 {
