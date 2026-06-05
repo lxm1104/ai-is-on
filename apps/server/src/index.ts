@@ -32,6 +32,7 @@ import { toneProfileRouter } from './routes/toneProfile.js';
 import { mattersRouter } from './routes/matters.js';
 import { runGraphInducer } from './structure/derived/graphInducer.js';
 import { startCollectorScheduler, stopCollectorScheduler } from './collectors/scheduler.js';
+import { startMatterTracker, stopMatterTracker } from './matter/matterScheduler.js';
 import { startTriggerScheduler, stopTriggerScheduler } from './triggers/triggerScheduler.js';
 import { startAttentionScheduler, stopAttentionScheduler } from './attention/attentionEngine.js';
 import { bootstrapAgents } from './agents/index.js';
@@ -92,6 +93,8 @@ server.listen(config.port, '127.0.0.1', () => {
   migrateUserRulesIfNeeded();
   bootstrapAgents();
   startCollectorScheduler();
+  // MVP27 §10.2：Matter tracker 注册在 trigger/attention 之前，先归并事项状态。
+  startMatterTracker();
   startTriggerScheduler();
   startAttentionScheduler();
   // MVP15A §7.2.1: 10s 后台预热 graph inducer（首次 LLM project taxonomy 慢，
@@ -109,6 +112,9 @@ const shutdown = async (signal: string) => {
   console.log(`[server] received ${signal}, shutting down`);
   try {
     stopCollectorScheduler();
+  } catch {}
+  try {
+    stopMatterTracker();
   } catch {}
   try {
     stopTriggerScheduler();

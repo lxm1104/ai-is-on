@@ -155,6 +155,25 @@ export type MatterObservation = {
   confidence: number;
 };
 
+// ---- §6.5 Matter Reduce Decision（LLM / 规则判定的统一裁决结果）----
+
+export type MatterReduceAction = 'create' | 'attach' | 'ignore';
+
+export type MatterReduceDecision = {
+  action: MatterReduceAction;
+  /** action='attach' 时指向命中的 Matter */
+  matterId?: string;
+  effect?: MatterContextEffect;
+  status?: MatterStatus;
+  /** action='create' 时给标题；attach 时可选修订 */
+  title?: string;
+  /** 对 currentSummary 的增量修订（attach/create 时可选） */
+  summaryPatch?: string;
+  nextAction?: string | null;
+  confidence: number;
+  reason: string;
+};
+
 // ============ 纯函数 ============
 
 function canonical(s: string): string {

@@ -29,6 +29,7 @@ import { PROJECT_TAXONOMY_SYSTEM_PROMPT } from '../util/projectTaxonomyPrompt.js
 import { PROJECT_PHASE_SYSTEM_PROMPT } from '../util/projectPhasePrompt.js';
 import { DECISION_AUTHORITY_SYSTEM_PROMPT } from '../util/decisionAuthorityPrompt.js';
 import { COLLAB_TYPE_SYSTEM_PROMPT } from '../util/collabTypePrompt.js';
+import { MATTER_REDUCE_SYSTEM_PROMPT } from '../matter/matterReducerPrompt.js';
 
 export type OpencodeAgentName =
   | 'aiisn-chat'
@@ -44,7 +45,8 @@ export type OpencodeAgentName =
   | 'aiisn-project-taxonomy'
   | 'aiisn-project-phase'
   | 'aiisn-decision-authority'
-  | 'aiisn-collab-type';
+  | 'aiisn-collab-type'
+  | 'aiisn-matter-reducer';
 
 type Permission = 'allow' | 'ask' | 'deny';
 type AgentDef = {
@@ -147,6 +149,12 @@ const AGENTS: readonly AgentDef[] = [
     description: 'AI is ON MVP15B 推断两人协作关系类型',
     permission: READ_ONLY,
     prompt: COLLAB_TYPE_SYSTEM_PROMPT,
+  },
+  {
+    name: 'aiisn-matter-reducer',
+    description: 'AI is ON MVP27 Matter Reducer 事项状态判定',
+    permission: READ_ONLY,
+    prompt: MATTER_REDUCE_SYSTEM_PROMPT,
   },
 ];
 

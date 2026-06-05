@@ -8,6 +8,10 @@ import { createCardFromProposal } from '../cards/cardsService.js';
 import { recommendHandling } from '../context/agentContextAssembler.js';
 import { resolveAliased } from '../context/entityResolver.js';
 import {
+  getMatterByCreatedFromContextUnit,
+  listMattersForContextUnit,
+} from '../matter/matterStore.js';
+import {
   computeSelfRoleOnUnit,
   type SelfRoleOnUnit,
 } from '../context/selfRoleOnUnit.js';
@@ -46,6 +50,25 @@ export const trackCommitmentHandler: AgentHandler = async ({
       cardIds: [],
       data: { skipped: 'already_done', actionResultId: packet.latestActionResult.id },
     };
+  }
+
+  // ①.5 MVP27 §10.5：focal commitment 关联的 Matter 若已 resolved/dropped，直接 skip
+  // —— 事项在别处办掉了，Reducer 已归并，别再催。（MVP27 阶段 commitment_due trigger 仍可写入，
+  // 但 agent 层必须 skip。）
+  if (unit?.id) {
+    const linked: Array<{ id: string; status: string }> = [];
+    const own = getMatterByCreatedFromContextUnit(unit.id);
+    if (own) linked.push(own);
+    for (const { matter } of listMattersForContextUnit(unit.id)) linked.push(matter);
+    const done = linked.find((m) => m.status === 'resolved' || m.status === 'dropped');
+    if (done) {
+      return {
+        summary: `commitment skipped (matter ${done.id} ${done.status})`,
+        proposalIds: [],
+        cardIds: [],
+        data: { skipped: 'matter_resolved', matterId: done.id, matterStatus: done.status },
+      };
+    }
   }
 
   const title = payload?.commitmentTitle ?? unit?.title ?? '一项承诺';
