@@ -29,6 +29,7 @@ import {
   insertAttentionItem,
   listLiveAttentionItems,
   markAttentionItemsSupersededByHash,
+  markAttentionItemsSupersededForResolvedMatters,
   markAttentionItemsExpired,
   startEngineRun,
   finishEngineRun,
@@ -93,6 +94,12 @@ async function doRunAttentionTick(
     console.log(`[attention] TTL expired ${expiredCount} items older than ${ITEM_TTL_HOURS}h`);
   }
 
+  // 0.5) MVP28：清理绑定到已 resolved/dropped Matter 的旧卡（"已处理还在催"的最后一环）。
+  const matterClearedCount = markAttentionItemsSupersededForResolvedMatters(startedAt);
+  if (matterClearedCount > 0) {
+    console.log(`[attention] superseded ${matterClearedCount} items bound to resolved/dropped matters`);
+  }
+
   // 1) 组装 packet
   const packet = assembleGlobalContextPacket();
   const currentLive = listLiveAttentionItems(20);
@@ -104,6 +111,7 @@ async function doRunAttentionTick(
     uncertaintiesCount: packet.uncertainties.length,
     recentEventsCount: packet.recentEvents.length,
     topActiveCount: packet.topActive.length,
+    mattersCount: packet.matters.length,
     stakeholdersCount: packet.stakeholders.length,
     preferencesCount: packet.preferences.length,
     boundaryRulesCount: packet.boundaryRules.length,

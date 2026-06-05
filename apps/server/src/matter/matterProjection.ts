@@ -16,7 +16,9 @@ import type {
   MatterContextEffect,
   MatterContextRelation,
   MatterEntityRole,
+  MatterPriority,
   MatterStatus,
+  MatterType,
 } from './matterTypes.js';
 import {
   getMatterById,
@@ -150,4 +152,82 @@ export function projectMatters(
     spaces: hydrateSpaces(matter),
     evidenceCount: listMatterContextLinks(matter.id).length,
   }));
+}
+
+// ============ MVP28 §7.2：给 attention packet 的紧凑 Matter 投影 ============
+
+export type MatterInPacket = {
+  id: string;
+  title: string;
+  type: MatterType;
+  status: MatterStatus;
+  priority: MatterPriority;
+  dueAt?: string | null;
+  currentSummary: string;
+  nextAction?: string | null;
+  owner?: string;
+  participants: string[];
+  spaces: MatterSpaceView[];
+  latestEvidence: Array<{
+    contextUnitId: string;
+    kind?: string;
+    title?: string;
+    effect: MatterContextEffect;
+    at: string;
+  }>;
+};
+
+// 只投 active 事项（resolved/dropped 不进 attention——已了结，不再提醒）。
+const PACKET_STATUSES: MatterStatus[] = [
+  'open',
+  'acknowledged',
+  'in_progress',
+  'waiting',
+  'blocked',
+];
+const PRIORITY_ORDER: Record<MatterPriority, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
+
+export function projectMattersForPacket(opts: { limit?: number } = {}): MatterInPacket[] {
+  const limit = opts.limit ?? 30;
+  const matters = listMatters({ statuses: PACKET_STATUSES, limit: 200 });
+  matters.sort((a, b) => {
+    const pa = PRIORITY_ORDER[a.priority] ?? 3;
+    const pb = PRIORITY_ORDER[b.priority] ?? 3;
+    if (pa !== pb) return pa - pb;
+    return b.updatedAt.localeCompare(a.updatedAt);
+  });
+  return matters.slice(0, limit).map((m) => {
+    const participants: string[] = [];
+    for (const e of listMatterEntities(m.id)) {
+      const ent = getContextEntityById(e.entityId);
+      if (ent?.type === 'person' && ent.name) participants.push(ent.name);
+    }
+    const owner = m.ownerEntityId ? getContextEntityById(m.ownerEntityId)?.name : undefined;
+    const latestEvidence = listMatterContextLinks(m.id)
+      .slice(-3)
+      .map((l) => {
+        const u = getContextUnit(l.contextUnitId);
+        return {
+          contextUnitId: l.contextUnitId,
+          kind: u?.kind,
+          title: u?.title,
+          effect: l.effect,
+          at: l.createdAt,
+        };
+      });
+    return {
+      id: m.id,
+      title: m.title,
+      type: m.type,
+      status: m.status,
+      priority: m.priority,
+      dueAt: m.dueAt ?? null,
+      currentSummary: m.currentSummary,
+      nextAction: m.nextAction ?? null,
+      owner: owner ?? undefined,
+      participants: [...new Set(participants)].slice(0, 6),
+      spaces: hydrateSpaces(m),
+      latestEvidence,
+    };
+  });
 }

@@ -111,6 +111,19 @@ export const ATTENTION_SYSTEM_PROMPT = `你是用户的「注意力管家」。
     d) \`src=manual\` / \`src=card_action\` / \`src=agent_run\` / \`src=system_feedback\` ——
        用户或 agent 显式写入，按内容本身判断。
     e) 缺 \`[src=...]\` 标签 = 装配未注入或未知来源，按内容判断，不作来源加权。
+16. （MVP28）\`<matters>\` 是「事项」(Matter)——系统把同一件正在进行的事的多条证据收拢成的**状态**，
+    比散乱的 commitment/event 更接近"这件事现在到哪了"。**优先用 Matter 解释"现在该关注什么"**。
+    行尾带 \`[status=.. priority=.. type=.. due=..]\`，并附 owner / 参与人 / 当前摘要 / 下一步 / 最近证据。
+    a) \`<matters>\` 里只会给到 **active** 的事项（resolved / dropped 已经办完或放弃，不会出现，也不要再提醒——
+       系统会自动清理对应旧卡）。
+    b) **一个 Matter 最多对应一条 live attention item**。出这条 item 时，必须把该 Matter 的 id 填进字段
+       \`matterId\`（取 \`<matters>\` 里的 \`[id]\`）；这样该 Matter 在别处被办掉后，系统能按 matterId 自动清掉这张卡。
+       如果 \`<currentAttention>\` 里已有讲同一 Matter 的旧 item，用 \`supersedeIds\` 替换它，而不是新开一条。
+    c) \`status=blocked\` 的 Matter **抬一档**（有阻塞，需要解阻）。
+    d) \`status=waiting\` 的 Matter 默认**不催用户**（在等别人 / 等外部条件）；只有 \`due\` 已过或明显长期 stale 才出 item，
+       且文案是"在等 X，要不要跟一下"，不要写"你该做 X"。
+    e) \`status=open\` 的 Matter 只在长期没动静（stale）或 \`due\` 临近时才出 item。
+    f) Matter 与下面的 \`<commitments>\` 可能讲同一件事——不要两边各出一条；以 Matter 为准，commitment 作为证据。
 【处理角度 processingOptions】（仅 priority='P0' 或 'P1' 的 item 才生成；P2/P3 一律省略此字段）
 为高优 item 给出 2–3 个**彼此不重叠**的「处理角度」，描述这条可以怎么交给 AI 处理。每个角度：
   - \`label\`：≤6 字动词短语（如「起草回复」「梳理要点」「拟成待办」）；
@@ -138,6 +151,7 @@ export const ATTENTION_SYSTEM_PROMPT = `你是用户的「注意力管家」。
       "recommendedAgent": null,
       "expiresAt": null,
       "supersedeIds": [],
+      "matterId": null,
       "processingOptions": [
         { "id": "draft_reply", "label": "起草回复", "directive": "基于我当前进度，起草一条可直接发出的回复，仅草稿。" },
         { "id": "summarize", "label": "梳理要点", "directive": "把这条对话/事件浓缩成 3 条要点供我快速决策。" },
@@ -191,6 +205,9 @@ export function buildAttentionUserMessage(
   blocks.push(
     renderUnitsBlock('uncertainties', packet.uncertainties, '用户的不确定性/未决问题')
   );
+
+  // MVP28：事项状态层（Matter）—— 比散乱 context 更接近"这件事到哪了"
+  blocks.push(renderMatters(packet.matters));
 
   // recentEvents（近 24h）
   blocks.push(
@@ -399,6 +416,32 @@ function renderUnitOneLine(
   return parts.join(' ');
 }
 
+// MVP28 §7.2：渲染 active 事项（Matter）。行尾带 [status/priority/type]，附 owner / 参与人 /
+// 当前摘要 / 下一步 / 最近证据。LLM 优先用 Matter 解释"现在该关注什么"。
+function renderMatters(matters: GlobalContextPacket['matters']): string {
+  if (!matters || matters.length === 0) return '<matters/>';
+  const lines: string[] = [
+    `<matters count="${matters.length}"><!-- 事项状态层：优先用它解释"现在该关注什么、为什么" -->`,
+  ];
+  for (const m of matters) {
+    const tagParts = [`status=${m.status}`, `priority=${m.priority}`, `type=${m.type}`];
+    if (m.dueAt) tagParts.push(`due=${formatTime(m.dueAt)}`);
+    const owner = m.owner ? ` owner:${m.owner}` : '';
+    const who = m.participants.length ? ` 参与:${m.participants.slice(0, 4).join('、')}` : '';
+    lines.push(`- [${m.id}] ${m.title} [${tagParts.join(' ')}]${owner}${who}`);
+    if (m.currentSummary) lines.push(`  · ${m.currentSummary.replace(/\s+/g, ' ').slice(0, 100)}`);
+    if (m.nextAction) lines.push(`  · 下一步：${m.nextAction.slice(0, 60)}`);
+    if (m.latestEvidence.length) {
+      const ev = m.latestEvidence
+        .map((e) => `${e.effect}:${(e.title ?? e.kind ?? '').replace(/\s+/g, ' ').slice(0, 20)}`)
+        .join(' / ');
+      lines.push(`  · 最近证据：${ev}`);
+    }
+  }
+  lines.push('</matters>');
+  return lines.join('\n');
+}
+
 function renderStakeholders(stake: GlobalContextPacket['stakeholders']): string {
   if (stake.length === 0) return '<stakeholders/>';
   const lines: string[] = ['<stakeholders>'];
@@ -574,6 +617,9 @@ function coerceItem(raw: unknown): AttentionLLMItem | null {
     recommendedAgent,
     expiresAt,
     supersedeIds: coerceStringArray(o.supersedeIds),
+    // MVP28：item 绑定的 Matter id（让系统在该 Matter resolved 后按此清卡）
+    matterId:
+      typeof o.matterId === 'string' && o.matterId.trim() ? o.matterId.trim() : undefined,
     // MVP23：仅当 LLM 给了有效角度才带上；P2/P3 或缺失 → undefined → 单按钮
     processingOptions: coerceProcessingOptions(o.processingOptions),
   };

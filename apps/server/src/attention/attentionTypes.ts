@@ -49,6 +49,8 @@ export type AttentionLLMItem = {
   supersedeIds?: string[];
   /** MVP23：仅 P0/P1 item 才生成；缺失/空 → 卡片退回单个「让 AI 处理」按钮。 */
   processingOptions?: ProcessingOption[];
+  /** MVP28：这条 item 讲的是哪个 Matter（取 packet.matters[].id）；该 Matter resolved 后系统按此自动清卡。 */
+  matterId?: string;
 };
 
 // 持久化后、对外提供的领域类型（attentionStore 将 AttentionItemRow 反序列化为此形状）。
@@ -69,6 +71,7 @@ export type AttentionItem = {
   expiresAt: string | null;
   sourceKind: string;            // 默认 'attention'，后续可能扩展
   actionOptions: ProcessingOption[] | null;  // MVP23：处理角度；null = 未生成/已降级（禁止存 []）
+  matterId: string | null;       // MVP28：绑定的 Matter id（null = 这条不是 Matter 投影）
   createdAt: string;
   updatedAt: string;
 };
@@ -93,6 +96,7 @@ export type AttentionInputSummary = {
   uncertaintiesCount: number;
   recentEventsCount: number;
   topActiveCount: number;
+  mattersCount: number;          // MVP28：进入 packet 的 active Matter 数量
   stakeholdersCount: number;
   preferencesCount: number;
   boundaryRulesCount: number;

@@ -868,6 +868,9 @@ CREATE INDEX IF NOT EXISTS idx_attention_expires_at ON attention_items(expires_a
 -- MVP23：attention 卡片处理角度（ProcessingOption[] JSON，nullable=单按钮）。
 -- 注：必须在 attention_items 建表语句之后调用 ensureColumn。`);
 ensureColumn('attention_items', 'action_options_json', 'TEXT');
+// MVP28：把 attention item 绑定到 Matter，便于 Matter resolved/dropped 后按 matter_id 快速清旧卡。
+ensureColumn('attention_items', 'matter_id', 'TEXT');
+db.exec(`CREATE INDEX IF NOT EXISTS idx_attention_matter ON attention_items(matter_id);`);
 db.exec(`
 
 -- 用户对 attention item 的轻量交互日志。
@@ -2655,6 +2658,7 @@ export type AttentionItemRow = {
   expires_at: string | null;
   source_kind: string;
   action_options_json: string | null;  // MVP23：ProcessingOption[] JSON；null=单按钮
+  matter_id: string | null;             // MVP28：item 讲的是哪个 Matter（resolved 后按此清卡）
   raw_json: string;
   created_at: string;
   updated_at: string;
@@ -2665,14 +2669,29 @@ export function insertAttentionItem(row: AttentionItemRow): void {
     `INSERT INTO attention_items
        (id, generation, llm_run_id, input_hash, priority, title, why, suggested_action,
         signal_ids_json, related_entity_ids_json, related_space_ids_json,
-        recommended_agent, status, expires_at, source_kind, action_options_json, raw_json,
+        recommended_agent, status, expires_at, source_kind, action_options_json, matter_id, raw_json,
         created_at, updated_at)
      VALUES
        (@id, @generation, @llm_run_id, @input_hash, @priority, @title, @why, @suggested_action,
         @signal_ids_json, @related_entity_ids_json, @related_space_ids_json,
-        @recommended_agent, @status, @expires_at, @source_kind, @action_options_json, @raw_json,
+        @recommended_agent, @status, @expires_at, @source_kind, @action_options_json, @matter_id, @raw_json,
         @created_at, @updated_at)`
   ).run(row);
+}
+
+// MVP28：把绑定到已 resolved/dropped Matter 的 live attention item 一次性标 superseded。
+// 每次 attention tick 开头调用，保证 Matter 在别处办掉后旧卡自动消失。
+export function markAttentionSupersededForResolvedMatters(updatedAt: string): number {
+  const r = db
+    .prepare(
+      `UPDATE attention_items
+         SET status = 'superseded', updated_at = ?
+       WHERE status = 'live'
+         AND matter_id IS NOT NULL
+         AND matter_id IN (SELECT id FROM matters WHERE status IN ('resolved','dropped'))`
+    )
+    .run(updatedAt);
+  return r.changes;
 }
 
 export function getAttentionItem(id: string): AttentionItemRow | null {

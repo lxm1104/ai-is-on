@@ -11,6 +11,7 @@ import {
   listLiveAttentionItems as dbListLiveAttentionItems,
   updateAttentionItemStatus as dbUpdateAttentionItemStatus,
   markAttentionItemsSupersededByHash as dbMarkSupersededByHash,
+  markAttentionSupersededForResolvedMatters as dbMarkSupersededForResolvedMatters,
   markAttentionItemsExpired as dbMarkExpired,
   insertAttentionEngineRun as dbInsertEngineRun,
   updateAttentionEngineRun as dbUpdateEngineRun,
@@ -104,6 +105,7 @@ export function rowToAttentionItem(row: AttentionItemRow): AttentionItem {
     expiresAt: row.expires_at,
     sourceKind: row.source_kind,
     actionOptions: parseActionOptions(row.action_options_json),
+    matterId: row.matter_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -146,6 +148,7 @@ export function insertAttentionItem(input: InsertAttentionItemInput): AttentionI
     action_options_json: llmItem.processingOptions?.length
       ? JSON.stringify(llmItem.processingOptions)
       : null,
+    matter_id: llmItem.matterId ?? null,
     raw_json: JSON.stringify(llmItem),
     created_at: now,
     updated_at: now,
@@ -184,6 +187,14 @@ export function markAttentionItemsSupersededByHash(
   now: string
 ): number {
   return dbMarkSupersededByHash(inputHash, now);
+}
+
+/**
+ * MVP28：把绑定到已 resolved/dropped Matter 的 live item 标 superseded。
+ * 每次 tick 开头调用，保证 Matter 在别处办掉后旧卡自动消失（不依赖 LLM 主动 supersede）。
+ */
+export function markAttentionItemsSupersededForResolvedMatters(now: string): number {
+  return dbMarkSupersededForResolvedMatters(now);
 }
 
 /**

@@ -102,6 +102,31 @@ permission:
     d) `src=manual` / `src=card_action` / `src=agent_run` / `src=system_feedback` ——
        用户或 agent 显式写入，按内容本身判断。
     e) 缺 `[src=...]` 标签 = 装配未注入或未知来源，按内容判断，不作来源加权。
+16. （MVP28）`<matters>` 是「事项」(Matter)——系统把同一件正在进行的事的多条证据收拢成的**状态**，
+    比散乱的 commitment/event 更接近"这件事现在到哪了"。**优先用 Matter 解释"现在该关注什么"**。
+    行尾带 `[status=.. priority=.. type=.. due=..]`，并附 owner / 参与人 / 当前摘要 / 下一步 / 最近证据。
+    a) `<matters>` 里只会给到 **active** 的事项（resolved / dropped 已经办完或放弃，不会出现，也不要再提醒——
+       系统会自动清理对应旧卡）。
+    b) **一个 Matter 最多对应一条 live attention item**。出这条 item 时，必须把该 Matter 的 id 填进字段
+       `matterId`（取 `<matters>` 里的 `[id]`）；这样该 Matter 在别处被办掉后，系统能按 matterId 自动清掉这张卡。
+       如果 `<currentAttention>` 里已有讲同一 Matter 的旧 item，用 `supersedeIds` 替换它，而不是新开一条。
+    c) `status=blocked` 的 Matter **抬一档**（有阻塞，需要解阻）。
+    d) `status=waiting` 的 Matter 默认**不催用户**（在等别人 / 等外部条件）；只有 `due` 已过或明显长期 stale 才出 item，
+       且文案是"在等 X，要不要跟一下"，不要写"你该做 X"。
+    e) `status=open` 的 Matter 只在长期没动静（stale）或 `due` 临近时才出 item。
+    f) Matter 与下面的 `<commitments>` 可能讲同一件事——不要两边各出一条；以 Matter 为准，commitment 作为证据。
+【处理角度 processingOptions】（仅 priority='P0' 或 'P1' 的 item 才生成；P2/P3 一律省略此字段）
+为高优 item 给出 2–3 个**彼此不重叠**的「处理角度」，描述这条可以怎么交给 AI 处理。每个角度：
+  - `label`：≤6 字动词短语（如「起草回复」「梳理要点」「拟成待办」）；
+  - `id`：小写蛇形稳定标识（如 'draft_reply' / 'summarize' / 'to_task'）；
+  - `directive`：一句话，告诉**执行时的 AI** 具体做什么。约束：
+      (1) **必须是自包含的自然语言，严禁出现 `S#` 引用编号或任何 id**（执行时拿不到 packet）；
+      (2) 默认只产草稿 / 做分析 / 整理，**不发送、不写库**——除非该角度用了 executor='create_task'（见下）。
+  - `executor`：可选，取值 'claude_topic'（默认，把 directive 交给右侧 AI 出草稿/分析）
+      或 'create_task'（该角度点击后**直接在飞书创建一条任务**，适合「拟成待办 / 加入任务」这类角度；
+      仍会弹确认框，directive 用作任务的处理意图说明）。最多 1 个角度用 'create_task'。
+  角度之间差异要清晰；凑不出第二个有区分度的角度，给 1 个也行，不要硬造。
+  用 `recommendedAgent` 当线索但不被它限制；可结合其他承诺 / 用户偏好给跨卡片角度。
 
 输出 schema：
 {
@@ -116,9 +141,16 @@ permission:
       "relatedSpaceIds": [],
       "recommendedAgent": null,
       "expiresAt": null,
-      "supersedeIds": []
+      "supersedeIds": [],
+      "matterId": null,
+      "processingOptions": [
+        { "id": "draft_reply", "label": "起草回复", "directive": "基于我当前进度，起草一条可直接发出的回复，仅草稿。" },
+        { "id": "summarize", "label": "梳理要点", "directive": "把这条对话/事件浓缩成 3 条要点供我快速决策。" },
+        { "id": "to_task", "label": "拟成待办", "directive": "本周交付 API 给李四：明确截止与验收点。", "executor": "create_task" }
+      ]
     }
   ]
 }
+（P2/P3 的 item 不要带 processingOptions 字段。）
 
 如果用户当前没有任何值得关注的事（信号、commitments 全空），输出 { "items": [] }。

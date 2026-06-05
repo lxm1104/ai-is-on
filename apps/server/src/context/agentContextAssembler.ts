@@ -29,6 +29,7 @@ import {
 } from '../db.js';
 import { evaluateCard } from '../boundary/boundaryEvaluator.js';
 import type { Priority } from '../boundary/BoundaryRule.js';
+import { type MatterInPacket, projectMattersForPacket } from '../matter/matterProjection.js';
 import { resolveOrCreateEntity } from './entityResolver.js';
 import {
   parsePersonAttributesFromRow,
@@ -793,6 +794,8 @@ export type GlobalContextPacket = {
   uncertainties: UncertaintyInPacket[];
   recentEvents: ContextUnit[];
   topActive: ContextUnit[];
+  // MVP28 §7.2：active 事项投影（Matter 状态层）。attention 优先用它解释"现在该关注什么"。
+  matters: MatterInPacket[];
   stakeholders: StakeholderInPacket[];
   // MVP15B §6.3：协作圈 top 12 by weight，含 collab_type / decisionRoleHint / business 等
   myTopCollaborators: MyTopCollaboratorInPacket[];
@@ -1009,6 +1012,9 @@ export function assembleGlobalContextPacket(
     createdAt: c.created_at,
   }));
 
+  // -------- 6.5) MVP28 matters slice：active 事项投影 --------
+  const matters = projectMattersForPacket();
+
   // -------- 7) tokenEstimate 粗估（仅供调试，不参与 hash） --------
   const tokenEstimate = estimateGlobalPacketTokens({
     subject,
@@ -1055,6 +1061,15 @@ export function assembleGlobalContextPacket(
     uncertainties: unitFingerprints(uncertainties),
     recentEvents: unitFingerprints(recentEvents),
     topActive: unitFingerprints(topActive),
+    // MVP28：Matter 状态/优先级/最新证据变化都要让 attention 重跑（resolved Matter 会直接掉出 slice）。
+    matters: matters
+      .map((m) => ({
+        id: m.id,
+        s: m.status,
+        p: m.priority,
+        e: m.latestEvidence[m.latestEvidence.length - 1]?.contextUnitId ?? '',
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id)),
     stakeholders: stakeholders.map((s) => s.name).sort(),
     preferences: [...preferences].sort(),
     boundaryRules: boundaryRules
@@ -1089,6 +1104,7 @@ export function assembleGlobalContextPacket(
     uncertainties,
     recentEvents,
     topActive,
+    matters,
     stakeholders,
     myTopCollaborators,
     preferences,
