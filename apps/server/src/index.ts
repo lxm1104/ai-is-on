@@ -29,6 +29,7 @@ import { larkTasksRouter } from './routes/larkTasks.js';
 import { graphRouter } from './routes/graph.js';
 import { projectsRouter } from './routes/projects.js';
 import { toneProfileRouter } from './routes/toneProfile.js';
+import { mattersRouter } from './routes/matters.js';
 import { runGraphInducer } from './structure/derived/graphInducer.js';
 import { startCollectorScheduler, stopCollectorScheduler } from './collectors/scheduler.js';
 import { startTriggerScheduler, stopTriggerScheduler } from './triggers/triggerScheduler.js';
@@ -67,6 +68,7 @@ app.use('/api', larkTasksRouter);
 app.use('/api', graphRouter);
 app.use('/api', projectsRouter);
 app.use('/api', toneProfileRouter);
+app.use('/api', mattersRouter);
 
 const server = http.createServer(app);
 attachWebSocket(server);

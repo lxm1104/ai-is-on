@@ -395,6 +395,90 @@ CREATE TABLE IF NOT EXISTS context_space_suggestions (
 );
 CREATE INDEX IF NOT EXISTS idx_css_space ON context_space_suggestions(space_id);
 CREATE INDEX IF NOT EXISTS idx_css_status ON context_space_suggestions(status);
+
+-- ============ MVP26 Matter 事务状态层 ============
+-- Context 是证据层，Matter 是持续状态层。一条 Matter 把同一件正在进行的事的
+-- 多条 ContextUnit 收拢成一等实体，回答「这件事现在推进到哪了」。
+-- 详见 docs/MVP26-MVP29-Matter事务状态层技术方案.md §4-§5。
+--
+-- 约束：不复用 context_units.status（那是记录可见性 active/archived/superseded）；
+-- Matter 生命周期放在 matters.status。Matter 不存大段原文，只存摘要 + evidence 的
+-- context_unit_id，原文回查 events / context_units。
+
+CREATE TABLE IF NOT EXISTS matters (
+  id TEXT PRIMARY KEY,
+  subject_id TEXT NOT NULL DEFAULT 'me',
+  scope TEXT NOT NULL,
+
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  canonical_key TEXT NOT NULL,           -- 候选召回 + 幂等提示，非 DB 硬唯一约束（见 §5.1）
+
+  status TEXT NOT NULL DEFAULT 'open',
+  priority TEXT NOT NULL DEFAULT 'P2',
+
+  owner_entity_id TEXT,
+  primary_space_id TEXT,
+  due_at TEXT,
+
+  current_summary TEXT NOT NULL DEFAULT '',
+  next_action TEXT,
+
+  created_from_context_unit_id TEXT NOT NULL,
+  last_evidence_context_unit_id TEXT,
+  last_evidence_at TEXT,
+
+  confidence REAL NOT NULL DEFAULT 0.7,
+  reopened_count INTEGER NOT NULL DEFAULT 0,
+  version INTEGER NOT NULL DEFAULT 1,
+
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  resolved_at TEXT,
+  dropped_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_matters_status_updated ON matters(status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_matters_canonical_key ON matters(canonical_key);
+CREATE INDEX IF NOT EXISTS idx_matters_due_at ON matters(due_at);
+CREATE INDEX IF NOT EXISTS idx_matters_created_from ON matters(created_from_context_unit_id);
+
+CREATE TABLE IF NOT EXISTS matter_entities (
+  matter_id TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'about',
+  confidence REAL NOT NULL DEFAULT 0.7,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (matter_id, entity_id, role)
+);
+CREATE INDEX IF NOT EXISTS idx_matter_entities_matter ON matter_entities(matter_id);
+CREATE INDEX IF NOT EXISTS idx_matter_entities_entity ON matter_entities(entity_id);
+
+CREATE TABLE IF NOT EXISTS matter_context_links (
+  matter_id TEXT NOT NULL,
+  context_unit_id TEXT NOT NULL,
+  relation TEXT NOT NULL,
+  effect TEXT NOT NULL,
+  confidence REAL NOT NULL DEFAULT 0.7,
+  reason TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (matter_id, context_unit_id, relation)
+);
+CREATE INDEX IF NOT EXISTS idx_mcl_matter ON matter_context_links(matter_id);
+CREATE INDEX IF NOT EXISTS idx_mcl_context ON matter_context_links(context_unit_id);
+
+CREATE TABLE IF NOT EXISTS matter_transitions (
+  id TEXT PRIMARY KEY,
+  matter_id TEXT NOT NULL,
+  from_status TEXT,
+  to_status TEXT NOT NULL,
+  trigger_context_unit_id TEXT NOT NULL,
+  effect TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  confidence REAL NOT NULL DEFAULT 0.7,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_matter_transitions_matter ON matter_transitions(matter_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_matter_transitions_context ON matter_transitions(trigger_context_unit_id);
 `);
 
 // Forward-compat: add columns that may be missing in databases created by an earlier MVP0 boot.
@@ -3665,4 +3749,209 @@ export function upsertProjectPhase(row: OrgProjectPhaseRow): void {
        llm_classified_at             = excluded.llm_classified_at,
        ttl_until                     = excluded.ttl_until`
   ).run(row);
+}
+
+// ============ MVP26 Matter 事务状态层 ============
+// Row 类型 + 原子 CRUD helper。domain 映射、业务规则、reducer 都在 matter/* 里，
+// 这里只负责 SQL。schema 见本文件上方 `-- MVP26 Matter 事务状态层` 区段。
+
+// -------- matters --------
+
+export type MatterRow = {
+  id: string;
+  subject_id: string;
+  scope: string;
+  type: string;
+  title: string;
+  canonical_key: string;
+  status: string;
+  priority: string;
+  owner_entity_id: string | null;
+  primary_space_id: string | null;
+  due_at: string | null;
+  current_summary: string;
+  next_action: string | null;
+  created_from_context_unit_id: string;
+  last_evidence_context_unit_id: string | null;
+  last_evidence_at: string | null;
+  confidence: number;
+  reopened_count: number;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+  dropped_at: string | null;
+};
+
+export function insertMatter(row: MatterRow): void {
+  db.prepare(
+    `INSERT INTO matters
+       (id, subject_id, scope, type, title, canonical_key, status, priority,
+        owner_entity_id, primary_space_id, due_at, current_summary, next_action,
+        created_from_context_unit_id, last_evidence_context_unit_id, last_evidence_at,
+        confidence, reopened_count, version, created_at, updated_at, resolved_at, dropped_at)
+     VALUES (@id, @subject_id, @scope, @type, @title, @canonical_key, @status, @priority,
+             @owner_entity_id, @primary_space_id, @due_at, @current_summary, @next_action,
+             @created_from_context_unit_id, @last_evidence_context_unit_id, @last_evidence_at,
+             @confidence, @reopened_count, @version, @created_at, @updated_at, @resolved_at, @dropped_at)`
+  ).run(row);
+}
+
+export function updateMatter(row: MatterRow): void {
+  db.prepare(
+    `UPDATE matters SET
+       subject_id = @subject_id, scope = @scope, type = @type, title = @title,
+       canonical_key = @canonical_key, status = @status, priority = @priority,
+       owner_entity_id = @owner_entity_id, primary_space_id = @primary_space_id, due_at = @due_at,
+       current_summary = @current_summary, next_action = @next_action,
+       last_evidence_context_unit_id = @last_evidence_context_unit_id,
+       last_evidence_at = @last_evidence_at, confidence = @confidence,
+       reopened_count = @reopened_count, version = @version, updated_at = @updated_at,
+       resolved_at = @resolved_at, dropped_at = @dropped_at
+     WHERE id = @id`
+  ).run(row);
+}
+
+export function getMatter(id: string): MatterRow | null {
+  return (db.prepare(`SELECT * FROM matters WHERE id = ?`).get(id) as MatterRow | undefined) ?? null;
+}
+
+// MVP26 backfill 幂等：一条 commitment 只 seed 一个 Matter。
+export function getMatterByCreatedFrom(contextUnitId: string): MatterRow | null {
+  return (
+    (db
+      .prepare(
+        `SELECT * FROM matters WHERE created_from_context_unit_id = ? ORDER BY created_at ASC LIMIT 1`
+      )
+      .get(contextUnitId) as MatterRow | undefined) ?? null
+  );
+}
+
+// canonical_key 用于候选召回，不是 DB 硬唯一（见 §5.1）；这里取最近更新的活跃 Matter。
+export function getActiveMatterByCanonicalKey(
+  subjectId: string,
+  canonicalKey: string
+): MatterRow | null {
+  return (
+    (db
+      .prepare(
+        `SELECT * FROM matters
+           WHERE subject_id = ? AND canonical_key = ?
+             AND status NOT IN ('resolved','dropped')
+           ORDER BY updated_at DESC LIMIT 1`
+      )
+      .get(subjectId, canonicalKey) as MatterRow | undefined) ?? null
+  );
+}
+
+export function listMatterRows(
+  opts: { statuses?: string[]; limit?: number; updatedSince?: string } = {}
+): MatterRow[] {
+  const limit = opts.limit ?? 200;
+  const where: string[] = [];
+  const params: Record<string, unknown> = { limit };
+  if (opts.statuses && opts.statuses.length) {
+    const ph = opts.statuses.map((_, i) => `@s${i}`);
+    where.push(`status IN (${ph.join(',')})`);
+    opts.statuses.forEach((s, i) => {
+      params[`s${i}`] = s;
+    });
+  }
+  if (opts.updatedSince) {
+    where.push('updated_at >= @updated_since');
+    params.updated_since = opts.updatedSince;
+  }
+  const sql = `SELECT * FROM matters${where.length ? ' WHERE ' + where.join(' AND ') : ''}
+               ORDER BY updated_at DESC LIMIT @limit`;
+  return db.prepare(sql).all(params) as MatterRow[];
+}
+
+// -------- matter_entities --------
+
+export type MatterEntityRow = {
+  matter_id: string;
+  entity_id: string;
+  role: string;
+  confidence: number;
+  created_at: string;
+};
+
+export function upsertMatterEntity(row: MatterEntityRow): void {
+  db.prepare(
+    `INSERT INTO matter_entities (matter_id, entity_id, role, confidence, created_at)
+     VALUES (@matter_id, @entity_id, @role, @confidence, @created_at)
+     ON CONFLICT(matter_id, entity_id, role) DO UPDATE SET
+       confidence = excluded.confidence`
+  ).run(row);
+}
+
+export function listMatterEntityRows(matterId: string): MatterEntityRow[] {
+  return db
+    .prepare(`SELECT * FROM matter_entities WHERE matter_id = ?`)
+    .all(matterId) as MatterEntityRow[];
+}
+
+// -------- matter_context_links --------
+
+export type MatterContextLinkRow = {
+  matter_id: string;
+  context_unit_id: string;
+  relation: string;
+  effect: string;
+  confidence: number;
+  reason: string;
+  created_at: string;
+};
+
+export function upsertMatterContextLink(row: MatterContextLinkRow): void {
+  db.prepare(
+    `INSERT INTO matter_context_links
+       (matter_id, context_unit_id, relation, effect, confidence, reason, created_at)
+     VALUES (@matter_id, @context_unit_id, @relation, @effect, @confidence, @reason, @created_at)
+     ON CONFLICT(matter_id, context_unit_id, relation) DO UPDATE SET
+       effect = excluded.effect, confidence = excluded.confidence, reason = excluded.reason`
+  ).run(row);
+}
+
+export function listMatterContextLinkRows(matterId: string): MatterContextLinkRow[] {
+  return db
+    .prepare(`SELECT * FROM matter_context_links WHERE matter_id = ? ORDER BY created_at ASC`)
+    .all(matterId) as MatterContextLinkRow[];
+}
+
+// /api/context/units/:id/matters：反查一条 ContextUnit 影响了哪些 Matter。
+export function listMatterLinksForContextUnit(contextUnitId: string): MatterContextLinkRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM matter_context_links WHERE context_unit_id = ? ORDER BY created_at ASC`
+    )
+    .all(contextUnitId) as MatterContextLinkRow[];
+}
+
+// -------- matter_transitions --------
+
+export type MatterTransitionRow = {
+  id: string;
+  matter_id: string;
+  from_status: string | null;
+  to_status: string;
+  trigger_context_unit_id: string;
+  effect: string;
+  reason: string;
+  confidence: number;
+  created_at: string;
+};
+
+export function insertMatterTransition(row: MatterTransitionRow): void {
+  db.prepare(
+    `INSERT INTO matter_transitions
+       (id, matter_id, from_status, to_status, trigger_context_unit_id, effect, reason, confidence, created_at)
+     VALUES (@id, @matter_id, @from_status, @to_status, @trigger_context_unit_id, @effect, @reason, @confidence, @created_at)`
+  ).run(row);
+}
+
+export function listMatterTransitionRows(matterId: string): MatterTransitionRow[] {
+  return db
+    .prepare(`SELECT * FROM matter_transitions WHERE matter_id = ? ORDER BY created_at ASC`)
+    .all(matterId) as MatterTransitionRow[];
 }
