@@ -18,6 +18,7 @@ import type { AttentionStatus } from '../attention/attentionTypes.js';
 import {
   resolveAttentionOriginItems,
   resolveAttentionSignalDetails,
+  signalIdsForOrigin,
 } from '../cards/contextProjection.js';
 
 export const attentionRouter = Router();
@@ -46,8 +47,11 @@ attentionRouter.get('/attention/:id/signals', (req, res) => {
     res.status(404).json({ error: 'attention item not found' });
     return;
   }
-  const signals = resolveAttentionSignalDetails(item.signalIds);
-  const items = resolveAttentionOriginItems(item.signalIds);
+  // MVP29D：先剔除"本条 matterId 自己的值"——matter 不是原始信号，且其 id 可能被 LLM 截断/改错一位
+  // 而查不到，否则会显示成"未解析的 signal"。
+  const sigIds = signalIdsForOrigin(item);
+  const signals = resolveAttentionSignalDetails(sigIds);
+  const items = resolveAttentionOriginItems(sigIds);
   res.json({ attentionId: id, signals, items });
 });
 

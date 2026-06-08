@@ -1,4 +1,4 @@
-import { getCard, db, type EventRow } from '../db.js';
+import { getCard, db, expandTruncatedId, matchMatterId, type EventRow } from '../db.js';
 import {
   findEventContextUnitId,
   getContextUnitById,
@@ -8,13 +8,27 @@ import type { ContextUnit } from '../context/ContextUnit.js';
 import { getAttentionItem } from '../attention/attentionStore.js';
 
 /**
+ * MVP29D：解析某条 attention item 的 signalIds 前，先剔除"本条 matterId 自己的值"。
+ * LLM 常把 matter id 同时写进 matterId 和 signalIds，而 matter 不是原始信号（解不出原文）；
+ * 且 echo 36 位 uuid 时可能截断或改错一位，使其在库里查不到 → 显示"未解析的 signal"。
+ * matchMatterId 只能认出库里仍存在的 matter id；这层按 matterId 同值，连被改坏、查不到的也兜住。
+ * 各读取入口（"查看原始信息"路由 / 卡片投影 / ContextPanel）统一走这里，行为一致。
+ */
+export function signalIdsForOrigin(item: { signalIds: string[]; matterId?: string | null }): string[] {
+  const mid = item.matterId ?? '';
+  return mid ? item.signalIds.filter((s) => s !== mid) : item.signalIds;
+}
+
+/**
  * MVP14 Step3：attention item 的 signalIds 来自 LLM，id 可能指向以下任一表：
  *   1) context_units.id  → 直接 ContextUnit
  *   2) cards.id (source_kind='agent_run') → 解开找 raw_event_id → event ContextUnit
  *   3) events.id          → 找对应的 minimal event ContextUnit
  * 三层兜底：哪种命中就用哪种。
  */
-function resolveAttentionSignals(ids: string[]): ContextUnit[] {
+function resolveAttentionSignals(rawIds: string[]): ContextUnit[] {
+  // MVP29C/D：丢掉误混进 signalIds 的 matter id（matter 不是原始信号），再还原被截断的 8 位前缀
+  const ids = rawIds.filter((id) => !matchMatterId(id)).map(expandTruncatedId);
   const seen = new Set<string>();
   const out: ContextUnit[] = [];
   for (const sid of ids) {
@@ -98,7 +112,7 @@ export function projectCardContext(cardId: string): CardContextProjection {
   // 优先看 attention：现在前端唯一来源是 attention，命中率最高
   const attn = getAttentionItem(cardId);
   if (attn) {
-    const out = resolveAttentionSignals(attn.signalIds);
+    const out = resolveAttentionSignals(signalIdsForOrigin(attn));
     const anchor = out.find((u) => u.kind === 'event') ?? null;
     return {
       cardId,
@@ -424,8 +438,10 @@ export function mergeMessages(all: ParsedImMessage[]): ParsedImMessage[] {
  * calendar / 已弃的 cards 路径等）保持单条 signal。
  */
 export function resolveAttentionOriginItems(
-  ids: string[]
+  rawIds: string[]
 ): AttentionOriginItem[] {
+  // MVP29C/D：丢掉误混进 signalIds 的 matter id（matter 不是原始信号），再还原被截断的 8 位前缀
+  const ids = rawIds.filter((id) => !matchMatterId(id)).map(expandTruncatedId);
   // 先按现有逻辑解出每个 sid 对应的 (signal, event?) ，IM 暂存待合并
   const standalone: AttentionSignalDetail[] = [];
   type Pending = { signal: AttentionSignalDetail; ev: EventRow };
@@ -561,8 +577,10 @@ export function resolveAttentionOriginItems(
 }
 
 export function resolveAttentionSignalDetails(
-  ids: string[]
+  rawIds: string[]
 ): AttentionSignalDetail[] {
+  // MVP29C/D：丢掉误混进 signalIds 的 matter id（matter 不是原始信号），再还原被截断的 8 位前缀
+  const ids = rawIds.filter((id) => !matchMatterId(id)).map(expandTruncatedId);
   const seenKey = new Set<string>();
   const out: AttentionSignalDetail[] = [];
 

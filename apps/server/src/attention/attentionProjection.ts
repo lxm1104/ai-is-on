@@ -15,14 +15,15 @@ import type {
   SignalCard,
 } from '../claude/protocol.js';
 import type { AttentionItem, AttentionStatus } from './attentionTypes.js';
-import { resolveAttentionSignalDetails } from '../cards/contextProjection.js';
+import { resolveAttentionSignalDetails, signalIdsForOrigin } from '../cards/contextProjection.js';
 
 export function projectAttentionItemToCard(item: AttentionItem): SignalCard {
   // 后续："查看原始信息"——若所有 signal 指向同一个 url，就透出为顶层 sourceUrl，
   // 让卡片直接出现"打开原文 ↗"按钮（多个不同 url 时不强行选一个，留给抽屉展示）。
   let inferredSourceUrl: string | undefined;
-  if (item.signalIds.length > 0) {
-    const details = resolveAttentionSignalDetails(item.signalIds);
+  const originIds = signalIdsForOrigin(item);
+  if (originIds.length > 0) {
+    const details = resolveAttentionSignalDetails(originIds);
     const urls = Array.from(
       new Set(details.map((d) => d.url).filter((u): u is string => !!u))
     );

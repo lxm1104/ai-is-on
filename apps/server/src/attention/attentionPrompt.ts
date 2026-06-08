@@ -4,6 +4,7 @@
 // 输出 = ≤8 条 ranked AttentionItem（严格 JSON）。
 
 import { jsonrepair } from 'jsonrepair';
+import { expandTruncatedId, matchMatterId } from '../db.js';
 import type { GlobalContextPacket } from '../context/agentContextAssembler.js';
 import type { ContextUnit } from '../context/ContextUnit.js';
 import type { ContextLayerHint, ContextSource } from '../context/layerClassifier.js';
@@ -31,7 +32,7 @@ export const ATTENTION_SYSTEM_PROMPT = `你是用户的「注意力管家」。
 
 铁律：
 1. 每一条 item 的 \`why\` 必须引用 packet 内的具体 id（unit id / entity id / space id）或具体名字。不要写空话。
-2. \`signalIds\` 必须只包含 packet 里出现过的 unit id 或 event id（也就是 commitments/goals/uncertainties/recentEvents/topActive 的 .id 字段）；找不到证据宁可不出条。
+2. \`signalIds\` 必须只包含 packet 里出现过的 unit id 或 event id（也就是 commitments/goals/uncertainties/recentEvents/topActive 的 .id 字段），且**逐字照抄完整 id，不要缩写**；找不到证据宁可不出条。注意：\`<matters>\` 里的 \`[id]\` 是 matter id，**不是** signal，绝不要放进 \`signalIds\`——它只填到 \`matterId\`。
 3. \`relatedSpaceIds\` / \`relatedEntityIds\` 同理，只能引用 packet 里 spaces[].id / stakeholders 涉及到的人名（无 entity id 就别填）。
 4. 不要发明 deadline、不要发明 owner、不要发明会议时间。原文没有的就当没有。
 5. 看 \`<currentAttention>\` 里已经在 live 的 item。对每一条旧 item，你只有三种选择：
@@ -117,7 +118,8 @@ export const ATTENTION_SYSTEM_PROMPT = `你是用户的「注意力管家」。
     a) \`<matters>\` 里只会给到 **active** 的事项（resolved / dropped 已经办完或放弃，不会出现，也不要再提醒——
        系统会自动清理对应旧卡）。
     b) **一个 Matter 最多对应一条 live attention item**。出这条 item 时，必须把该 Matter 的 id 填进字段
-       \`matterId\`（取 \`<matters>\` 里的 \`[id]\`）；这样该 Matter 在别处被办掉后，系统能按 matterId 自动清掉这张卡。
+       \`matterId\`（取 \`<matters>\` 里的 \`[id]\`，**完整照抄、不要缩写**）；这样该 Matter 在别处被办掉后，系统能按 matterId 自动清掉这张卡。
+       Matter 的 \`[id]\` **只填到 \`matterId\`，不要再放进 \`signalIds\`**（signalIds 只放 commitment/goal/event 这类原始信号；matter 不是原始信号）。
        如果 \`<currentAttention>\` 里已有讲同一 Matter 的旧 item，用 \`supersedeIds\` 替换它，而不是新开一条。
     c) \`status=blocked\` 的 Matter **抬一档**（有阻塞，需要解阻）。
     d) \`status=waiting\` 的 Matter 默认**不催用户**（在等别人 / 等外部条件）；只有 \`due\` 已过或明显长期 stale 才出 item，
@@ -556,6 +558,27 @@ function coerceStringArray(raw: unknown): string[] {
   return out;
 }
 
+// MVP29D：matterId 规整 —— 取字符串、把被截断的 matter id 前缀还原成完整 id；
+// 命中不到 matter（空 / 非 matter）就保留原值（不强行清空，兼容旧行为）。
+function coerceMatterId(raw: unknown): string | undefined {
+  if (typeof raw !== 'string' || !raw.trim()) return undefined;
+  const v = raw.trim();
+  return matchMatterId(v) ?? v;
+}
+
+// MVP29D：signalIds 规整。matter id 不是"原始信号"（解不出原文），却常被 LLM 同时写进 matterId 和
+// signalIds，且可能被截断成 8 位、甚至 echo 36 位 uuid 时改错一位 → 库里查不到。三层兜底：
+//   ① 与本条 matterId 同值的（按原始串比，连被改错一位的 uuid 也能兜住）；
+//   ② 库里仍认得出的 matter id（matchMatterId，含唯一前缀）；
+//   ③ 余下的把被截断的 8 位前缀还原成完整 id（expandTruncatedId）。
+function coerceSignalIds(rawSignalIds: unknown, rawMatterId: unknown): string[] {
+  const matterRaw = typeof rawMatterId === 'string' ? rawMatterId.trim() : '';
+  return coerceStringArray(rawSignalIds)
+    .filter((id) => !(matterRaw && id === matterRaw))
+    .filter((id) => !matchMatterId(id))
+    .map(expandTruncatedId);
+}
+
 // MVP23：处理角度防御解析。坏/空 → undefined（落库 null → 卡片单按钮）。
 // 任何异常只丢这个字段，绝不让 item 解析失败。
 const REF_TOKEN_IN_TEXT = /\bS\d+\b/; // directive 误含 S# 引用编号 → 丢弃（resolveAttentionRefs 不处理该字段）
@@ -611,15 +634,18 @@ function coerceItem(raw: unknown): AttentionLLMItem | null {
     title,
     why,
     suggestedAction,
-    signalIds: coerceStringArray(o.signalIds),
+    // MVP29C/D：规整 signalIds —— 把 matter id 踢出去（matter 用 matterId 绑定、不是原始信号，
+    // 否则"查看原始信息"显示"未解析的 signal"），再把被截断的 8 位前缀还原成完整 id。
+    signalIds: coerceSignalIds(o.signalIds, o.matterId),
     relatedEntityIds: coerceStringArray(o.relatedEntityIds),
     relatedSpaceIds: coerceStringArray(o.relatedSpaceIds),
     recommendedAgent,
     expiresAt,
     supersedeIds: coerceStringArray(o.supersedeIds),
     // MVP28：item 绑定的 Matter id（让系统在该 Matter resolved 后按此清卡）
-    matterId:
-      typeof o.matterId === 'string' && o.matterId.trim() ? o.matterId.trim() : undefined,
+    // MVP29D：LLM 可能把 matter id 截断成 8 位 —— 还原成完整 id，否则 auto-clear 按 matter_id
+    // 前缀匹配虽有兜底，但落库就存完整 id 最干净（"已处理还在催"的根因之一）。
+    matterId: coerceMatterId(o.matterId),
     // MVP23：仅当 LLM 给了有效角度才带上；P2/P3 或缺失 → undefined → 单按钮
     processingOptions: coerceProcessingOptions(o.processingOptions),
   };

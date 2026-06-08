@@ -1392,6 +1392,46 @@ export function getContextUnit(id: string): ContextUnitRow | null {
   );
 }
 
+// MVP29C：attention 的 LLM 偶尔把 signalId 缩成 8 位前缀落库（非完整 UUID），
+// 导致后续按 id 精确匹配查不到 → 卡片显示"未解析的 signal / 无原文链接"。
+// 这里把"看起来像被截断的 UUID 前缀"的短 token 按唯一前缀还原成完整 id：
+//   - 已是完整/普通 id（≥36 或不像 uuid 前缀）→ 原样返回
+//   - 在 context_units / cards / events 里唯一前缀命中 → 返回完整 id
+//   - 查不到或前缀歧义（命中多行）→ 原样返回，交由调用方落到 unknown
+// 查找顺序与 resolveAttentionOriginItems 的三级兜底一致：context_units → cards → events。
+export function expandTruncatedId(id: string): string {
+  // 完整 UUID 长 36（含连字符）；只对更短、且仅含十六进制/连字符的 token 尝试还原。
+  if (!/^[0-9a-f-]{4,35}$/i.test(id)) return id;
+  for (const table of ['context_units', 'cards', 'events'] as const) {
+    const rows = db
+      .prepare(`SELECT id FROM ${table} WHERE id LIKE ? LIMIT 2`)
+      .all(`${id}%`) as Array<{ id: string }>;
+    if (rows.length === 1) return rows[0].id;
+  }
+  return id;
+}
+
+// MVP29D：matter（事项）有独立 id 空间，既不是 ContextUnit/card/event，也不该混进 signalIds
+// —— matter 用 attention_items.matter_id 绑定，不是"原始信号"，解不出原文。判断一个 id 是否指向 matter：
+//   - 精确命中 → 返回完整 matter id
+//   - 唯一前缀命中（LLM 把 matter id 也截断成 8 位）→ 返回完整 matter id
+//   - 否则 → null
+// 用途：① 解析时把 matterId 还原成完整 id（auto-clear 才能按 matter 状态清卡）；
+//       ② 把误混进 signalIds 的 matter id 过滤掉（否则"查看原始信息"显示"未解析的 signal"）。
+export function matchMatterId(id: string): string | null {
+  if (!id) return null;
+  const exact = db.prepare(`SELECT id FROM matters WHERE id = ?`).get(id) as
+    | { id: string }
+    | undefined;
+  if (exact) return exact.id;
+  // 仅对"像被截断的 UUID 前缀"的短 token 做前缀兜底；完整 id（≥36）已在上面精确处理。
+  if (!/^[0-9a-f-]{4,35}$/i.test(id)) return null;
+  const rows = db
+    .prepare(`SELECT id FROM matters WHERE id LIKE ? LIMIT 2`)
+    .all(`${id}%`) as Array<{ id: string }>;
+  return rows.length === 1 ? rows[0].id : null;
+}
+
 export function getActiveContextUnitByOrigin(
   originKind: string,
   originRefId: string
@@ -2707,7 +2747,13 @@ export function markAttentionSupersededForResolvedMatters(updatedAt: string): nu
          SET status = 'superseded', updated_at = ?
        WHERE status = 'live'
          AND matter_id IS NOT NULL
-         AND matter_id IN (SELECT id FROM matters WHERE status IN ('resolved','dropped'))`
+         -- MVP29D：matter_id 可能被 LLM 截断成 8 位前缀落库，用前缀匹配兜底，
+         -- 否则 resolved/dropped 的 matter 永远清不掉旧卡（"已处理还在催"）。
+         AND EXISTS (
+           SELECT 1 FROM matters m
+            WHERE m.status IN ('resolved','dropped')
+              AND m.id LIKE attention_items.matter_id || '%'
+         )`
     )
     .run(updatedAt);
   return r.changes;
