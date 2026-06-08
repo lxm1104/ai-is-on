@@ -314,7 +314,13 @@ async function applyAttentionAction(
   opts?: { extraPrompt?: string }
 ): Promise<CardActionResult> {
   const actions = defaultAttentionActions(attn);
-  const action = actions.find((a) => a.id === actionId);
+  let action = actions.find((a) => a.id === actionId);
+  // MVP23：有角度的卡片其投影动作里没有通用 'ask_agent'（只有 opt:* 角度按钮）。
+  //   但前端「让 AI 处理」自定义指令输入框需要一个通用处理通道——允许 'ask_agent' 作为合法动作，
+  //   走 rich prompt + 用户指令、不带任何角度 directive。
+  if (!action && actionId === 'ask_agent') {
+    action = { id: 'ask_agent', label: '让 AI 处理', kind: 'ask_agent' };
+  }
   if (!action) return { ok: false, error: `unknown action ${actionId}` };
 
   const now = new Date().toISOString();

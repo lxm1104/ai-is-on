@@ -572,15 +572,40 @@ body { background: var(--bg); color: var(--text); }
 }
 .card__link { color: var(--accent); font-size: 12px; text-decoration: none; }
 .card__link:hover { text-decoration: underline; }
-.card__actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; align-items: center; }
+.card__actions { position: relative; display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; align-items: center; }
 .card__err { font-size: 12px; color: var(--error); }
 .card__task-done { font-size: 12px; color: var(--ok); }
 .card__task-done a { color: var(--accent); text-decoration: none; }
 .card__task-done a:hover { text-decoration: underline; }
 .card__ask-inline { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; flex: 1 1 240px; min-width: 220px; }
+/* MVP23：行尾「让 AI 处理」指令框。默认紧凑、贴到这一行最右。 */
+.card__ask-end {
+  display: flex; gap: 4px; align-items: center;
+  flex: 0 1 240px; min-width: 180px;
+  margin-left: auto;            /* 推到这一行的最右 */
+}
+.card__ask-end .card__ask-input { flex: 1 1 auto; min-width: 0; }
+/* 「让 AI 处理」按钮：始终单行、不被压缩（展开初期容器窄时也不换行） */
+.card__ask-end .btn { flex-shrink: 0; white-space: nowrap; }
+/* 聚焦态：输入框变成绝对定位的覆盖层，从右向左铺开盖住按钮。
+   用绝对定位 → 按钮不参与回流 → 失焦瞬间还原、不会出现两行闪烁。
+   keyframes 让按钮先出现（.06s 延迟 + backwards），再从 240px 向左铺满。 */
+.card__actions--asking .card__ask-end {
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  width: 100%;
+  margin-left: 0;
+  background: var(--panel);
+  z-index: 2;
+  animation: cardAskSweep .22s ease .06s backwards;
+}
+@keyframes cardAskSweep {
+  from { width: 240px; }
+  to   { width: 100%; }
+}
 .card__ask-input {
   flex: 1 1 160px;
-  min-width: 160px;
+  min-width: 120px;
   font-size: 12px;
   padding: 4px 8px;
   border: 1px solid var(--border);

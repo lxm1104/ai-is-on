@@ -98,6 +98,7 @@ export function SignalCardView(props: {
   const [taskBusy, setTaskBusy] = useState(false);
   const [taskResult, setTaskResult] = useState<LarkTaskCreateResult | null>(null);
   const [moreOpen, setMoreOpen] = useState(false); // MVP23 M1.5：角度「⋯更多」溢出菜单
+  const [askFocused, setAskFocused] = useState(false); // MVP23：行尾指令框聚焦→同行铺满、隐藏其它按钮
 
   // "查看原始信息"：抽屉里列出 signalIds 对应的原始 events（含飞书原文 URL）
   // items 是混排块（IM conversation 合并 + 其他单条 signal，按最新动静倒序）；
@@ -652,7 +653,7 @@ export function SignalCardView(props: {
           </div>
         )}
       </div>
-      <footer className="card__actions">
+      <footer className={`card__actions${askFocused ? ' card__actions--asking' : ''}`}>
         <button
           type="button"
           className="btn btn--card btn--create-task"
@@ -691,39 +692,79 @@ export function SignalCardView(props: {
             </button>
           );
 
-          // 非角度动作：沿用原有渲染（单个 ask_agent/draft_reply 带可选指令输入；其余纯按钮）。
-          const renderOther = (a: CardAction) => {
-            const isAsk = a.kind === 'ask_agent' || a.kind === 'draft_reply';
-            if (!isAsk) {
-              return (
+          // MVP23：统一的「让 AI 处理」指令框，放在按钮行最后面。
+          //   actionId：非角度卡用其自带的 ask_agent 动作 id；角度卡用通用 'ask_agent'。
+          const plainAsk = visibleActions.find(
+            (a) => a.kind === 'ask_agent' && !isAngle(a)
+          );
+          const askActionId = plainAsk?.id ?? 'ask_agent';
+          const showEndAsk = !!plainAsk || angles.length > 0;
+          // 默认：行尾一个紧凑输入框、不带按钮；聚焦后整条展开到第二行 + 右侧出现「让 AI 处理」。
+          const endAsk = showEndAsk && (
+            <div key="__ask" className="card__ask-end">
+              <input
+                type="text"
+                className="card__ask-input"
+                placeholder="输入指令让 AI 处理…"
+                value={askPrompts[askActionId] ?? ''}
+                onChange={(e) => setAskPrompts((p) => ({ ...p, [askActionId]: e.target.value }))}
+                onFocus={() => setAskFocused(true)}
+                onBlur={() => setAskFocused(false)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !busy) void run(askActionId, 'ask_agent');
+                }}
+                disabled={!!busy}
+              />
+              {askFocused && (
                 <button
-                  key={a.id}
-                  className={`btn btn--card btn--${a.kind} ${a.id === '__reopen' ? 'btn--reopen' : ''}`}
-                  onClick={() => run(a.id, a.kind)}
+                  className="btn btn--card btn--ask_agent"
+                  // 防止点击按钮时 input 先 blur 导致按钮在 click 前消失
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => void run(askActionId, 'ask_agent')}
                   disabled={!!busy}
                 >
-                  {busy === a.id ? '…' : a.label}
+                  {busy === askActionId ? '…' : '让 AI 处理'}
                 </button>
+              )}
+            </div>
+          );
+
+          // 非角度、非 ask_agent 动作：ask_agent 由行尾 endAsk 统一承载（这里跳过）；
+          //   ack/dismiss/reopen 纯按钮；draft_reply 保留自己的指令输入。
+          const renderOther = (a: CardAction) => {
+            if (a.kind === 'ask_agent' && !isAngle(a)) {
+              return null; // 交给行尾 endAsk
+            }
+            if (a.kind === 'draft_reply') {
+              return (
+                <div key={a.id} className="card__ask-inline">
+                  <input
+                    type="text"
+                    className="card__ask-input"
+                    placeholder="（可选）额外指令，留空走默认 prompt"
+                    value={askPrompts[a.id] ?? ''}
+                    onChange={(e) => setAskPrompts((p) => ({ ...p, [a.id]: e.target.value }))}
+                    disabled={!!busy}
+                  />
+                  <button
+                    className={`btn btn--card btn--${a.kind}`}
+                    onClick={() => run(a.id, a.kind)}
+                    disabled={!!busy}
+                  >
+                    {busy === a.id ? '…' : a.label}
+                  </button>
+                </div>
               );
             }
             return (
-              <div key={a.id} className="card__ask-inline">
-                <input
-                  type="text"
-                  className="card__ask-input"
-                  placeholder="（可选）额外指令，留空走默认 prompt"
-                  value={askPrompts[a.id] ?? ''}
-                  onChange={(e) => setAskPrompts((p) => ({ ...p, [a.id]: e.target.value }))}
-                  disabled={!!busy}
-                />
-                <button
-                  className={`btn btn--card btn--${a.kind}`}
-                  onClick={() => run(a.id, a.kind)}
-                  disabled={!!busy}
-                >
-                  {busy === a.id ? '…' : a.label}
-                </button>
-              </div>
+              <button
+                key={a.id}
+                className={`btn btn--card btn--${a.kind} ${a.id === '__reopen' ? 'btn--reopen' : ''}`}
+                onClick={() => run(a.id, a.kind)}
+                disabled={!!busy}
+              >
+                {busy === a.id ? '…' : a.label}
+              </button>
             );
           };
 
@@ -749,6 +790,8 @@ export function SignalCardView(props: {
                 </div>
               )}
               {trailing.map(renderOther)}
+              {/* 行尾统一指令框：默认紧凑无按钮，聚焦后第二行展开 + 「让 AI 处理」 */}
+              {endAsk}
             </>
           );
         })()}
