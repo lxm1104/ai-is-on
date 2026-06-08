@@ -358,11 +358,24 @@ export const SUMMARY_TAIL_MAX = 12;
 export function summarizeAggregate(
   chatName: string,
   msgs: ImMessage[],
-  windowStart: string
+  windowStart: string,
+  // MVP30: 当 msgs 含「触发窗口之前」的回溯上下文时传入此项。"新增 N 条"只数 create_time 晚于
+  //   novelty 边界(sinceIsoUtc)的消息；更早的往来（含「我」侧）照样渲染进列表，供 triage 判断
+  //   我是否已参与。不传 = 旧行为（全部计入"新增"），保持 group 路径与历史测试不变。
+  opts?: { sinceIsoUtc: string }
 ): string {
   const lines: string[] = [];
   lines.push(`会话：${chatName}`);
-  lines.push(`自 ${windowStart} 以来新增 ${msgs.length} 条消息`);
+  if (opts) {
+    const novelCount = msgs.filter(
+      (m) => parseCreateTime(m.create_time) > opts.sinceIsoUtc
+    ).length;
+    lines.push(
+      `自 ${windowStart} 以来对方/我新增 ${novelCount} 条消息（下含更早往来上下文，供判断我是否已参与）`
+    );
+  } else {
+    lines.push(`自 ${windowStart} 以来新增 ${msgs.length} 条消息`);
+  }
   lines.push('---');
   type Preview = ImMessage | { __ellipsis: true; skipped: number };
   const previews: Preview[] =
@@ -383,6 +396,22 @@ export function summarizeAggregate(
     lines.push(`- [${m.create_time ?? '?'}] ${senderLabel(m)}: ${short}`);
   }
   return lines.join('\n');
+}
+
+// MVP30: turn a chat's full lookback slice into (a) the context window we render & judge
+// over, and (b) the novelty subset that actually triggers signals. Context depth is by
+// COUNT (last N messages), not time — robust to chat tempo. Guarantees novel ⊆ ctx: novel
+// messages are the newest (msgs is sorted ascending), and ctx keeps at least the newest
+// max(N, |novel|), so a tick with a big burst never drops a triggering message. Pure fn.
+export function sliceContextAndNovelty(
+  msgs: ImMessage[],
+  sinceIsoUtc: string,
+  maxContextMsgs: number
+): { ctx: ImMessage[]; novelMsgs: ImMessage[] } {
+  const isNovel = (m: ImMessage) => parseCreateTime(m.create_time) > sinceIsoUtc;
+  const novelCount = msgs.reduce((n, m) => (isNovel(m) ? n + 1 : n), 0);
+  const ctx = msgs.slice(-Math.max(maxContextMsgs, novelCount));
+  return { ctx, novelMsgs: ctx.filter(isNovel) };
 }
 
 // ---------- MVP26.5: self-initiated action signal ----------
@@ -685,8 +714,13 @@ async function fetchInParallel<T, R>(
 
 // ---------- p2p scan (bulk search; no chat-list for p2p) ----------
 
-async function listP2pMessages(startLocal: string, endLocal: string): Promise<ImMessage[]> {
-  // messages-search with --chat-type p2p, paginate up to 3 pages
+async function listP2pMessages(
+  startLocal: string,
+  endLocal: string,
+  pageLimit = 3
+): Promise<ImMessage[]> {
+  // messages-search with --chat-type p2p. MVP30: pageLimit raised by caller when the
+  // window is widened for context lookback, so older me-side turns aren't truncated.
   const args: string[] = [
     'im',
     '+messages-search',
@@ -700,7 +734,7 @@ async function listP2pMessages(startLocal: string, endLocal: string): Promise<Im
     endLocal,
     '--page-all',
     '--page-limit',
-    '3',
+    String(pageLimit),
     '--format',
     'json',
   ];
@@ -767,6 +801,17 @@ export const imCollector: Collector = {
     const startLocal = toLocalTzIso(sinceDate);
     const endLocal = toLocalTzIso(now);
     const sinceIso = sinceDate.toISOString();
+    // MVP30: context-fetch window, decoupled from the [since, now] trigger window. Used to
+    //   reach back for older turns so the user's own earlier messages are available; the
+    //   actual context DEPTH is by-count (sliceContextAndNovelty, last imContextLookbackMsgs),
+    //   and "新增" stays gated on sinceIso so older messages only enrich context, never re-fire.
+    //   Time here is just a fetch ceiling (Lark search only takes start/end), not the unit.
+    //   p2p widens its bulk search; groups widen only the my-side bulk fetch (peer fetch stays
+    //   narrow to avoid the asc + 3-page truncation trap on per-chat chat-messages-list).
+    const ctxFetchStartDate = new Date(
+      Math.min(sinceDate.getTime(), now.getTime() - config.imContextFetchHorizonMs)
+    );
+    const ctxFetchStartLocal = toLocalTzIso(ctxFetchStartDate);
 
     let myOpenId: string;
     try {
@@ -798,9 +843,12 @@ export const imCollector: Collector = {
 
     // Step 2: fetch all my-group msgs in one call (A-2), bucket by chat_id.
     // Independent toggle imEnableMyGroupFetch lets us land A-1 alone.
+    // MVP30: widen ONLY the my-side group fetch to the context horizon — this is the missing
+    //   piece for groups ("did I already reply in an earlier window"). Peer fetch stays narrow
+    //   ([since, now]) so the asc + 3-page per-chat fetch can't truncate away recent messages.
     const myGroupMsgs =
       config.imIncludeMyMessages && config.imEnableMyGroupFetch
-        ? await listMyGroupMessages(startLocal, endLocal, myOpenId)
+        ? await listMyGroupMessages(ctxFetchStartLocal, endLocal, myOpenId)
         : [];
     const myMsgsByChat = new Map<string, ImMessage[]>();
     for (const m of myGroupMsgs) {
@@ -852,54 +900,63 @@ export const imCollector: Collector = {
       const chatEnt = chatId ? chatEntity(chatId, chat.name) : null;
       // MVP16-A: burst triggered by peer-only count so a chat where the user is
       // doing all the talking doesn't fabricate a "群里很热闹" signal.
-      const peerMsgs = msgs.filter((m) => !m.is_me);
-      if (peerMsgs.length >= config.imAggregateThreshold) {
+      // MVP30: by-count context window + novelty subset (shared with p2p). burst triggers on
+      // NEW peer messages only; ctx carries older turns (incl. my earlier replies) for context.
+      const { ctx, novelMsgs } = sliceContextAndNovelty(
+        msgs,
+        sinceIso,
+        config.imContextLookbackMsgs
+      );
+      if (novelMsgs.length === 0) continue;
+      const novelPeer = novelMsgs.filter((m) => !m.is_me);
+      if (novelPeer.length >= config.imAggregateThreshold) {
         // aggregated signal: one per chat per window
-        const lastMsgId = msgs[msgs.length - 1]?.message_id ?? '';
-        const lastPeer = peerMsgs[peerMsgs.length - 1];
-        const text = summarizeAggregate(chatName, msgs, startLocal);
+        const lastMsgId = ctx[ctx.length - 1]?.message_id ?? '';
+        const lastPeer = novelPeer[novelPeer.length - 1];
+        const text = summarizeAggregate(chatName, ctx, startLocal, { sinceIsoUtc: sinceIso });
         const entities: ContextEntityRef[] = [];
         if (chatEnt) entities.push(chatEnt);
-        entities.push(...aggregateSenderEntities(msgs));
+        entities.push(...aggregateSenderEntities(ctx));
         entities.push(...extractFeishuDocEntities(text));
         signals.push({
           source: 'im',
           sourceId: `chat:${chat.chat_id}:agg:${sinceIso}`,
-          // at_me classification looks at peer msgs only — if @我 came from me
+          // at_me classification looks at NEW peer msgs only — if @我 came from me
           // (in a self-mention edge case) it shouldn't count.
-          kind: peerMsgs.some((m) => isAtMe(m, myOpenId)) ? 'group_burst_at_me' : 'group_burst',
-          occurredAt: parseCreateTime(msgs[msgs.length - 1]?.create_time),
-          title: `${chatName} · 新增 ${msgs.length} 条`,
+          kind: novelPeer.some((m) => isAtMe(m, myOpenId)) ? 'group_burst_at_me' : 'group_burst',
+          occurredAt: parseCreateTime(novelMsgs[novelMsgs.length - 1]?.create_time),
+          title: `${chatName} · 新增 ${novelMsgs.length} 条`,
           text,
           actor: undefined,
-          url: lastPeer?.message_app_link ?? msgs[msgs.length - 1]?.message_app_link,
-          raw: { chat, msgs },
+          url: lastPeer?.message_app_link ?? ctx[ctx.length - 1]?.message_app_link,
+          raw: { chat, msgs: ctx },
           contentHash: shortHash(
-            `agg|${chat.chat_id}|${msgs.length}|${lastMsgId}|${sinceIso}`
+            `agg|${chat.chat_id}|${novelMsgs.length}|${lastMsgId}|${sinceIso}`
           ),
           entities: dedupEntities(entities),
         });
       } else {
-        for (const m of msgs) {
+        for (const m of novelMsgs) {
           // MVP16-A: me-side single messages never become signals on their own —
           // 除非 MVP26.5 判定它是一个 self-initiated 推进动作（用户在别处办了事），
           // 那时升格成 im_self_action 信号，给 Matter Reducer 当 action_result 输入。
+          // MVP30: 只对「新增」消息出信号；ctx（含回溯）作为渲染/disambiguation 上下文。
           if (m.is_me) {
             if (!config.imSelfActionEnabled) continue;
-            const det = detectSelfAction(m, msgs, myOpenId);
+            const det = detectSelfAction(m, ctx, myOpenId);
             if (!det) continue;
             signals.push(
-              buildSelfActionSignal(det, m, msgs, chatName, chatEnt, {
+              buildSelfActionSignal(det, m, ctx, chatName, chatEnt, {
                 chat,
                 msg: m,
-                contextMsgs: msgs,
+                contextMsgs: ctx,
               })
             );
             continue;
           }
           // MVP16-A hotfix: render with surrounding chat context so Triage can
           // see double-sided exchange even when only 1-2 peer msgs in window.
-          const text = summarizeOneWithContext(m, msgs, chatName);
+          const text = summarizeOneWithContext(m, ctx, chatName);
           const entities: ContextEntityRef[] = [];
           if (chatEnt) entities.push(chatEnt);
           const se = senderEntity(m.sender);
@@ -914,7 +971,7 @@ export const imCollector: Collector = {
             text,
             actor: m.sender?.name ?? m.sender?.id,
             url: m.message_app_link,
-            raw: { chat, msg: m, contextMsgs: msgs },
+            raw: { chat, msg: m, contextMsgs: ctx },
             contentHash: shortHash(`${m.message_id}|${m.content ?? ''}|${m.create_time ?? ''}`),
             entities: dedupEntities(entities),
           });
@@ -930,7 +987,11 @@ export const imCollector: Collector = {
     // MVP24: messages-search --chat-type p2p 不返回跨租户(external)单聊。补一条路径：
     // chat-list --types=p2p 枚举 external 会话，逐个 chat-messages-list 拿双向，
     // 再 merge 进内部结果。内部 p2p 路径(listP2pMessages)完全不变，纯增量。
-    const internalP2pRaw = await listP2pMessages(startLocal, endLocal);
+    const internalP2pRaw = await listP2pMessages(
+      ctxFetchStartLocal,
+      endLocal,
+      config.imP2pPageLimit
+    );
 
     let externalP2pRaw: ImMessage[] = [];
     const externalP2pNames = new Map<string, string>(); // chat_id → 真实会话名
@@ -942,6 +1003,8 @@ export const imCollector: Collector = {
           async (chat): Promise<ImMessage[]> => {
             if (!chat.chat_id) return [];
             if (chat.name?.trim()) externalP2pNames.set(chat.chat_id, chat.name.trim());
+            // MVP30: external p2p stays narrow — chat-messages-list is asc + 3-page capped, so
+            // widening it risks truncating recent msgs; me-side here is a separate (pre-existing) gap.
             return listMessagesInChat(chat.chat_id, sinceIso, now.toISOString());
           },
           config.imChatFetchConcurrency
@@ -974,46 +1037,57 @@ export const imCollector: Collector = {
       const chatName = p2pChatDisplayName(chatId, msgs, externalP2pNames);
       const chatEnt = chatEntity(chatId, chatName);
       // MVP16-A: aggregation triggered by peer messages only — me-side messages
-      // provide context but do not signal "对方在密集表达". peerMsgs also drives
+      // provide context but do not signal "对方在密集表达". peer-side also drives
       // actor/url so the card always points at the peer, never the user.
-      const peerMsgs = msgs.filter((m) => !m.is_me);
-      if (peerMsgs.length >= config.imAggregateThreshold) {
-        const lastMsgId = msgs[msgs.length - 1]?.message_id ?? '';
-        const lastPeer = peerMsgs[peerMsgs.length - 1];
-        const text = summarizeAggregate(chatName, msgs, startLocal);
+      // MVP30: by-count context window + novelty subset (shared with group). Gate "新增" on
+      // the [since, now] trigger window so carried-over older turns only enrich context and
+      // never re-fire; ctx (last N, incl. my earlier 「我」 turns) is what we render, killing
+      // the false "我主动问、对方答完" burst (展弘单聊误催即此类).
+      const { ctx, novelMsgs } = sliceContextAndNovelty(
+        msgs,
+        sinceIso,
+        config.imContextLookbackMsgs
+      );
+      if (novelMsgs.length === 0) continue; // only carried-over context, nothing new → no signal
+      const novelPeer = novelMsgs.filter((m) => !m.is_me);
+      if (novelPeer.length >= config.imAggregateThreshold) {
+        const lastMsgId = ctx[ctx.length - 1]?.message_id ?? '';
+        const lastPeer = novelPeer[novelPeer.length - 1];
+        const text = summarizeAggregate(chatName, ctx, startLocal, { sinceIsoUtc: sinceIso });
         const entities: ContextEntityRef[] = [chatEnt];
-        entities.push(...aggregateSenderEntities(msgs));
+        entities.push(...aggregateSenderEntities(ctx));
         entities.push(...extractFeishuDocEntities(text));
         signals.push({
           source: 'im',
           sourceId: `chat:${chatId}:agg:${sinceIso}`,
           kind: 'p2p_burst',
-          occurredAt: parseCreateTime(msgs[msgs.length - 1]?.create_time),
-          title: `${chatName} · 新增 ${msgs.length} 条`,
+          occurredAt: parseCreateTime(novelMsgs[novelMsgs.length - 1]?.create_time),
+          title: `${chatName} · 新增 ${novelMsgs.length} 条`,
           text,
           actor: lastPeer?.sender?.name,
           url: lastPeer?.message_app_link,
-          raw: { chatId, msgs },
-          contentHash: shortHash(`p2p-agg|${chatId}|${msgs.length}|${lastMsgId}|${sinceIso}`),
+          raw: { chatId, msgs: ctx },
+          contentHash: shortHash(`p2p-agg|${chatId}|${novelMsgs.length}|${lastMsgId}|${sinceIso}`),
           entities: dedupEntities(entities),
         });
       } else {
-        for (const m of msgs) {
+        for (const m of novelMsgs) {
           // MVP16-A: skip me-side single messages — the user shouldn't get
-          // attention cards about themselves talking. peerMsgs.length=0 case
-          // is also covered: the burst branch above is skipped, and this loop
-          // produces zero signals.
+          // attention cards about themselves talking. peer-side novel count = 0 case
+          // is also covered: the burst branch above is skipped, and this loop only
+          // iterates novel messages.
           // MVP26.5: 例外——若该 me-side 消息像一个 self-initiated 推进动作，升格成
           // im_self_action 信号（给 Matter Reducer 当 action_result 输入）。
+          // MVP30: 只对「新增」消息出信号；ctx（含回溯）作为渲染/disambiguation 上下文传入。
           if (m.is_me) {
             if (!config.imSelfActionEnabled) continue;
-            const det = detectSelfAction(m, msgs, myOpenId);
+            const det = detectSelfAction(m, ctx, myOpenId);
             if (!det) continue;
             signals.push(
-              buildSelfActionSignal(det, m, msgs, chatName, chatEnt, {
+              buildSelfActionSignal(det, m, ctx, chatName, chatEnt, {
                 chatId,
                 msg: m,
-                contextMsgs: msgs,
+                contextMsgs: ctx,
               })
             );
             continue;
@@ -1021,8 +1095,8 @@ export const imCollector: Collector = {
           // MVP16-A hotfix: render with surrounding double-sided context so
           // Triage can see whether the user already responded to this message.
           // raw.msg stays the single focused message; raw.contextMsgs carries
-          // the full chat slice for downstream replay if needed.
-          const text = summarizeOneWithContext(m, msgs, chatName);
+          // the context slice for downstream replay if needed.
+          const text = summarizeOneWithContext(m, ctx, chatName);
           const entities: ContextEntityRef[] = [chatEnt];
           const se = senderEntity(m.sender);
           if (se) entities.push(se);
@@ -1036,7 +1110,7 @@ export const imCollector: Collector = {
             text,
             actor: m.sender?.name ?? m.sender?.id,
             url: m.message_app_link,
-            raw: { chatId, msg: m, contextMsgs: msgs },
+            raw: { chatId, msg: m, contextMsgs: ctx },
             contentHash: shortHash(
               `${m.message_id}|${m.content ?? ''}|${m.create_time ?? ''}`
             ),
