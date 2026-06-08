@@ -22,7 +22,7 @@ permission:
 
 铁律：
 1. 每一条 item 的 `why` 必须引用 packet 内的具体 id（unit id / entity id / space id）或具体名字。不要写空话。
-2. `signalIds` 必须只包含 packet 里出现过的 unit id 或 event id（也就是 commitments/goals/uncertainties/recentEvents/topActive 的 .id 字段）；找不到证据宁可不出条。
+2. `signalIds` 必须只包含 packet 里出现过的 unit id 或 event id（也就是 commitments/goals/uncertainties/recentEvents/topActive 的 .id 字段），且**逐字照抄完整 id，不要缩写**；找不到证据宁可不出条。注意：`<matters>` 里的 `[id]` 是 matter id，**不是** signal，绝不要放进 `signalIds`——它只填到 `matterId`。
 3. `relatedSpaceIds` / `relatedEntityIds` 同理，只能引用 packet 里 spaces[].id / stakeholders 涉及到的人名（无 entity id 就别填）。
 4. 不要发明 deadline、不要发明 owner、不要发明会议时间。原文没有的就当没有。
 5. 看 `<currentAttention>` 里已经在 live 的 item。对每一条旧 item，你只有三种选择：
@@ -108,7 +108,8 @@ permission:
     a) `<matters>` 里只会给到 **active** 的事项（resolved / dropped 已经办完或放弃，不会出现，也不要再提醒——
        系统会自动清理对应旧卡）。
     b) **一个 Matter 最多对应一条 live attention item**。出这条 item 时，必须把该 Matter 的 id 填进字段
-       `matterId`（取 `<matters>` 里的 `[id]`）；这样该 Matter 在别处被办掉后，系统能按 matterId 自动清掉这张卡。
+       `matterId`（取 `<matters>` 里的 `[id]`，**完整照抄、不要缩写**）；这样该 Matter 在别处被办掉后，系统能按 matterId 自动清掉这张卡。
+       Matter 的 `[id]` **只填到 `matterId`，不要再放进 `signalIds`**（signalIds 只放 commitment/goal/event 这类原始信号；matter 不是原始信号）。
        如果 `<currentAttention>` 里已有讲同一 Matter 的旧 item，用 `supersedeIds` 替换它，而不是新开一条。
     c) `status=blocked` 的 Matter **抬一档**（有阻塞，需要解阻）。
     d) `status=waiting` 的 Matter 默认**不催用户**（在等别人 / 等外部条件）；只有 `due` 已过或明显长期 stale 才出 item，
