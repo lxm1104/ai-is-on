@@ -86,6 +86,17 @@ export const config = {
   //   （给 Matter Reducer 接上 action_result 输入）。kill switch，默认开。
   //   依赖 imIncludeMyMessages=true（否则 me-side 消息在 prepareMessages 就被滤掉）。
   imSelfActionEnabled: envBool('IM_SELF_ACTION_ENABLED', true),
+  // MVP30: 渲染 IM 信号时回溯多少会话上下文，与"触发窗口"解耦。触发仍按 [since, now] 判"新增"，
+  //   但渲染时带上更早的往来，让「我」在更早扫描窗口里的发言/提问重新可见——triage 才能判断
+  //   "我主动发起 / 我早已回过"，不再把"我问、对方答完"当成需我处理的入站 burst（展弘单聊误催即此类）。
+  //   ┌ 上下文深度是【按条数】而非按时间：每个 chat 取最近 N 条（与聊天节奏无关，比固定时长更稳）。
+  imContextLookbackMsgs: envInt('IM_CONTEXT_LOOKBACK_MSGS', 20),
+  //   └ 时间只是 fetch 的天花板（Lark search 只吃 start/end），不是上下文单位。fetch 回溯到 now-此值，
+  //     再在内存里按条数裁剪。设大一点保证够 N 条可裁；过大只是多拉数据，不影响渲染/计数。默认 2h。
+  imContextFetchHorizonMs: envInt('IM_CONTEXT_FETCH_HORIZON_MS', 7_200_000),
+  // MVP30: 放大 p2p messages-search 的翻页上限（page-size≈50），防止 fetch 天花板窗口里的消息被
+  //   page-limit 截断而漏掉新消息。默认 5（≈250 条/轮，p2p 量足够）。
+  imP2pPageLimit: envInt('IM_P2P_PAGE_LIMIT', 5),
   // MVP11.0-b drive comment collector
   driveCommentEnabled: envBool('DRIVE_COMMENT_COLLECTOR_ENABLED', true),
   driveCommentIntervalMs: envInt('DRIVE_COMMENT_COLLECTOR_INTERVAL_MS', 300_000),
