@@ -581,8 +581,10 @@ body { background: var(--bg); color: var(--text); }
 /* MVP23：行尾「让 AI 处理」指令框。默认紧凑、贴到这一行最右。 */
 .card__ask-end {
   display: flex; gap: 4px; align-items: center;
-  flex: 0 1 240px; min-width: 180px;
-  margin-left: auto;            /* 推到这一行的最右 */
+  /* flex-basis:0 → 换行算法不把它计入"需要的宽度"，永远不会被挤到第二行；
+     flex-grow:1 占据按钮之后的剩余空间贴到行尾；min-width:0 允许在按钮很宽时收缩到很窄。 */
+  flex: 1 1 0;
+  min-width: 0;
 }
 .card__ask-end .card__ask-input { flex: 1 1 auto; min-width: 0; }
 /* 「让 AI 处理」按钮：始终单行、不被压缩（展开初期容器窄时也不换行） */
