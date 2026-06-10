@@ -26,14 +26,17 @@ html, body, #root { height: 100%; margin: 0; }
 body { background: var(--bg); color: var(--text); }
 
 .app {
-  display: grid;
-  grid-template-rows: auto auto 1fr;
+  /* flex 而非 grid：banner 是条件渲染的（0~2 个），固定行模板会让 main
+     落进 auto 行、随内容撑高，composer 就不再钉在视口底部 */
+  display: flex;
+  flex-direction: column;
   height: 100%;
 }
 
 /* status bar */
 .status-bar {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 16px;
   padding: 10px 18px;
@@ -67,6 +70,7 @@ body { background: var(--bg); color: var(--text); }
   padding: 8px 18px;
   font-size: 13px;
   display: flex;
+  flex-shrink: 0;
   justify-content: space-between;
   align-items: center;
 }
@@ -195,6 +199,7 @@ body { background: var(--bg); color: var(--text); }
 /* main split */
 .main {
   display: flex;
+  flex: 1;
   min-height: 0;
   overflow: hidden;
 }
