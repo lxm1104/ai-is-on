@@ -65,6 +65,15 @@ export function mapAttentionStatus(status: AttentionStatus): CardStatus {
 }
 
 export function defaultAttentionActions(item: AttentionItem): CardAction[] {
+  // MVP31：办结提案卡（chatConclusionService 产）专属动作组 —— 确认即回写 matter 状态。
+  // 「忽略」语义 = 不办结、继续跟进（卡片消失，matter 不动）。
+  if (item.inputHash.startsWith('proposal:matter-resolve:')) {
+    return [
+      { id: 'matter_resolve', label: '确认办结', kind: 'matter_resolve' },
+      { id: 'dismiss', label: '还没完，继续跟', kind: 'dismiss' },
+    ];
+  }
+
   const actions: CardAction[] = [
     { id: 'ack', label: '知道了', kind: 'ack' },
   ];

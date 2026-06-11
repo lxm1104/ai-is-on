@@ -1,7 +1,7 @@
 ---
 description: "AI is ON MVP27 Matter Reducer 事项状态判定"
 mode: primary
-model: zhipuai-coding-plan/glm-5.1
+model: zai-coding-plan/glm-5.1
 permission:
   bash: allow
   edit: deny

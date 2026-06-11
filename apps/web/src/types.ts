@@ -52,7 +52,8 @@ export type CardActionKind =
   | 'open_source'
   | 'mark_done'
   | 'auto_henceforth'
-  | 'create_task';   // MVP23 M2：处理角度的结构化执行器，点击走建任务确认通道
+  | 'create_task'    // MVP23 M2：处理角度的结构化执行器，点击走建任务确认通道
+  | 'matter_resolve'; // MVP31：办结提案卡的确认按钮，直接 POST 标准 action 通道
 
 export type CardAction = {
   id: string;

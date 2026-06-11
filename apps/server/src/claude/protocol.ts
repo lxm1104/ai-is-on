@@ -54,7 +54,8 @@ export type CardActionKind =
   | 'open_source'
   | 'mark_done'
   | 'auto_henceforth'
-  | 'create_task';   // MVP23 M2：处理角度的结构化执行器，前端路由到建任务通道
+  | 'create_task'    // MVP23 M2：处理角度的结构化执行器，前端路由到建任务通道
+  | 'matter_resolve'; // MVP31：办结提案卡的确认按钮，后端调 userResolveMatter
 
 export type CardAction = {
   id: string;

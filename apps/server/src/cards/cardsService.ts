@@ -36,6 +36,7 @@ import { buildRichAskAgentPrompt } from '../attention/askAgentPrompt.js';
 import { applyAttentionFeedback } from '../attention/attentionFeedback.js';
 import { recordAttentionInteraction } from '../attention/attentionInteractions.js';
 import { enqueueAttentionTickSoon } from '../attention/attentionEngine.js';
+import { userResolveMatter } from '../matter/matterActions.js';
 
 export function rowToCard(row: CardRow): SignalCard {
   let actions: CardAction[] = [];
@@ -369,6 +370,32 @@ async function applyAttentionAction(
   if (action.kind === 'open_source') {
     // 不改状态，前端通过 sourceUrl 自己打开
     const card = projectAttentionItemToCard(attn);
+    return { ok: true, card };
+  }
+
+  // MVP31：办结提案确认 —— 回写 matter 状态，催办卡由下一轮 tick 自动清除。
+  if (action.kind === 'matter_resolve') {
+    if (!attn.matterId) return { ok: false, error: 'item has no matterId' };
+    const resolved = userResolveMatter(attn.matterId, 'AI 处理结论提案，用户确认办结', now);
+    if (!resolved) return { ok: false, error: `matter ${attn.matterId} resolve failed` };
+    recordAttentionInteraction(attn, 'matter_resolve', now);
+    const updated = updateAttentionItemStatus(attn.id, 'acted', now);
+    if (!updated) return { ok: false, error: 'update failed' };
+    enqueueAttentionTickSoon(); // 让催办卡尽快被 markAttentionItemsSupersededForResolvedMatters 清掉
+    const card = projectAttentionItemToCard(updated);
+    broadcast({ type: 'card_updated', card });
+    return { ok: true, card };
+  }
+
+  const isResolveProposal = attn.inputHash.startsWith('proposal:matter-resolve:');
+
+  if (action.kind === 'dismiss' && isResolveProposal) {
+    // 提案卡的「还没完」≠ 内容不相关：只关卡片，不学 not_relevant 负反馈。
+    recordAttentionInteraction(attn, 'dismiss', now);
+    const updated = updateAttentionItemStatus(attn.id, 'dismissed', now);
+    if (!updated) return { ok: false, error: 'update failed' };
+    const card = projectAttentionItemToCard(updated);
+    broadcast({ type: 'card_updated', card });
     return { ok: true, card };
   }
 

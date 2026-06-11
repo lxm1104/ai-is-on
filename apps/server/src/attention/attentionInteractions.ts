@@ -11,7 +11,8 @@ export type AttentionInteractionAction =
   | 'dismiss'
   | 'not_relevant'
   | 'ask_agent'
-  | 'create_task';
+  | 'create_task'
+  | 'matter_resolve'; // MVP31：办结提案确认
 
 export type AttentionInteraction = {
   id: string;
@@ -42,6 +43,7 @@ function coerceAction(action: string): AttentionInteractionAction {
     case 'not_relevant':
     case 'ask_agent':
     case 'create_task':
+    case 'matter_resolve':
       return action;
     default:
       return 'ack';

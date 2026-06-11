@@ -30,6 +30,7 @@ import { PROJECT_PHASE_SYSTEM_PROMPT } from '../util/projectPhasePrompt.js';
 import { DECISION_AUTHORITY_SYSTEM_PROMPT } from '../util/decisionAuthorityPrompt.js';
 import { COLLAB_TYPE_SYSTEM_PROMPT } from '../util/collabTypePrompt.js';
 import { MATTER_REDUCE_SYSTEM_PROMPT } from '../matter/matterReducerPrompt.js';
+import { CHAT_CONCLUSION_SYSTEM_PROMPT } from '../matter/chatConclusionPrompt.js';
 
 export type OpencodeAgentName =
   | 'aiisn-chat'
@@ -46,7 +47,8 @@ export type OpencodeAgentName =
   | 'aiisn-project-phase'
   | 'aiisn-decision-authority'
   | 'aiisn-collab-type'
-  | 'aiisn-matter-reducer';
+  | 'aiisn-matter-reducer'
+  | 'aiisn-chat-conclusion';
 
 type Permission = 'allow' | 'ask' | 'deny';
 type AgentDef = {
@@ -155,6 +157,12 @@ const AGENTS: readonly AgentDef[] = [
     description: 'AI is ON MVP27 Matter Reducer 事项状态判定',
     permission: READ_ONLY,
     prompt: MATTER_REDUCE_SYSTEM_PROMPT,
+  },
+  {
+    name: 'aiisn-chat-conclusion',
+    description: 'AI is ON MVP31 ask_agent 对话结论 → 事项状态提案抽取',
+    permission: READ_ONLY,
+    prompt: CHAT_CONCLUSION_SYSTEM_PROMPT,
   },
 ];
 

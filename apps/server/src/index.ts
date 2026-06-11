@@ -37,6 +37,9 @@ import { startTriggerScheduler, stopTriggerScheduler } from './triggers/triggerS
 import { startAttentionScheduler, stopAttentionScheduler } from './attention/attentionEngine.js';
 import { bootstrapAgents } from './agents/index.js';
 import { migrateUserRulesIfNeeded } from './boundary/migration.js';
+import { runStartupRecovery } from './startupRecovery.js';
+import { startChatConclusionService } from './matter/chatConclusionService.js';
+import { startMaintenance, stopMaintenance } from './maintenance.js';
 
 const app = express();
 app.use(cors({ origin: config.webOrigin, credentials: true }));
@@ -91,10 +94,23 @@ server.listen(config.port, '127.0.0.1', () => {
       console.error('[server] failed to start chat runtime:', err)
     );
   migrateUserRulesIfNeeded();
+  try {
+    const recovery = runStartupRecovery();
+    console.log(
+      `[recovery] 孤儿 attention run ${recovery.orphanedAttentionRuns}、agent run ${recovery.orphanedAgentRuns}；` +
+        `事件销账 ${recovery.eventsWrittenOff}、回灌 triage ${recovery.eventsRequeued}、遗留 ${recovery.eventsLeftBehind}`
+    );
+  } catch (err) {
+    console.error('[recovery] startup recovery failed:', err);
+  }
   bootstrapAgents();
   startCollectorScheduler();
   // MVP27 §10.2：Matter tracker 注册在 trigger/attention 之前，先归并事项状态。
   startMatterTracker();
+  // MVP31：ask_agent 对话结论 → 办结提案回流
+  startChatConclusionService();
+  // 日常维护：opencode 一次性 session 清理（防 db 无限增长拖垮 checkpoint）
+  startMaintenance();
   startTriggerScheduler();
   startAttentionScheduler();
   // MVP15A §7.2.1: 10s 后台预热 graph inducer（首次 LLM project taxonomy 慢，
@@ -112,6 +128,9 @@ const shutdown = async (signal: string) => {
   console.log(`[server] received ${signal}, shutting down`);
   try {
     stopCollectorScheduler();
+  } catch {}
+  try {
+    stopMaintenance();
   } catch {}
   try {
     stopMatterTracker();

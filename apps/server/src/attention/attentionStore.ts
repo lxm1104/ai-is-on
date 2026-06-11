@@ -244,6 +244,8 @@ export type FinishEngineRunInput = {
   modelId?: string | null;
   error?: string | null;
   completedAt: string;
+  /** 可选：完成时回写 input summary（用于补充 inputChars / llmWaitMs / llmExecMs 观测字段）。 */
+  inputSummary?: AttentionInputSummary;
 };
 
 export function finishEngineRun(input: FinishEngineRunInput): void {
@@ -254,6 +256,9 @@ export function finishEngineRun(input: FinishEngineRunInput): void {
     model_id: input.modelId ?? null,
     error: input.error ?? null,
     completed_at: input.completedAt,
+    ...(input.inputSummary
+      ? { input_summary_json: JSON.stringify(input.inputSummary) }
+      : {}),
   });
 }
 

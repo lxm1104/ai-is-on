@@ -1,11 +1,14 @@
 import { spawn } from 'node:child_process';
 import { config } from '../config.js';
+import { createLlmGate } from '../llm/llmGate.js';
 import { TRIAGE_SYSTEM_PROMPT } from './triagePrompt.js';
 import type { OpencodeAgentName } from '../opencode/agents.js';
 
 export type OneShotResult = {
   text: string;
   raw: unknown;
+  /** 观测：闸门排队耗时与 LLM 实跑耗时（含 fallback 的串行总和）。 */
+  timing: { waitMs: number; execMs: number };
 };
 
 /**
@@ -27,6 +30,12 @@ export type OneShotOptions = {
   /** Legacy: kept for debugging only — see note above. */
   systemPrompt?: string;
   timeoutMs?: number;
+  /** true = 闸门高优先级（用户可感知引擎用，如 attention），插到后台批处理前面。 */
+  priority?: boolean;
+  /** 覆盖主模型（默认 config.opencodeModel）。 */
+  model?: string;
+  /** 覆盖 fallback 模型（默认 config.opencodeFallbackModel）。 */
+  fallbackModel?: string;
 };
 
 type OpencodePart = {
@@ -42,6 +51,19 @@ type OpencodeEvent = {
   part?: OpencodePart;
   sessionID?: string;
 };
+
+// --------------------------------------------------------------------------
+// 全局 LLM 闸门：所有 opencode one-shot 调用共用一个双级 FIFO 信号量。
+// 实现与原理见 llm/llmGate.ts；attention 走 high 队列插队
+// （实测排在 triage 后要等 80-160s，插队后 wait≈0，2026-06-10）。
+// --------------------------------------------------------------------------
+
+const gate = createLlmGate(config.opencodeMaxConcurrency);
+
+/** 调试/监控用：当前闸门占用与排队深度。 */
+export function getLlmGateStats(): { active: number; queuedHigh: number; queued: number } {
+  return gate.stats();
+}
 
 function runOpencodeOnce(
   userMessage: string,
@@ -143,33 +165,48 @@ export async function runOneShot(
   opts: OneShotOptions
 ): Promise<OneShotResult> {
   const timeoutMs = opts.timeoutMs ?? config.triageTimeoutMs;
+  const primaryModel = opts.model ?? config.opencodeModel;
+  const fallbackModel = opts.fallbackModel ?? config.opencodeFallbackModel;
+
+  const waitStart = Date.now();
+  await gate.acquire(opts.priority === true);
+  const waitMs = Date.now() - waitStart;
+  if (waitMs > 15_000) {
+    const st = gate.stats();
+    console.log(
+      `[opencode] gate 排队 ${Math.round(waitMs / 1000)}s (agent=${opts.agentName}, 队列剩余 high=${st.queuedHigh} normal=${st.queued})`
+    );
+  }
+
+  const execStart = Date.now();
+  const withTiming = (r: { text: string; raw: unknown }): OneShotResult => ({
+    ...r,
+    timing: { waitMs, execMs: Date.now() - execStart },
+  });
+
   try {
-    return await runOpencodeOnce(
-      userMessage,
-      opts.agentName,
-      config.opencodeModel,
-      timeoutMs
+    return withTiming(
+      await runOpencodeOnce(userMessage, opts.agentName, primaryModel, timeoutMs)
     );
   } catch (primaryErr) {
     const primaryMsg =
       primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
     console.warn(
-      `[opencode] primary model ${config.opencodeModel} 失败，fallback 到 ${config.opencodeFallbackModel}：${primaryMsg.slice(0, 300)}`
+      `[opencode] primary model ${primaryModel} 失败，fallback 到 ${fallbackModel}：${primaryMsg.slice(0, 300)}`
     );
     try {
-      return await runOpencodeOnce(
-        userMessage,
-        opts.agentName,
-        config.opencodeFallbackModel,
-        timeoutMs
+      return withTiming(
+        await runOpencodeOnce(userMessage, opts.agentName, fallbackModel, timeoutMs)
       );
     } catch (fallbackErr) {
       const fallbackMsg =
         fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
       throw new Error(
-        `opencode 两次调用均失败。\n[primary ${config.opencodeModel}]: ${primaryMsg}\n[fallback ${config.opencodeFallbackModel}]: ${fallbackMsg}`
+        `opencode 两次调用均失败。\n[primary ${primaryModel}]: ${primaryMsg}\n[fallback ${fallbackModel}]: ${fallbackMsg}`
       );
     }
+  } finally {
+    gate.release();
   }
 }
 

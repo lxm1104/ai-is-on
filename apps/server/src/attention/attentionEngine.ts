@@ -15,6 +15,7 @@
 //   - input_hash 5min cache 兜底，重复触发不会重复出钱
 
 import { randomUUID } from 'node:crypto';
+import { config } from '../config.js';
 import { runOneShot } from '../triage/backgroundRuntime.js';
 import { broadcast } from '../ws.js';
 import { registerUpsertHook } from '../context/contextStore.js';
@@ -47,7 +48,10 @@ import type {
 const TICK_INTERVAL_MS = 5 * 60_000;          // 5 分钟一次定时全量
 const DEBOUNCE_MS = 60_000;                    // upsert hook debounce
 const CACHE_TTL_MINUTES = 5;                   // input_hash 缓存窗口
-const ONE_SHOT_TIMEOUT_MS = 180_000;           // 比 triage 长，因为输入更大；85 分钟实跑 3/23 ≈ 13% 超时，从 120s 提到 180s
+// 比 triage 长，因为输入更大。实测 glm-5.1 单次 ~26k input 需要 ~104s（无竞争），
+// 180s 时代 2026-06-09 失败率 87%：超时误杀 → fallback 重试翻倍负载 → 级联超时。
+// 现默认 300s（ATTENTION_TIMEOUT_MS 可调），并发挤兑由 backgroundRuntime 全局闸门解决。
+const ONE_SHOT_TIMEOUT_MS = config.attentionTimeoutMs;
 const ITEM_TTL_HOURS = 24;                     // 兜底：超过 24h 还在 live 的 items 自动 expire
 
 let tickTimer: NodeJS.Timeout | null = null;
@@ -100,9 +104,9 @@ async function doRunAttentionTick(
     console.log(`[attention] superseded ${matterClearedCount} items bound to resolved/dropped matters`);
   }
 
-  // 1) 组装 packet
+  // 1) 组装 packet（currentLive cap 12：均值 ~70 chars/条，瘦身 packet 的一部分）
   const packet = assembleGlobalContextPacket();
-  const currentLive = listLiveAttentionItems(20);
+  const currentLive = listLiveAttentionItems(12);
   const inputSummary: AttentionInputSummary = {
     subjectPresent: !!packet.subject,
     spacesCount: packet.spaces.length,
@@ -160,7 +164,9 @@ async function doRunAttentionTick(
     return summary(runId, generation, packet.inputHash, 'cache_hit', 0, startedAt, completedAt);
   }
 
-  // 4) 先写 running 行（status 占位 ok，最后由 finishEngineRun 覆盖）
+  // 4) 先组 userMsg（纯函数），把真实输入长度记进 summary，再写 running 行
+  const userMsg = buildAttentionUserMessage(packet, { currentLive });
+  inputSummary.inputChars = userMsg.length;
   startEngineRun({
     id: runId,
     generation,
@@ -172,7 +178,6 @@ async function doRunAttentionTick(
   });
 
   // 5) 调 LLM
-  const userMsg = buildAttentionUserMessage(packet, { currentLive });
   let llmText: string;
   let modelId: string | null = null;
   try {
@@ -183,8 +188,15 @@ async function doRunAttentionTick(
         agentName: 'aiisn-attention',
         systemPrompt: ATTENTION_SYSTEM_PROMPT,
         timeoutMs: ONE_SHOT_TIMEOUT_MS,
+        priority: true, // attention 是用户可感知引擎，闸门插队，不排在 triage/matter 后
+        // turbo（thinking disabled，见 opencode.json）实测 13.4k 输入 15-94s；
+        // glm-5.1 兜底质量。P0 从严标定见 attentionPrompt v2。
+        model: config.attentionModel,
+        fallbackModel: config.attentionFallbackModel,
       });
       llmText = shot.text;
+      inputSummary.llmWaitMs = shot.timing.waitMs;
+      inputSummary.llmExecMs = shot.timing.execMs;
       const raw = shot.raw as Record<string, unknown> | null;
       if (raw && typeof raw.model === 'string') {
         modelId = raw.model;
@@ -199,6 +211,7 @@ async function doRunAttentionTick(
       itemsEmitted: 0,
       error,
       completedAt,
+      inputSummary,
     });
     console.warn('[attention] runOneShot failed:', error.slice(0, 300));
     return summary(runId, generation, packet.inputHash, 'failed', 0, startedAt, completedAt, error);
@@ -219,6 +232,7 @@ async function doRunAttentionTick(
       modelId,
       error,
       completedAt,
+      inputSummary,
     });
     console.warn('[attention] parse failed:', error.slice(0, 200));
     return summary(runId, generation, packet.inputHash, 'failed', 0, startedAt, completedAt, error);
@@ -231,17 +245,75 @@ async function doRunAttentionTick(
 
   // 7.5) 用 LLM 给的 supersedeIds，把它点名的旧 item（可能来自其他 inputHash 代）也标 superseded。
   //      同时识别 "supersede-only" item：title='supersede' 的 item 只执行清理，不落新行。
+  //      churn guard（2026-06-10）：turbo 无 thinking 模式倾向每轮全量重发（实测 1h 内 29 条 superseded，
+  //      看板 created_at 全被重置、用户状态丢失）。若新卡与被替代旧卡**等价**
+  //      （同 priority + 同 matterId 或同 signal 集合），视为「保留」：不灭旧卡、不发新卡。
   const liveIds = new Set(currentLive.map((x) => x.id));
   let llmDrivenSupersededCount = 0;
+  let keptAsEquivalentCount = 0;
   const itemsToPersist: typeof llmItems = [];
+
+  // 内容等价 = 同 matterId，或 signal 集合完全一致。title 措辞差异不算变化。
+  const contentEquivalent = (
+    old: (typeof currentLive)[number],
+    it: (typeof llmItems)[number]
+  ) => {
+    if (old.matterId && it.matterId) return old.matterId === it.matterId;
+    const a = [...old.signalIds].sort().join(',');
+    const b = [...(it.signalIds ?? [])].sort().join(',');
+    return a !== '' && a === b;
+  };
+  // 等价（含 priority）→「保留旧卡」；仅内容等价但 priority 变了 →「升级」：
+  // 自动替掉旧卡（即使模型忘了声明 supersedeIds —— 2026-06-11 实测 P2→P1 升级产生跨优先级双卡）。
+  const findEquivalentLive = (it: (typeof llmItems)[number]) =>
+    currentLive.find((old) => old.priority === it.priority && contentEquivalent(old, it));
+  const findPriorityShiftedLive = (it: (typeof llmItems)[number]) =>
+    currentLive.filter((old) => old.priority !== it.priority && contentEquivalent(old, it));
+
   for (const it of llmItems) {
     const sIds = (it.supersedeIds ?? []).filter((id) => liveIds.has(id));
+    // 宽匹配：模型常写 "supersede 已过期的XX" 带后缀（2026-06-11 实测泄漏成真卡），
+    // 只要以 supersede 开头且带 supersedeIds 就视为清理指令。
+    const titleLower = it.title.trim().toLowerCase();
+    const isSupersedeOnly =
+      titleLower === 'supersede' ||
+      (titleLower.startsWith('supersede') && (it.supersedeIds?.length ?? 0) > 0);
+
+    if (!isSupersedeOnly) {
+      // 对照**所有** live 卡（不只 supersedeIds 指到的）：模型重发时常忘了声明替代，
+      // 实测产生过同内容双卡（2026-06-10「CLI 能力开放」）。
+      const equivalentOld = findEquivalentLive(it);
+      if (equivalentOld) {
+        keptAsEquivalentCount++;
+        // 等价旧卡保留原状。注意：step 7 的 same-hash supersede 可能已把它标为 superseded，
+        // 需要恢复回 live（否则"保留"变成"双重清除"：hash supersede 掉、新卡也被丢弃）。
+        updateAttentionItemStatus(equivalentOld.id, 'live', persistAt);
+        // 模型点名替代的其它旧卡照常清理（那是真过时的）。
+        for (const oldId of sIds) {
+          if (oldId === equivalentOld.id) continue;
+          updateAttentionItemStatus(oldId, 'superseded', persistAt);
+          llmDrivenSupersededCount++;
+        }
+        continue; // 新卡丢弃
+      }
+    }
+
     for (const oldId of sIds) {
       updateAttentionItemStatus(oldId, 'superseded', persistAt);
       llmDrivenSupersededCount++;
     }
-    const isSupersedeOnly = it.title.trim().toLowerCase() === 'supersede';
-    if (!isSupersedeOnly) itemsToPersist.push(it);
+    if (!isSupersedeOnly) {
+      // 升级场景兜底：同内容不同 priority 的旧卡自动替掉，防跨优先级双卡。
+      for (const old of findPriorityShiftedLive(it)) {
+        if (sIds.includes(old.id)) continue; // 已在上面替过
+        updateAttentionItemStatus(old.id, 'superseded', persistAt);
+        llmDrivenSupersededCount++;
+      }
+      itemsToPersist.push(it);
+    }
+  }
+  if (keptAsEquivalentCount > 0) {
+    console.log(`[attention] churn guard kept ${keptAsEquivalentCount} equivalent item(s) unchanged`);
   }
 
   // 8) 批量插入新 items（不含 supersede-only）
@@ -265,6 +337,7 @@ async function doRunAttentionTick(
     outputText: llmText.slice(0, 8000), // 留底
     modelId,
     completedAt,
+    inputSummary,
   });
 
   lastSuccessAt = Date.now();

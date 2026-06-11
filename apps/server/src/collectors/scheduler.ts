@@ -15,9 +15,10 @@ import { meetingArtifactCollector } from './meetingArtifactCollector.js';
 import { larkOrgCollector } from './larkOrgCollector.js';
 import { larkTaskCollector } from './larkTaskCollector.js';
 import { enqueueEvents } from '../triage/triageQueue.js';
+import { reportCollectorError, reportCollectorSuccess } from './authWatchdog.js';
 import type { Collector } from './types.js';
 import { insertMinimalEventContextUnit } from '../context/contextStore.js';
-import { markEventContextExtracted } from '../db.js';
+import { markEventContextExtracted, markEventProcessed } from '../db.js';
 import type { ContextScope } from '../context/ContextUnit.js';
 
 function scopeForSource(source: string): ContextScope {
@@ -173,6 +174,7 @@ async function tick(s: ScheduledCollector): Promise<{ collected: number; newEven
       last_success_at: now.toISOString(),
       last_error: null,
     });
+    reportCollectorSuccess(nameLabel); // auth 看门狗：举报者恢复 → 撤系统卡（幂等早退）
     s.nextRunAt = new Date(Date.now() + s.collector.intervalMs);
 
     broadcast({
@@ -188,13 +190,23 @@ async function tick(s: ScheduledCollector): Promise<{ collected: number; newEven
     if (newRows.length) {
       console.log(`[collectors] ${nameLabel}: ${newRows.length} new signal(s)`);
       // MVP11.0-a §I-6：skipTriage=true 的行已经结构化，不再过 triage LLM，避免双处理。
-      const triagedRows = newRows.filter((x) => !x.skipTriage).map((x) => x.row);
+      // 它们在 ingest 即视为已处理（打 processed_at），让 processed_at IS NULL
+      // 恒等于"还在等 triage"，重启恢复（recoverUnprocessedEvents）才能依赖这个语义。
+      const triagedRows: EventRow[] = [];
+      for (const x of newRows) {
+        if (x.skipTriage) {
+          markEventProcessed(x.row.id, now.toISOString());
+        } else {
+          triagedRows.push(x.row);
+        }
+      }
       if (triagedRows.length) enqueueEvents(triagedRows);
     }
     return { collected: signals.length, newEvents: newRows.length };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[collectors] ${nameLabel} failed:`, msg);
+    reportCollectorError(nameLabel, msg); // auth 看门狗：鉴权类失败 → 升 P0 系统卡
     upsertCollectorState({
       collector_name: nameLabel,
       last_scan_at: now.toISOString(),

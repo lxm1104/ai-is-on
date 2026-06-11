@@ -30,8 +30,11 @@ test('scheduler push 时把 skipTriage 与 row 一起入栈', () => {
   assert.match(schedulerSrc, /newRows\.push\(\s*\{\s*row,\s*skipTriage:\s*sig\.skipTriage\s*===\s*true\s*\}/);
 });
 
-test('scheduler enqueueEvents 前用 skipTriage 过滤', () => {
-  assert.match(schedulerSrc, /triagedRows\s*=\s*newRows\.filter\(\(x\)\s*=>\s*!x\.skipTriage\)/);
+test('scheduler enqueueEvents 前按 skipTriage 分流（skip 行即时标 processed）', () => {
+  // 2026-06-10 起：skipTriage 行 ingest 即 markEventProcessed（"processed_at IS NULL ≡ 等 triage"
+  // 的语义由重启恢复依赖），其余行进 triagedRows 再 enqueue。
+  assert.match(schedulerSrc, /if\s*\(x\.skipTriage\)\s*\{\s*markEventProcessed\(x\.row\.id/);
+  assert.match(schedulerSrc, /else\s*\{\s*triagedRows\.push\(x\.row\)/);
   assert.match(schedulerSrc, /if\s*\(triagedRows\.length\)\s*enqueueEvents\(triagedRows\)/);
 });
 

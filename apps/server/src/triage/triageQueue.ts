@@ -7,11 +7,13 @@
 // 文件名暂保留为 triageQueue.ts（rename 影响面大，留作下一轮清理）。
 import { config } from '../config.js';
 import {
+  bumpEventTriageAttempts,
   db,
   type EventRow,
   listActiveUserRules,
   markEventContextExtracted,
   markEventProcessed,
+  markEventTriageFailed,
   resolveProjectCanonical,
   upsertProjectCanonicalProposal,
 } from '../db.js';
@@ -59,6 +61,9 @@ export function enqueueEvents(events: EventRow[]) {
   void drain();
 }
 
+// 每条事件最多经历多少次失败批次（首跑 + 重试）。超出后销账并记 triage_failed_at。
+const MAX_TRIAGE_ATTEMPTS = 2;
+
 async function drain() {
   if (running) return;
   running = true;
@@ -72,8 +77,28 @@ async function drain() {
         console.error(
           `[triage] batch failed (${item.events.length} events). prompt~${Math.round(estimatePromptBytes(item.events) / 1024)}KB. error:\n${msg}`
         );
-        // still mark as processed so we don't spin forever
-        for (const ev of item.events) markEventProcessed(ev.id, new Date().toISOString());
+        // 失败不再静默销账：每条事件记一次失败；还有额度的排回队尾再试一轮，
+        // 额度耗尽的销账 + 打 triage_failed_at（可由 debug/统计看到，不会人间蒸发）。
+        const retryable: EventRow[] = [];
+        const now = new Date().toISOString();
+        for (const ev of item.events) {
+          const attempts = bumpEventTriageAttempts(ev.id);
+          if (attempts < MAX_TRIAGE_ATTEMPTS) {
+            retryable.push(ev);
+          } else {
+            markEventTriageFailed(ev.id, now);
+          }
+        }
+        if (retryable.length) {
+          // 拆成单事件批重试：一条毒丸（超长/怪文本）不再拖死整批。
+          for (const ev of retryable) queue.push({ events: [ev] });
+          console.warn(`[triage] re-queued ${retryable.length} event(s) individually for one more attempt`);
+        }
+        if (retryable.length < item.events.length) {
+          console.warn(
+            `[triage] wrote off ${item.events.length - retryable.length} event(s) after ${MAX_TRIAGE_ATTEMPTS} failed attempts (triage_failed_at set)`
+          );
+        }
       }
     }
   } finally {

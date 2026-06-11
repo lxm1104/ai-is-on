@@ -815,16 +815,18 @@ const GLOBAL_SLICE_CAPS = {
   // MVP5：飞书任务量大且已独立成 slice、不挤 commitments，给到 15。
   tasks: 15,
   uncertainties: 6,
-  recentEvents: 20,
-  topActive: 15,
-  // MVP15 §4 (revision): 8 → 12。每行带 orgRole + biz + fn ~50 token，12 行 ~600 token，
-  // 仍在 packet 整体预算内。给 attention 看到更多协作者，特别是 same_business_cross_function 的同事。
+  // 2026-06-10 packet 瘦身：glm-5.1 prefill 慢（17.8k chars 实跑 213-448s），按分段实测占比裁剪
+  // recentEvents 20→12、topActive 15→10、interactions 20→10、collaborators 12→8（合计约 -3k chars）。
+  // 质量回归标准：attention 卡片是否仍然条条有证据可引。
+  recentEvents: 12,
+  topActive: 10,
+  // MVP15 §4 (revision): 8 → 12。每行带 orgRole + biz + fn ~50 token。
   stakeholders: 12,
-  // MVP15B §6.3：每行 ~50 tokens，12 行 ~600 token。跟 stakeholders 平齐。
-  myTopCollaborators: 12,
+  // MVP15B §6.3：每行 ~50 tokens。
+  myTopCollaborators: 8,
   preferences: 10,
   boundaryRules: 10,
-  attentionInteractions: 20,
+  attentionInteractions: 10,
   agentProposals: 12,
 } as const;
 
@@ -1013,7 +1015,9 @@ export function assembleGlobalContextPacket(
   }));
 
   // -------- 6.5) MVP28 matters slice：active 事项投影 --------
-  const matters = projectMattersForPacket();
+  // limit 30→12（2026-06-10 瘦身）：matters 是 packet 最大段（4.7k chars / 26%）。
+  // projectMattersForPacket 按 priority+updatedAt 排序，截 12 留下的都是高优先级/最近活跃的。
+  const matters = projectMattersForPacket({ limit: 12 });
 
   // -------- 7) tokenEstimate 粗估（仅供调试，不参与 hash） --------
   const tokenEstimate = estimateGlobalPacketTokens({

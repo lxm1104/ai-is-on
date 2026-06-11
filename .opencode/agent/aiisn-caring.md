@@ -1,7 +1,7 @@
 ---
 description: "AI is ON 陪伴层 agent"
 mode: primary
-model: zhipuai-coding-plan/glm-5.1
+model: zai-coding-plan/glm-5.1
 permission:
   bash: allow
   edit: deny

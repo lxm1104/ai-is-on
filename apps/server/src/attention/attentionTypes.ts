@@ -103,4 +103,8 @@ export type AttentionInputSummary = {
   attentionInteractionsCount: number;
   liveAttentionCount: number;    // 进入 packet 的 <currentAttention> 数量
   tokenEstimate: number;
+  // 观测字段（2026-06-10）：定位"慢在哪"——排队 vs LLM 实跑 vs 输入规模。
+  inputChars?: number;           // buildAttentionUserMessage 产出的真实字符数
+  llmWaitMs?: number;            // runOneShot 闸门排队耗时
+  llmExecMs?: number;            // runOneShot LLM 实跑耗时（含 fallback 串行总和）
 };

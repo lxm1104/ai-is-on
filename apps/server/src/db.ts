@@ -515,6 +515,9 @@ ensureColumn('cards', 'source_kind', "TEXT NOT NULL DEFAULT 'triage'");
 ensureColumn('cards', 'source_ref_id', 'TEXT');
 // MVP14 Step 3: 老 triage→cards 流水线下线后，旧 cards 行降为归档（暂不删表，便于回溯）
 ensureColumn('cards', 'archived_at', 'TEXT');
+// triage 失败可见化：失败批次重试一次后才销账，并留下 triage_failed_at 痕迹（不再静默丢弃）。
+ensureColumn('events', 'triage_attempts', 'INTEGER NOT NULL DEFAULT 0');
+ensureColumn('events', 'triage_failed_at', 'TEXT');
 // Topic 化聊天：老库 runtime_messages 没有 topic_id，保留为空，前端只展示选中 topic 的消息。
 ensureColumn('runtime_messages', 'topic_id', 'TEXT');
 db.exec(`CREATE INDEX IF NOT EXISTS idx_runtime_messages_topic ON runtime_messages(topic_id, created_at)`);
@@ -1135,6 +1138,22 @@ export function tryInsertEvent(row: EventRow): boolean {
 
 export function markEventProcessed(id: string, processedAt: string) {
   db.prepare(`UPDATE events SET processed_at = ? WHERE id = ?`).run(processedAt, id);
+}
+
+/** triage 批次失败时调用：attempts +1，返回累计失败次数（决定是否还有重试额度）。 */
+export function bumpEventTriageAttempts(id: string): number {
+  db.prepare(`UPDATE events SET triage_attempts = triage_attempts + 1 WHERE id = ?`).run(id);
+  const row = db
+    .prepare(`SELECT triage_attempts AS n FROM events WHERE id = ?`)
+    .get(id) as { n: number } | undefined;
+  return row?.n ?? 0;
+}
+
+/** 重试额度耗尽后销账：打 processed_at 防止重复入队，同时记 triage_failed_at 供排查。 */
+export function markEventTriageFailed(id: string, at: string) {
+  db.prepare(
+    `UPDATE events SET processed_at = ?, triage_failed_at = ? WHERE id = ?`
+  ).run(at, at, id);
 }
 
 export function listEvents(limit = 50): EventRow[] {
@@ -2821,9 +2840,12 @@ export function markAttentionItemsExpired(
     .prepare(
       `UPDATE attention_items
          SET status = 'expired', updated_at = ?
-       WHERE status = 'live' AND created_at < ?`
+       WHERE status = 'live' AND (
+         created_at < ?
+         OR (expires_at IS NOT NULL AND expires_at <= ?)
+       )`
     )
-    .run(updatedAt, beforeIso);
+    .run(updatedAt, beforeIso, updatedAt);
   return r.changes;
 }
 
@@ -2954,6 +2976,7 @@ export function updateAttentionEngineRun(
       | 'items_emitted'
       | 'model_id'
       | 'completed_at'
+      | 'input_summary_json'
     >
   >
 ): void {

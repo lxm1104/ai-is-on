@@ -1,7 +1,7 @@
 ---
 description: "AI is ON MVP15A project entity 名 → cluster 聚类去重"
 mode: primary
-model: zhipuai-coding-plan/glm-5.1
+model: zai-coding-plan/glm-5.1
 permission:
   bash: allow
   edit: deny

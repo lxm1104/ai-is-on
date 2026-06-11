@@ -1,7 +1,7 @@
 ---
 description: "AI is ON MVP15 部门名 → business + functionPath 解析"
 mode: primary
-model: zhipuai-coding-plan/glm-5.1
+model: zai-coding-plan/glm-5.1
 permission:
   bash: allow
   edit: deny

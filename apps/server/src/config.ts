@@ -127,6 +127,16 @@ export const config = {
   triageTimeoutMs: envInt('TRIAGE_TIMEOUT_MS', 90_000),
   // How many signals to batch into one triage call
   triageBatchSize: envInt('TRIAGE_BATCH_SIZE', 6),
+  // 全局 opencode one-shot 并发上限。coding-plan 类 provider 实际近似串行处理，
+  // 并发 >1 时所有调用互相挤兑排队 → 集体超时（2026-06-09 实测 87% 失败）。
+  opencodeMaxConcurrency: envInt('OPENCODE_MAX_CONCURRENCY', 1),
+  // attention 引擎单次 LLM 超时。实测 glm-5.1 单次 ~26k input 需要 ~104s，
+  // 180s 贴着 p50 跑必然误杀，误杀后 fallback 重试又加倍 provider 负载。
+  attentionTimeoutMs: envInt('ATTENTION_TIMEOUT_MS', 300_000),
+  // attention 专用模型（2026-06-10）：turbo + thinking-disabled（见 opencode.json provider 配置）
+  // 实测 13.4k chars 输入 15-94s，vs glm-5.1 的 171-225s；fallback 用 glm-5.1 兜质量。
+  attentionModel: envStr('ATTENTION_MODEL', 'zai-coding-plan/glm-5-turbo'),
+  attentionFallbackModel: envStr('ATTENTION_FALLBACK_MODEL', 'zai-coding-plan/glm-5.1'),
 
   // ---------- MVP13 §S4 LLM chat_affinity ranker ----------
   mvp13RankerEnabled: envBool('MVP13_LLM_RANKER_ENABLED', true),
