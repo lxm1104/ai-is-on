@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { config } from '../config.js';
 import { runLarkCliJson } from '../util/larkCli.js';
 import { getMyOpenId } from '../util/identity.js';
-import type { Collector, RawSignal } from './types.js';
+import type { CollectResult, Collector, RawSignal } from './types.js';
 import type { ContextEntityRef } from '../context/ContextUnit.js';
 
 /**
@@ -304,14 +304,16 @@ export const meetingArtifactCollector: Collector = {
   name: 'meeting_artifact',
   intervalMs: config.meetingArtifactIntervalMs,
 
-  async collect(_since: Date | null): Promise<RawSignal[]> {
-    if (!config.meetingArtifactEnabled) return [];
+  async collect(_since: Date | null): Promise<CollectResult> {
+    // MVP33：快照式（自管 lookbackDays 窗口），水位 = 本轮扫描起点
+    const coveredUntil = new Date().toISOString();
+    if (!config.meetingArtifactEnabled) return { signals: [], coveredUntil };
     const t0 = Date.now();
 
     const myOpenId = await getMyOpenId().catch(() => '');
     if (!myOpenId) {
       console.warn('[meetingArtifact] getMyOpenId failed, skip this tick');
-      return [];
+      return { signals: [], coveredUntil };
     }
 
     const sinceIso = new Date(
@@ -418,6 +420,6 @@ export const meetingArtifactCollector: Collector = {
         elapsedMs: Date.now() - t0,
       })
     );
-    return signals;
+    return { signals, coveredUntil };
   },
 };

@@ -52,7 +52,7 @@ import {
   parseDepartments,
   type DeptTaxonomyResult,
 } from '../util/departmentTaxonomy.js';
-import type { Collector, RawSignal } from './types.js';
+import type { CollectResult, Collector } from './types.js';
 import { randomUUID } from 'node:crypto';
 
 const COLLECTOR_NAME = 'larkOrg';
@@ -78,7 +78,8 @@ export type LarkOrgCollectorRunSummary = {
 export const larkOrgCollector: Collector = {
   name: COLLECTOR_NAME,
   intervalMs: INTERVAL_MS,
-  async collect(_since: Date | null): Promise<RawSignal[]> {
+  async collect(_since: Date | null): Promise<CollectResult> {
+    const coveredUntil = new Date().toISOString();
     try {
       const summary = await runLarkOrgSync({ now: Date.now() });
       console.log(
@@ -89,7 +90,7 @@ export const larkOrgCollector: Collector = {
         `[larkOrg] tick failed: ${err instanceof Error ? err.message : String(err)}`
       );
     }
-    return [];
+    return { signals: [], coveredUntil };
   },
 };
 

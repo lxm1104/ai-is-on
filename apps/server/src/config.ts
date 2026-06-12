@@ -26,6 +26,13 @@ function envInt(name: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function envFloat(name: string, fallback: number): number {
+  const v = process.env[name];
+  if (v === undefined || v === '') return fallback;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 export const config = {
   port: envInt('PORT', 8787),
   webOrigin: envStr('WEB_ORIGIN', 'http://127.0.0.1:5173'),
@@ -43,8 +50,13 @@ export const config = {
   speechMaxSeconds: envInt('SPEECH_MAX_SECONDS', 60),
   ffmpegBin: envStr('FFMPEG_BIN', 'ffmpeg'),
   larkCliBin: envStr('LARK_CLI_BIN', 'lark-cli'),
+  // 2026-06-12：lark-cli 子进程批量挂死（不可中断内核等待）导致 collector 互斥锁
+  // 被永久占住、系统失明 19h。任何 spawn 都必须有硬超时。
+  larkCliTimeoutMs: envInt('LARK_CLI_TIMEOUT_MS', 120_000),
 
   collectorEnabled: envBool('COLLECTOR_ENABLED', true),
+  // 全部 collector 的最新 last_success_at 比现在旧超过此值 → 升「采集停滞」P0 系统卡
+  collectorStaleAlarmMs: envInt('COLLECTOR_STALE_ALARM_MS', 1_800_000),
   calendarIntervalMs: envInt('CALENDAR_COLLECTOR_INTERVAL_MS', 300_000),
   imIntervalMs: envInt('IM_COLLECTOR_INTERVAL_MS', 180_000),
   // MVP5 drive collector — Lark docs/Wiki edited recently. Default 10 min;
@@ -97,6 +109,17 @@ export const config = {
   // MVP30: 放大 p2p messages-search 的翻页上限（page-size≈50），防止 fetch 天花板窗口里的消息被
   //   page-limit 截断而漏掉新消息。默认 5（≈250 条/轮，p2p 量足够）。
   imP2pPageLimit: envInt('IM_P2P_PAGE_LIMIT', 5),
+  // ---------- MVP33 U1 采集覆盖水位 ----------
+  // 追赶窗口上限：单轮最多消化的时间跨度。停摆后积压按 6h/轮排干（24h ≈ 4 个 tick 追平），
+  // 既限幅单轮负载，又让 messages-search 的分页上限在窗口内大概率够用。
+  imMaxScanWindowMs: envInt('IM_MAX_SCAN_WINDOW_MS', 6 * 3600_000),
+  // 收缩 floor：最新锚定搜索 has_more 时窗口减半重试的下限。到底仍超限 → 有界接受 + 大声报错
+  // （病态：5min 内新增超过分页上限的 p2p 消息）。
+  imMinScanWindowMs: envInt('IM_MIN_SCAN_WINDOW_MS', 5 * 60_000),
+  // 水位滞后告警线：扫描在成功但 covered_until 落后实时超此值 → P1 系统卡（freshnessWatchdog）。
+  collectorWatermarkLagAlarmMs: envInt('COLLECTOR_WATERMARK_LAG_ALARM_MS', 2 * 3600_000),
+  // 保险丝：水位滞后超此值则跳水位（since 钳到 now-此值），大声丢弃，绝不静默。
+  collectorWatermarkMaxLagMs: envInt('COLLECTOR_WATERMARK_MAX_LAG_MS', 7 * 86400_000),
   // MVP11.0-b drive comment collector
   driveCommentEnabled: envBool('DRIVE_COMMENT_COLLECTOR_ENABLED', true),
   driveCommentIntervalMs: envInt('DRIVE_COMMENT_COLLECTOR_INTERVAL_MS', 300_000),
@@ -146,6 +169,12 @@ export const config = {
   matterVerifyDelayMs: envInt('MATTER_VERIFY_DELAY_MS', 300_000),
   // one-shot 超时，对齐 chat-conclusion 的 EXTRACT_TIMEOUT_MS。
   matterVerifyTimeoutMs: envInt('MATTER_VERIFY_TIMEOUT_MS', 90_000),
+
+  // ---------- MVP33 U2 matter_observations 消费通路 ----------
+  // 总开关：triage 产出的 lifecycle 观察（progress/block 等）经召回+判定落到 Matter 状态机。
+  matterObsConsumeEnabled: envBool('MATTER_OBS_CONSUME_ENABLED', true),
+  // 观察消费置信门槛：低于此值的观察只记录不消费（triage 的观察置信本身偏乐观，0.6 滤明显弱信号）。
+  matterObsMinConfidence: envFloat('MATTER_OBS_MIN_CONFIDENCE', 0.6),
 
   // ---------- MVP13 §S4 LLM chat_affinity ranker ----------
   mvp13RankerEnabled: envBool('MVP13_LLM_RANKER_ENABLED', true),

@@ -540,6 +540,15 @@ ensureColumn('events', 'context_extracted_at', 'TEXT');
 // 命名参数列集不含此列（better-sqlite3 对多余 key 抛错），读走 SELECT *，写走专用 UPDATE。
 ensureColumn('matters', 'resolve_verification_json', 'TEXT');
 
+// MVP33 U1: collector 覆盖水位（coverage watermark）。游标只推进到「已完整覆盖」的时间点，
+// 截断/上限命中时水位停在被截处，下轮续扫——停摆/洪峰后不再静默永久丢数据。
+// last_success_at 回归"活性"语义（最近一次成功扫描的墙钟时间），covered_until 表达覆盖进度。
+ensureColumn('collector_state', 'covered_until', 'TEXT');
+// MVP33 U2: matter_observations 消费标记。带 lifecycle_effect 的观察经召回+判定落到 Matter
+// 状态机后在此销账；NULL = 未消费（启动补扫的依据）。consume_result 记录结论（审计）。
+ensureColumn('matter_observations', 'consumed_at', 'TEXT');
+ensureColumn('matter_observations', 'consume_result', 'TEXT');
+
 // MVP7: boundary_rules 加 condition_hash 做幂等。结构化字段稳定 JSON → sha1。
 // 重跑 bootstrap / 同样的 card_action 学到完全相同的 rule 时只更新 updated_at，不新建行。
 ensureColumn('boundary_rules', 'condition_hash', 'TEXT');
@@ -1333,16 +1342,20 @@ export type CollectorStateRow = {
   last_scan_at: string | null;
   last_success_at: string | null;
   last_error: string | null;
+  // MVP33 U1：覆盖水位。游标读取优先 covered_until（旧库回退 last_success_at）；
+  // 错误轮写 null → COALESCE 保旧值（与 last_success_at 同语义）。
+  covered_until: string | null;
 };
 
 export function upsertCollectorState(row: CollectorStateRow) {
   db.prepare(
-    `INSERT INTO collector_state (collector_name, last_scan_at, last_success_at, last_error)
-     VALUES (@collector_name, @last_scan_at, @last_success_at, @last_error)
+    `INSERT INTO collector_state (collector_name, last_scan_at, last_success_at, last_error, covered_until)
+     VALUES (@collector_name, @last_scan_at, @last_success_at, @last_error, @covered_until)
      ON CONFLICT(collector_name) DO UPDATE SET
        last_scan_at = excluded.last_scan_at,
        last_success_at = COALESCE(excluded.last_success_at, collector_state.last_success_at),
-       last_error = excluded.last_error`
+       last_error = excluded.last_error,
+       covered_until = COALESCE(excluded.covered_until, collector_state.covered_until)`
   ).run(row);
 }
 
@@ -2815,6 +2828,21 @@ export function updateAttentionItemStatus(
 }
 
 /**
+ * churn guard v2（2026-06-12）：内容等价但优先级变化 → 原地升降级，
+ * 保住卡片身份（id/created_at/用户状态），不再「杀旧建新」洗牌。
+ */
+export function updateAttentionItemPriority(
+  id: string,
+  priority: string,
+  updatedAt: string
+): AttentionItemRow | null {
+  db.prepare(
+    `UPDATE attention_items SET priority = ?, updated_at = ? WHERE id = ?`
+  ).run(priority, updatedAt, id);
+  return getAttentionItem(id);
+}
+
+/**
  * 把同 input_hash 的旧 live 项标 superseded。
  * 在每次成功 run 后、插入新 items 前调用，保证幂等重跑不会双倍出货。
  */
@@ -4099,16 +4127,63 @@ export type MatterObservationRow = {
   candidate_matter_ids_json: string;
   raw_json: string;
   created_at: string;
+  // MVP33 U2：消费标记（NULL=未消费）。consume_result 形如 'attach:progress:applied' / 'delegated_to_reducer'。
+  consumed_at: string | null;
+  consume_result: string | null;
 };
 
 export function insertMatterObservation(row: MatterObservationRow): void {
   db.prepare(
     `INSERT INTO matter_observations
        (id, source_event_id, context_unit_ids_json, observation_type, matter_type, title,
-        lifecycle_effect, evidence, confidence, candidate_matter_ids_json, raw_json, created_at)
+        lifecycle_effect, evidence, confidence, candidate_matter_ids_json, raw_json, created_at,
+        consumed_at, consume_result)
      VALUES (@id, @source_event_id, @context_unit_ids_json, @observation_type, @matter_type, @title,
-             @lifecycle_effect, @evidence, @confidence, @candidate_matter_ids_json, @raw_json, @created_at)`
+             @lifecycle_effect, @evidence, @confidence, @candidate_matter_ids_json, @raw_json, @created_at,
+             @consumed_at, @consume_result)`
   ).run(row);
+}
+
+export function getMatterObservationRow(id: string): MatterObservationRow | null {
+  return (
+    (db.prepare(`SELECT * FROM matter_observations WHERE id = ?`).get(id) as
+      | MatterObservationRow
+      | undefined) ?? null
+  );
+}
+
+/** MVP33 U2：消费销账。candidateMatterIdsJson 可选回写（补上 MVP29 预留未用的字段）。 */
+export function markMatterObservationConsumed(
+  id: string,
+  consumedAt: string,
+  consumeResult: string,
+  candidateMatterIdsJson?: string
+): void {
+  if (candidateMatterIdsJson !== undefined) {
+    db.prepare(
+      `UPDATE matter_observations
+       SET consumed_at = ?, consume_result = ?, candidate_matter_ids_json = ?
+       WHERE id = ?`
+    ).run(consumedAt, consumeResult, candidateMatterIdsJson, id);
+  } else {
+    db.prepare(
+      `UPDATE matter_observations SET consumed_at = ?, consume_result = ? WHERE id = ?`
+    ).run(consumedAt, consumeResult, id);
+  }
+}
+
+/** MVP33 U2：启动补扫——窗口内未消费、带 lifecycle_effect 的观察（fire-and-forget 丢失的 in-flight）。 */
+export function listUnconsumedMatterObservationRows(
+  createdAfterIso: string,
+  limit = 50
+): MatterObservationRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM matter_observations
+       WHERE consumed_at IS NULL AND lifecycle_effect IS NOT NULL AND created_at > ?
+       ORDER BY created_at ASC LIMIT ?`
+    )
+    .all(createdAfterIso, limit) as MatterObservationRow[];
 }
 
 export function listMatterObservationsBySourceEvent(eventId: string): MatterObservationRow[] {

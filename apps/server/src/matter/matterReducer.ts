@@ -53,7 +53,8 @@ import {
 import { type MatterJudge, llmJudge, scoreAndRank } from './matterMatcher.js';
 
 // §6.2：reducer 处理的 kind。其余（event/state/relationship/...）只作辅助证据，不直接动 Matter。
-const HANDLED_KINDS = new Set(['commitment', 'intent', 'action_result', 'decision', 'uncertainty']);
+// MVP33 U2：导出给 matterObservationConsumer 做让路判断（这些 kind 的单元已走 reducer hook）。
+export const HANDLED_KINDS = new Set(['commitment', 'intent', 'action_result', 'decision', 'uncertainty']);
 const PRIMARY_ENTITY_TYPES = new Set(['person', 'project', 'doc', 'task', 'org']);
 
 // §6.5 阈值
@@ -117,6 +118,34 @@ export async function reduceMatterForContextUnit(
     return IGNORE(`judge failed: ${err instanceof Error ? err.message : String(err)}`);
   }
   return applyDecision(unit, decision, ranked.map((r) => r.matter), now, nowIso);
+}
+
+/**
+ * MVP33 U2：观察消费通路（matterObservationConsumer）的入口。调用方自备候选
+ * （召回轴 = 实体 ∪ 观察标题相似，与 reducer 的 scoreAndRank 不完全相同），
+ * 复用同一个 LLM 判定与同一套保守阈值落地（applyDecision：≥0.78 改状态、
+ * 0.55-0.78 只挂证据、guardEffect 守卫不变）。
+ * 与 reduceMatterForContextUnit 的差异：观察只作用于既有 Matter——
+ * decision.action==='create' 一律降级 ignore（创建语义归 commitment 单元路径，
+ * 那条路有 actionability/实体门槛，防观察类噪声开新 Matter）。
+ */
+export async function reduceUnitWithCandidates(
+  unit: ContextUnit,
+  candidates: Matter[],
+  opts: ReduceOptions = {}
+): Promise<MatterReduceResult> {
+  if (candidates.length === 0) return IGNORE('no candidates');
+  const now = opts.now ?? Date.now();
+  const nowIso = new Date(now).toISOString();
+  const judge = opts.judge ?? llmJudge;
+  let decision: MatterReduceDecision;
+  try {
+    decision = await judge(unit, candidates);
+  } catch (err) {
+    return IGNORE(`judge failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (decision.action === 'create') return IGNORE('observation path never creates matters');
+  return applyDecision(unit, decision, candidates, now, nowIso);
 }
 
 // ---- create 路径 ----

@@ -32,6 +32,7 @@ import {
 import type { ContextEntityRef, ContextScope } from '../context/ContextUnit.js';
 import { isCaringPaused } from '../caring/caringSettings.js';
 import { recordMatterObservation } from '../matter/matterStore.js';
+import { consumeMatterObservationSoon } from '../matter/matterObservationConsumer.js';
 
 function scopeForEvent(ev: EventRow): ContextScope {
   switch (ev.source) {
@@ -217,7 +218,7 @@ function persistMatterObservations(ev: EventRow, item: TriageItem, createdUnitId
   const contextUnitIds = [...createdUnitIds];
   if (eventCtxId && !contextUnitIds.includes(eventCtxId)) contextUnitIds.push(eventCtxId);
   for (const obs of item.matterObservations) {
-    recordMatterObservation({
+    const obsId = recordMatterObservation({
       sourceEventId: ev.id,
       contextUnitIds,
       observationType: obs.observationType,
@@ -228,6 +229,9 @@ function persistMatterObservations(ev: EventRow, item: TriageItem, createdUnitId
       confidence: obs.confidence,
       now,
     });
+    // MVP33 U2：观察 → Matter 状态机消费（fire-and-forget，内部走 opencode 闸门排队；
+    // 进程重启丢失的 in-flight 由启动补扫 recoverUnconsumedObservations 接住）。
+    consumeMatterObservationSoon(obsId);
   }
 }
 

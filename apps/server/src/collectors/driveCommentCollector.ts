@@ -6,7 +6,7 @@ import { listContextEntities, listEventsBySourceSince } from '../db.js';
 import { mergeDocIdentity } from '../context/entityResolver.js';
 import { sanitizeExcerpt } from '../bootstrap/workMapDraftPrompt.js';
 import { resolveDoc, resolveUser } from '../util/nameResolver.js';
-import type { Collector, RawSignal } from './types.js';
+import type { CollectResult, Collector, RawSignal } from './types.js';
 import type { ContextEntityRef } from '../context/ContextUnit.js';
 
 /**
@@ -352,8 +352,10 @@ export const driveCommentCollector: Collector = {
   name: 'drive_comment',
   intervalMs: config.driveCommentIntervalMs,
 
-  async collect(_since: Date | null): Promise<RawSignal[]> {
-    if (!config.driveCommentEnabled) return [];
+  async collect(_since: Date | null): Promise<CollectResult> {
+    // MVP33：快照式（自管 lookback 窗口 + 桶哈希去重），水位 = 本轮扫描起点
+    const coveredUntil = new Date().toISOString();
+    if (!config.driveCommentEnabled) return { signals: [], coveredUntil };
     const t0 = Date.now();
 
     let myOpenId = '';
@@ -448,6 +450,6 @@ export const driveCommentCollector: Collector = {
         elapsedMs: Date.now() - t0,
       })
     );
-    return signals;
+    return { signals, coveredUntil };
   },
 };

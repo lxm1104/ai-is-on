@@ -25,7 +25,7 @@ import { runLarkCliJson } from '../util/larkCli.js';
 import { upsertContextUnit, getContextUnitById } from '../context/contextStore.js';
 import { updateContextUnit, listActiveLarkTaskCommitmentRows } from '../db.js';
 import type { ContextEntityRef } from '../context/ContextUnit.js';
-import type { Collector, RawSignal } from './types.js';
+import type { CollectResult, Collector } from './types.js';
 
 const COLLECTOR_NAME = 'larkTask';
 const TASK_ENTITY_PREFIX = 'lark_task:';
@@ -50,9 +50,10 @@ type LarkTaskDeps = {
 export const larkTaskCollector: Collector = {
   name: COLLECTOR_NAME,
   intervalMs: config.taskIntervalMs,
-  async collect(): Promise<RawSignal[]> {
+  async collect(): Promise<CollectResult> {
+    const coveredUntil = new Date().toISOString();
     await runLarkTaskSync();
-    return [];
+    return { signals: [], coveredUntil };
   },
 };
 

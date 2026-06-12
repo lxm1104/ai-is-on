@@ -32,6 +32,10 @@ import { toneProfileRouter } from './routes/toneProfile.js';
 import { mattersRouter } from './routes/matters.js';
 import { runGraphInducer } from './structure/derived/graphInducer.js';
 import { startCollectorScheduler, stopCollectorScheduler } from './collectors/scheduler.js';
+import {
+  startFreshnessWatchdog,
+  stopFreshnessWatchdog,
+} from './collectors/freshnessWatchdog.js';
 import { startMatterTracker, stopMatterTracker } from './matter/matterScheduler.js';
 import { startTriggerScheduler, stopTriggerScheduler } from './triggers/triggerScheduler.js';
 import { startAttentionScheduler, stopAttentionScheduler } from './attention/attentionEngine.js';
@@ -40,6 +44,7 @@ import { migrateUserRulesIfNeeded } from './boundary/migration.js';
 import { runStartupRecovery } from './startupRecovery.js';
 import { startChatConclusionService } from './matter/chatConclusionService.js';
 import { startMatterVerifyService, stopMatterVerifyService } from './matter/matterVerifyService.js';
+import { recoverUnconsumedObservations } from './matter/matterObservationConsumer.js';
 import { startMaintenance, stopMaintenance } from './maintenance.js';
 
 const app = express();
@@ -99,19 +104,31 @@ server.listen(config.port, '127.0.0.1', () => {
     const recovery = runStartupRecovery();
     console.log(
       `[recovery] 孤儿 attention run ${recovery.orphanedAttentionRuns}、agent run ${recovery.orphanedAgentRuns}；` +
-        `事件销账 ${recovery.eventsWrittenOff}、回灌 triage ${recovery.eventsRequeued}、遗留 ${recovery.eventsLeftBehind}`
+        `事件销账 ${recovery.eventsWrittenOff}、回灌 triage ${recovery.eventsRequeued}、遗留 ${recovery.eventsLeftBehind}；` +
+        `聊天 turn 续跑 ${recovery.chatTurnsResumed}`
     );
   } catch (err) {
     console.error('[recovery] startup recovery failed:', err);
   }
   bootstrapAgents();
   startCollectorScheduler();
+  // 2026-06-12：采集"沉默式停摆"看门狗（authWatchdog 只管报错，这个管不出声）。
+  startFreshnessWatchdog();
   // MVP27 §10.2：Matter tracker 注册在 trigger/attention 之前，先归并事项状态。
   startMatterTracker();
   // MVP31：ask_agent 对话结论 → 办结提案回流
   startChatConclusionService();
   // MVP32：mark_done 办结核实（恢复扫描补排重启丢失的 timer）
   startMatterVerifyService();
+  // MVP33 U2：观察消费补扫（fire-and-forget 在重启时丢的 in-flight 观察）。
+  // 延后 30s：等 collector/triage 启动稳定，且每条消费走 opencode 单并发闸门不抢主链路。
+  setTimeout(() => {
+    recoverUnconsumedObservations().catch((err) => {
+      console.warn(
+        `[matter-obs] startup recovery failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    });
+  }, 30_000);
   // 日常维护：opencode 一次性 session 清理（防 db 无限增长拖垮 checkpoint）
   startMaintenance();
   startTriggerScheduler();
@@ -133,19 +150,22 @@ const shutdown = async (signal: string) => {
     stopCollectorScheduler();
   } catch {}
   try {
+    stopFreshnessWatchdog();
+  } catch {}
+  try {
     stopMaintenance();
   } catch {}
   try {
     stopMatterTracker();
   } catch {}
   try {
+    stopMatterVerifyService();
+  } catch {}
+  try {
     stopTriggerScheduler();
   } catch {}
   try {
     stopAttentionScheduler();
-  } catch {}
-  try {
-    stopMatterVerifyService();
   } catch {}
   try {
     await claudeRuntime.stop();

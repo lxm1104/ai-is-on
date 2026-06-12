@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { config } from '../config.js';
 import { runLarkCliJson } from '../util/larkCli.js';
-import type { Collector, RawSignal } from './types.js';
+import type { CollectResult, Collector, RawSignal } from './types.js';
 
 type AgendaEvent = {
   event_id?: string;
@@ -59,9 +59,11 @@ function summarizeEvent(ev: AgendaEvent): string {
 export const calendarCollector: Collector = {
   name: 'calendar',
   intervalMs: config.calendarIntervalMs,
-  async collect(): Promise<RawSignal[]> {
+  async collect(): Promise<CollectResult> {
     // 不强依赖 since：日历窗口固定为 [now-2h, now+48h]，每轮 dedup 由 events.UNIQUE(content_hash) 兜底
+    // MVP33：快照式采集，水位 = 本轮扫描起点（与历史行为一致）
     const now = new Date();
+    const coveredUntil = now.toISOString();
     const start = new Date(now.getTime() - 2 * HOUR_MS).toISOString();
     const end = new Date(now.getTime() + 48 * HOUR_MS).toISOString();
 
@@ -78,7 +80,7 @@ export const calendarCollector: Collector = {
       'json',
     ]);
 
-    if (!resp.ok || !Array.isArray(resp.data)) return [];
+    if (!resp.ok || !Array.isArray(resp.data)) return { signals: [], coveredUntil };
 
     const signals: RawSignal[] = [];
     for (const ev of resp.data) {
@@ -97,6 +99,6 @@ export const calendarCollector: Collector = {
         contentHash: calendarContentHash(ev),
       });
     }
-    return signals;
+    return { signals, coveredUntil };
   },
 };

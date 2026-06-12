@@ -42,8 +42,21 @@ export type RawSignal = {
   skipTriage?: boolean;
 };
 
+// MVP33 U1：采集覆盖水位契约。
+export type CollectResult = {
+  signals: RawSignal[];
+  /**
+   * 覆盖水位（ISO）：调用方可以安全把游标推进到这里。
+   * 铁律：凡 occurred_at ≤ coveredUntil 且属于本源职责范围的数据，要么已包含在本轮
+   * （或历史轮）signals 中，要么永远不会存在。本轮没有完整消化的时间段，水位不得越过——
+   * 分页截断/上限命中时水位停在被截处，下轮从水位续扫，停摆/洪峰后零静默丢失。
+   * 快照式采集器（不依赖 since 游标）返回本轮扫描起点即可（行为与历史一致）。
+   */
+  coveredUntil: string;
+};
+
 export type Collector = {
   name: string;
   intervalMs: number;
-  collect(since: Date | null): Promise<RawSignal[]>;
+  collect(since: Date | null): Promise<CollectResult>;
 };

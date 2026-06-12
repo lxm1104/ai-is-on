@@ -395,9 +395,11 @@ export function recordMatterObservation(input: {
   confidence?: number;
   candidateMatterIds?: string[];
   now?: string;
-}): void {
+}): string {
+  // MVP33 U2：返回 id，供消费通路（matterObservationConsumer）销账。
+  const id = randomUUID();
   insertMatterObservation({
-    id: randomUUID(),
+    id,
     source_event_id: input.sourceEventId,
     context_unit_ids_json: JSON.stringify(input.contextUnitIds ?? []),
     observation_type: input.observationType,
@@ -409,7 +411,10 @@ export function recordMatterObservation(input: {
     candidate_matter_ids_json: JSON.stringify(input.candidateMatterIds ?? []),
     raw_json: JSON.stringify(input),
     created_at: input.now ?? new Date().toISOString(),
+    consumed_at: null,
+    consume_result: null,
   });
+  return id;
 }
 
 export function listMatterObservationsForEvent(eventId: string): MatterObservationRow[] {

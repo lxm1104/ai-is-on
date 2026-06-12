@@ -5,18 +5,17 @@
 
 ## 待办问题清单（按影响排序）
 
-1. **[P1] attention 单次 LLM 调用 ~104s，太慢**
-   - 实测 input 26.6k tokens，其中用户消息只占 ~4k，约 22k 是 opencode 注入的系统侧内容（agent.md 15KB + 工具 schema + 项目 AGENTS 文件？）。
-   - 方向：查清 opencode run 实际注入了什么；裁剪 aiisn-attention.md；考虑减小 packet（recentEvents 20 条、topActive 15 条是否都必要）。
-   - 时延从 104s 降到 <30s 会质变「及时性」。
-2. **[P2] triage 失败时直接 markEventProcessed 销账**（triageQueue.ts drain catch）
-   - 非 retryable 错误时事件被静默丢弃，没有任何用户可见痕迹。考虑：失败计数 + 卡片/日志面板透出。
-3. **[P3] im collector 偶发 lark-cli 网络超时**（exit 4, open.feishu.cn dial timeout）
-   - 已能自愈（下轮重试），但 lastError 会一直挂着直到下次成功。观察频率，必要时加退避。
-4. **[P3] lark-cli 1.0.49 → 1.0.50 有更新**（collector 错误信息里提示）。
-5. **[P3] `.opencode/agent/*.md` 13 个文件 working tree dirty**
-   - 是 `syncOpencodeAgents()` 启动时从 src/opencode/agents.ts 生成的产物（provider 改名 zhipuai→zai 后再生成）。要么提交，要么 gitignore（生成物不该追踪）。
-6. **[P3] temp/ 下有 2026-05-20 旧研究会话遗留文件**（task_plan/findings/progress.md），已过时，待用户确认后清理。
+1. **[P2] 看板标题相对日期复发**（"CLI POC 明天到期"，2026-06-12 实测；v3 prompt 已禁但 turbo 偶发不守）。
+   - 方向：engine 解析处加违规检测（先观测频率，再决定自动修复 / 换模型）。暂缓：避免与并行会话改同文件冲突。
+2. **[P3] 并行 Claude Code 会话与本系统共享 zai provider**（单并发互相挤兑，triage 消化变慢）。
+   - 观察项：必要时给 triage 加批量合并（一次 LLM 调用处理多事件）摊薄排队。
+3. **[P3] `.opencode/agent/*.md` 13 个文件 working tree dirty**（生成物未 gitignore；用户已拍板代码先不提交）。
+4. **[P3] temp/ 下有 2026-05-20 旧研究会话遗留文件**（task_plan/findings/progress.md），已过时，待用户确认后清理。
+5. **[P3] 56 个 UE 态 lark-cli 僵尸进程**杀不掉（不可中断内核等待，不持锁无害），等下次重启机器回收。
+
+~~已解决~~：attention 104s→~25-70s（第 2/5/6 轮）；triage 静默销账（第 3 轮加重试+留痕）；
+im collector 网络超时（lark-cli 已升 1.0.51 + 第 15 轮全链路硬超时）；采集挂死失明（第 15 轮三道防线）；
+MVP31 生产验证负例（第 16 轮·会话 A：判定「未完成」→ 正确不升提案；正例待自然触发）。
 
 ## 迭代记录
 
@@ -235,3 +234,130 @@ expired / 飞书 99991663-5 错误码）→ 升确定性 P0 系统卡「飞书�
 **经验：**
 - coding-plan 类 provider 近似单并发，客户端必须自己串行化，否则并发越高失败越多。
 - 超时必须显著高于真实 p95，否则「超时 → 重试」反而是负载放大器。
+
+### 2026-06-12 第 15 轮：采集失明 19h 事故 —— lark-cli 整批挂死 + 三道防线
+
+**体检发现（最痛）：** 全部 7 个 collector 自 6/11 11:55（本地）后零成功扫描、零新事件 ~19h；
+attention 期间照常跑且全报 "ok"（吃陈旧数据），用户毫无感知。
+
+**根因链：** 6/11 11:59 起 lark-cli 子进程成批挂死（UE 态=不可中断内核等待、0 CPU，
+连 `auth status` 都挂；触发条件不明，疑与网络/当日 lark-cli 升级 1.0.51 相关，挂死进程
+SIGKILL 都吃不进只能等重启回收）→ `runLarkCli` 的 await **无超时** → collector tick 的
+`running` 互斥锁被永久占住 → 后续所有 interval tick 静默跳过；16:51 服务重启也没救
+（首轮 tick 的新 lark-cli 又挂住）。authWatchdog 只认「错误消息」，挂死不产生错误 → 零告警。
+累计 87 个僵尸 lark-cli（含多轮 tsx watch 重启遗留的孤儿）。
+
+**处置 + 三道防线（全部落地）：**
+- 运维：`pkill -9` 清掉可杀僵尸（56 个 UE 态进程杀不掉，等机器重启回收，不持锁无害）；
+  互斥锁释放后采集当场恢复。
+- 防线① `util/larkCli.ts`：所有 spawn 硬超时（`LARK_CLI_TIMEOUT_MS` 默认 120s，超时按失败
+  resolve + SIGTERM→5s→SIGKILL）；in-flight 子进程登记 + 进程退出时统一收割（堵孤儿累积）。
+- 防线② `scheduler.ts`：互斥锁卡死看护 —— 卡超 max(3×interval, 15min) 强制释放（owner token
+  防旧 tick 迟到的 finally 误释放新锁）；快照透出 running/runningSince。
+- 防线③ `collectors/freshnessWatchdog.ts`（新）：每 5min 查全部 collector 的 last_success_at，
+  连最新的都 >30min（COLLECTOR_STALE_ALARM_MS）→ 升确定性 P0 系统卡「采集已停滞」；恢复自动撤。
+  与 authWatchdog 互补：那边管"报错"，这边管"沉默"。
+
+**验证：** typecheck ✓；新增 11 测试全过，全量 481/481 ✓；僵尸清理后 collector 当场恢复
+（lastSuccessAt 全部刷新，calendar/drive/minutes 新事件入库）；im 补 24h 欠账中。
+超时实测：sleep 5 模拟挂死 → 300ms 按失败返回 ✓。
+
+### 2026-06-12 第 16 轮（并行会话 A）：聊天 turn 烂尾根因反转 + 重启自愈
+
+**根因反转：** 「让 AI 处理」两次烂尾（半截调查就没下文）的真凶不是模型弃疗 ——
+手动在同一 opencode session 续跑完全正常（11 步工具调用流畅）。真凶是 **tsx watch
+重启杀掉了正在跑的聊天 turn**（开发期改码/编辑器保存=常态），且 forceKill 的
+「本轮被中止」system_info 被 messageBus 静默吞掉，用户与恢复机制都看不见死亡。
+
+**修复（三层）：**
+- TopicSession：runTurn 返回 finishReason；以 `tool-calls` 烂尾的 turn 自动续跑一轮
+  （上轮已落地，保留作第二层保险）。
+- messageBus：system_info 不再吞 → 「本轮被中止」落库可见（兼作恢复标记）。
+- startupRecovery：扩展聊天续跑 —— 启动时找「末条消息=中止标记且 30min 内」的 topic
+  （cap 2），自动补「继续完成并出结论」。
+- chat prompt：lark-cli 输出就在 Bash 结果里、禁读临时文件；每轮必须以结论收尾。
+
+**验证：** typecheck ✓ 全量 481 测试 ✓；第三次生产测试（测试期间不改码）**完整跑到
+结构化结论**；MVP31 负例验证 ✓ —— 结论判定「承诺未完成」→ 正确不升办结提案。
+正例提案待真实办结场景自然触发。
+
+**协同注记：** 本轮起确认有并行会话 B 在同仓库工作（lark-cli 挂死三防线 + git 提交
+0b48625）。改共享文件前先 git diff；日志条目只追加不改写。
+
+### 2026-06-12 第 17 轮（会话 B）：标题相对日期治理（解析处确定性改写）
+
+- 待办 #1 落地：与其追 prompt 补丁，不如解析处兜底 —— 新增 `attention/titleHygiene.ts`，
+  「今天/今日/明天/后天/大后天」按生成时刻本地时区替换为绝对「M/D」（语义零损失；
+  大后天先于后天匹配防部分替换）。attentionEngine 解析后逐 item 改写 + warn 留观测痕迹。
+- 存量修复：live 卡「CLI POC 明天到期」→「CLI POC 6/13到期」（UPDATE 保卡片状态，不重建）。
+- 验证：typecheck ✓；新增 6 测试（含跨月进位、大后天边界）全过；全量 487/487 ✓。
+
+### 2026-06-12 第 18 轮（会话 B）：UI 全链路审计 + churn guard v2（保卡片身份）
+
+**审计（Claude preview 起独立 vite 实例，真实浏览器视角）：**
+- 看板/聊天/采集状态条/卡片动作均健康；新卡片标题绝对日期 ✓；collector 新鲜度在头部有展示。
+- 发现并修复 2 个渲染瑕疵：卡头 "Agent Agent" 双徽标（source 与 lineage 同文案时只显示一个）；
+  "为什么" 段与摘要重复（reason===summary 时不再重复渲染）。preview 实测生效。
+- 基建顺手修：vite 端口从硬编码挪到 PORT env（默认 5173 不变，preview 工具可分配端口）。
+
+**churn guard v2（信任侵蚀型问题）：** DB 取证发现同标题卡 5min 内成对 superseded+新建
+（"同步给小李" / "回复陈一柯" / "提交专利" 全中招）—— created_at 重置、用户状态丢失、看板洗牌。
+两个漏洞：① 模型每轮引用 signalIds 略有出入 → 集合等价判不出同卡；② 优先级变化走「杀旧建新」。
+修复：等价判定加标题归一化全等（不同 matterId 硬否决不受影响）；priority 变化改为**原地升降级**
+（updateAttentionItemPriority，保 id/created_at/用户状态）。
+
+**验证：** typecheck ✓；新增 3 测试，全量 490/490 ✓；UI 修复 preview 实测 ✓；
+看板身份稳定性 13min 跨 2-3 轮观察进行中（后台）。
+
+**审计遗留（产品方向，待用户拍板）：** Rules & Audit（教 AI 规则）入口埋在左栏底部折叠区 ——
+round 9 已验证的 Outlook 模式建议显性化（如头部入口/首屏卡位）。涉及布局调整，等用户意见。
+
+**第 18 轮补充：** 稳定性观察结果 —— 跨 2 轮 attention，6 张卡 id 全保持、同标题洗牌对 0
+（churn v2 实测生效 ✓）。顺带抓到新漏网：模型发不带 supersedeIds 的「supersede: 清理…」卡，
+旧宽匹配（要求有 ids）漏成用户可见 P3 卡 → 收紧为「标题以 supersede 开头一律不落地」
+（无 ids 即 no-op），清掉存量 1 张。全量 490/490 ✓；修复后看板 7 卡零泄漏、P0=3 守线。
+
+**第 18 轮补充 2（前端状态同步缝隙）：** 审计发现状态条「Claude 离线/启动中」长期失真 ——
+runtime_status 只在变化时 WS 推送，页面加载/重连晚于 ready 广播就永远停在旧态（dev tsx watch
+每次改码重启必现）。修复：api 加 fetchRuntimeStatus（/api/health）；初始加载与 WS 每次
+(re-)open 都补拉 runtime + cards + collectors 快照。web typecheck ✓，preview 实测
+「离线」→「在线」自愈 ✓。
+
+### 2026-06-12 第 20 轮（会话 A）：提案卡被引擎误杀 —— 保护性免疫
+
+- **事故**：MVP31 今天产生了 2 个自然正例提案（专利办结 + 宁波力劲模板问题办结），
+  全部在升起后约 20 分钟被「优先级升级替代」误杀 —— 同 matter 的 P0 催办卡与 P1 提案卡
+  被 contentEquivalent 判定等价（matterId 相同），触发 priority-shift 清理。系统左手杀右手。
+- **修复**：attentionEngine 引入 isProtectedCard（input_hash 前缀 proposal:* / system:*）——
+  LLM 点名替代（sIds）与防抖等价机制（findEquivalentLive / findPriorityShiftedLive）一律跳过；
+  这类卡的生命周期只归各自服务（用户动作 / matter resolve / 看门狗恢复）。
+- 数据修复：复活 2 张被误杀提案（已免疫）；清除 1 张「清理：」前缀泄漏卡
+  （注给 B：titleHygiene 的 supersede 宽匹配可考虑加中文「清理：」变体，留你定夺）。
+- 验证：tsc ✓ 全量 490 测试 ✓（与 B 的 attentionEngine 在途改动无冲突，仅微创三处）。
+
+### 2026-06-12 第 21 轮（会话 C）：MVP33 —— 采集覆盖水位 + 观察闭环（专利事故两层根因的普适修复）
+
+- **事故定性**（用户问"为什么跟周强单聊说过了 attention 没认出来"）：
+  ① 决定性根因：6-11 12:51-12:58 的闭环对话（"都提交好了哈"→周强"可以，点赞"）落在 lark-cli
+  挂死盲区开头；6-12 回灌时 `messages-search --page-limit 5` 最新锚定只回 100 条（has_more 被忽略），
+  **比 6-11 20:06 更早的 ~8h 被静默永久丢弃**。复现实锤：同窗口同参数重放，周强会话 0 条命中。
+  ② 系统性根因：当天交底书 drive 编辑、周强评论、专利系统"待审批"通知都进来了，triage 也产出了
+  5 条专利 observation（含 progress/advance）—— 但 matter_observations 是只写死信（MVP29 预留的
+  candidate_matter_ids_json 恒空），reducer 只吃 5 种语义 kind，event/state 单元全被闸门挡掉。
+- **普适修复（MVP33，docs/MVP33-采集覆盖水位与观察闭环技术方案.md）**：
+  - U1 覆盖水位契约：`Collector.collect → { signals, coveredUntil }`；collector_state 新列
+    covered_until（错误轮 COALESCE 保旧值）；调度器游标只推进到水位 + 7d 保险丝；im 全保真
+    （6h 有界追赶窗口、最新锚定源 has_more 收缩重试、asc 源 per-chat clamp −60s、信号上限改
+    按时间排水不再按优先级永久丢弃）；发射不变量：事件只产自 (since, coveredUntil]，跨轮窗口
+    不相交（agg 不重复计数）；drive 单页拉满 clamp；其余 5 个快照式 collector 契约适配。
+    freshnessWatchdog 新增第二类告警：扫描在成功但水位落后 >2h → P1 系统卡（与停滞 P0 卡互补）。
+  - U2 观察消费通路：triage 落 observation 后 fire-and-forget 消费——门槛（advance/resolve/block/
+    reopen + conf≥0.6）→ 让路（event 已产 HANDLED_KINDS 单元归 reducer hook，防双判）→ 召回
+    （scoreAndRank 实体轴 ∪ obs.title 标题轴）→ 复用 reducer 的 llmJudge + applyDecision 保守阈值
+    （永不 create/drop）→ 销账回写 candidate_matter_ids_json；judge 瞬时失败不销账，启动补扫
+    （48h 窗、cap 50）接住。明确砍掉 detectSelfAction 扩词（实例级补丁，由 U2+MVP32 覆盖）。
+- **验证**：tsc ✓；新增 18 个测试全过（含验收通例：24h 停摆 + 25 条/页分页上限 → 多轮排干
+  240 条零丢失零重复）；全量 539 测试 ✓ 零回归。生产实测：水位机制上线即自动 clamp 过一次
+  （im coveredUntil 落后 13min 排水中）。
+- **事故自愈**：把 im 水位拨回 2026-06-11T03:55:40Z（水位回拨=免费补扫能力），等多轮 tick
+  排干后周强会话应入库 → triage → reducer/consumer 推进 matter 04ce4f28。

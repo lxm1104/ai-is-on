@@ -16,7 +16,7 @@ import { larkOrgCollector } from './larkOrgCollector.js';
 import { larkTaskCollector } from './larkTaskCollector.js';
 import { enqueueEvents } from '../triage/triageQueue.js';
 import { reportCollectorError, reportCollectorSuccess } from './authWatchdog.js';
-import type { Collector } from './types.js';
+import type { Collector, RawSignal } from './types.js';
 import { insertMinimalEventContextUnit } from '../context/contextStore.js';
 import { markEventContextExtracted, markEventProcessed } from '../db.js';
 import type { ContextScope } from '../context/ContextUnit.js';
@@ -43,7 +43,25 @@ type ScheduledCollector = {
   nextRunAt?: Date;
   /** Mutex so collector doesn't re-enter while previous run still in flight. */
   running: boolean;
+  /** running=true 的起始时刻（ms epoch），用于卡死检测。 */
+  runningSince?: number;
 };
+
+/**
+ * 互斥锁被同一轮 tick 占用太久（子进程挂死等）时是否强制释放。
+ * 2026-06-12 事故：lark-cli 整批挂死，running 永远 true，所有后续 tick 静默跳过，
+ * 采集停摆 19h。阈值 = max(3×interval, 15min)；强制释放后旧 tick 即使日后完成，
+ * 其 upsert/dedup 都幂等，最多多一轮重复扫描。
+ */
+export function shouldForceRelease(
+  runningSinceMs: number | undefined,
+  nowMs: number,
+  intervalMs: number
+): boolean {
+  if (runningSinceMs === undefined) return false;
+  const limit = Math.max(3 * intervalMs, 15 * 60_000);
+  return nowMs - runningSinceMs > limit;
+}
 
 const scheduled: ScheduledCollector[] = [];
 
@@ -109,15 +127,44 @@ export async function runOnce(name?: string): Promise<RunOnceResult[]> {
 }
 
 async function tick(s: ScheduledCollector): Promise<{ collected: number; newEvents: number; error?: string }> {
-  if (s.running) return { collected: 0, newEvents: 0, error: '上一轮还在跑，已跳过' };
+  if (s.running) {
+    if (shouldForceRelease(s.runningSince, Date.now(), s.collector.intervalMs)) {
+      const stuckMin = Math.round((Date.now() - (s.runningSince ?? Date.now())) / 60_000);
+      console.error(
+        `[collectors] ${s.collector.name} 单轮已卡 ${stuckMin}min，疑似子进程挂死 —— 强制释放互斥锁继续采集`
+      );
+      // 不 return：放本轮 tick 继续跑。旧 tick 若日后 resolve，其写入幂等。
+    } else {
+      return { collected: 0, newEvents: 0, error: '上一轮还在跑，已跳过' };
+    }
+  }
   s.running = true;
+  s.runningSince = Date.now();
+  // 锁主令牌：强制释放后旧 tick 迟到的 finally 不得误释放新 tick 的锁。
+  const lockOwner = s.runningSince;
   const now = new Date();
   const nameLabel = s.collector.name;
   try {
     const state = getCollectorState(nameLabel);
-    const since = state?.last_success_at ? new Date(state.last_success_at) : null;
+    // MVP33 U1：游标读覆盖水位（旧库回退 last_success_at——历史上它兼任两种语义）。
+    const watermarkIso = state?.covered_until ?? state?.last_success_at ?? null;
+    let since = watermarkIso ? new Date(watermarkIso) : null;
+    // 保险丝：水位滞后超硬上限则跳水位（大声丢弃，绝不静默）。正常追赶靠水位逐轮推进，
+    // 走到这里说明采集速率长期跟不上，需要人工关注（watchdog 滞后卡会先于此告警）。
+    if (since && now.getTime() - since.getTime() > config.collectorWatermarkMaxLagMs) {
+      const clamped = new Date(now.getTime() - config.collectorWatermarkMaxLagMs);
+      console.error(
+        `[collectors] ${nameLabel} 覆盖水位滞后超过 ${Math.round(config.collectorWatermarkMaxLagMs / 86400_000)}d` +
+          `（${since.toISOString()}），跳水位到 ${clamped.toISOString()}——该区间数据放弃补扫`
+      );
+      since = clamped;
+    }
 
-    const signals = await s.collector.collect(since);
+    const result = await s.collector.collect(since);
+    // 防御：热重载窗口期 collector 可能仍返回旧契约的数组 → 视为快照式（水位=本轮起点）。
+    const legacy = Array.isArray(result);
+    const signals = legacy ? (result as unknown as RawSignal[]) : result.signals;
+    const coveredUntil = legacy ? now.toISOString() : result.coveredUntil;
     // MVP11.0-a §I-6：把 skipTriage 与 row 绑定保存，避免 dedup 后 `signals[i]` 与 `newRows[i]` 错位。
     type InsertedRow = { row: EventRow; skipTriage: boolean };
     const newRows: InsertedRow[] = [];
@@ -173,7 +220,14 @@ async function tick(s: ScheduledCollector): Promise<{ collected: number; newEven
       last_scan_at: now.toISOString(),
       last_success_at: now.toISOString(),
       last_error: null,
+      covered_until: coveredUntil,
     });
+    if (Date.parse(coveredUntil) < now.getTime() - 60_000) {
+      console.warn(
+        `[collectors] ${nameLabel} 本轮覆盖到 ${coveredUntil}（落后实时 ` +
+          `${Math.round((now.getTime() - Date.parse(coveredUntil)) / 60_000)}min），下轮续扫`
+      );
+    }
     reportCollectorSuccess(nameLabel); // auth 看门狗：举报者恢复 → 撤系统卡（幂等早退）
     s.nextRunAt = new Date(Date.now() + s.collector.intervalMs);
 
@@ -212,6 +266,7 @@ async function tick(s: ScheduledCollector): Promise<{ collected: number; newEven
       last_scan_at: now.toISOString(),
       last_success_at: null,
       last_error: msg.slice(0, 500),
+      covered_until: null, // COALESCE 保旧水位
     });
     broadcast({
       type: 'collector_status',
@@ -224,19 +279,28 @@ async function tick(s: ScheduledCollector): Promise<{ collected: number; newEven
     });
     return { collected: 0, newEvents: 0, error: msg.slice(0, 200) };
   } finally {
-    s.running = false;
+    if (s.runningSince === lockOwner) {
+      s.running = false;
+      s.runningSince = undefined;
+    }
   }
 }
 
 export function getCollectorSnapshot() {
   return scheduled.map((s) => {
     const st = getCollectorState(s.collector.name);
+    const coveredUntil = st?.covered_until ?? st?.last_success_at ?? undefined;
     return {
       name: s.collector.name,
       lastScanAt: st?.last_scan_at ?? undefined,
       lastSuccessAt: st?.last_success_at ?? undefined,
       lastError: st?.last_error ?? undefined,
+      // MVP33 U1：覆盖水位与滞后（旧库回退 last_success_at）
+      coveredUntil,
+      watermarkLagMs: coveredUntil ? Math.max(0, Date.now() - Date.parse(coveredUntil)) : undefined,
       nextRunAt: s.nextRunAt?.toISOString(),
+      running: s.running,
+      runningSince: s.runningSince ? new Date(s.runningSince).toISOString() : undefined,
     };
   });
 }

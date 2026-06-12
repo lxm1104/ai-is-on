@@ -3,7 +3,7 @@ import { config } from '../config.js';
 import { runLarkCliJson } from '../util/larkCli.js';
 import { mergeDocIdentity } from '../context/entityResolver.js';
 import type { ContextEntityRef } from '../context/ContextUnit.js';
-import type { Collector, RawSignal } from './types.js';
+import type { CollectResult, Collector, RawSignal } from './types.js';
 
 /**
  * MVP5.0 drive collector — wraps `lark-cli drive +search --edited-since` to
@@ -76,7 +76,8 @@ export const driveCollector: Collector = {
   name: 'drive',
   intervalMs: config.driveIntervalMs,
 
-  async collect(since: Date | null): Promise<RawSignal[]> {
+  async collect(since: Date | null): Promise<CollectResult> {
+    const scanStartIso = new Date().toISOString();
     // First scan: 7 day lookback per spec §15
     const sinceIso = since
       ? since.toISOString()
@@ -139,6 +140,26 @@ export const driveCollector: Collector = {
       if (docUrl) sig.url = docUrl;
       signals.push(sig);
     }
-    return signals;
+
+    // MVP33 U1：单页 page-size 拉满 ⇒ 窗口内可能还有更老的编辑被截断。水位 clamp 到
+    // 最老结果 −1s，下轮续扫（UNIQUE 去重兜底）。注意 edit_time 是小时粒度——若 clamp
+    // 不能让水位前进（同小时编辑数超过 page-size 的病态场景），退回扫描起点并大声放弃，
+    // 防止水位原地踏步触发误告警。
+    let coveredUntil = scanStartIso;
+    if (items.length >= config.drivePageSize && signals.length > 0) {
+      const oldestMs = Math.min(...signals.map((s) => Date.parse(s.occurredAt)));
+      const clampedMs = oldestMs - 1000;
+      if (Number.isFinite(oldestMs) && (!since || clampedMs > since.getTime())) {
+        coveredUntil = new Date(clampedMs).toISOString();
+        console.warn(
+          `[drive] 单页拉满（${items.length} 条），水位 clamp 到 ${coveredUntil}，下轮续扫`
+        );
+      } else {
+        console.error(
+          `[drive] 单页拉满且 clamp 无法推进水位（同小时编辑超 page-size），接受潜在截断`
+        );
+      }
+    }
+    return { signals, coveredUntil };
   },
 };
