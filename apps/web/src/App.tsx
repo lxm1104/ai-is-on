@@ -16,6 +16,7 @@ import {
   fetchAttentionCards,
   fetchCollectors,
   fetchMessages,
+  fetchRuntimeStatus,
   fetchTopicStatusSnapshot,
   fetchTopics,
   interruptRuntime,
@@ -201,7 +202,8 @@ export function App() {
       fetchAttentionCards(),
       fetchCollectors(),
       fetchTopicStatusSnapshot(),
-    ]).then(([t, c, col, ts]) => {
+      fetchRuntimeStatus(),
+    ]).then(([t, c, col, ts, rs]) => {
       if (t.status === 'fulfilled') setTopics(t.value);
       if (c.status === 'fulfilled') setCards(c.value);
       if (col.status === 'fulfilled') setCollectors(col.value);
@@ -210,6 +212,9 @@ export function App() {
           Object.fromEntries(ts.value.topics.map((row) => [row.topicId, row.status]))
         );
       }
+      // runtime_status WS 推送只发生在状态变化时；页面加载晚于 ready 广播
+      // 就会停在初始 'starting' —— 主动拉一次兜底（2026-06-12）。
+      if (rs.status === 'fulfilled') setStatus(rs.value);
     });
   }, []);
 
@@ -261,13 +266,24 @@ export function App() {
             return;
         }
       },
-      // onOpen: WS 每次（re-）建连都拉一次 topic_status 快照，覆盖重连缝隙
+      // onOpen: WS 每次（re-）建连都补拉快照，覆盖重连缝隙。
+      // 2026-06-12 扩展：服务重启（dev tsx watch 常态）后 runtime ready 广播
+      // 总在页面重连前发出 → 状态条永远「离线」；cards/collectors 同理会漏推送。
       () => {
         void fetchTopicStatusSnapshot()
           .then((snap) =>
             setTopicStatus(Object.fromEntries(snap.topics.map((t) => [t.topicId, t.status])))
           )
           .catch((err) => console.warn('topic-status snapshot failed:', err));
+        void fetchRuntimeStatus()
+          .then((rs) => setStatus(rs))
+          .catch(() => {});
+        void fetchAttentionCards()
+          .then((cs) => setCards(cs))
+          .catch(() => {});
+        void fetchCollectors()
+          .then((col) => setCollectors(col))
+          .catch(() => {});
       }
     );
     return () => client.close();

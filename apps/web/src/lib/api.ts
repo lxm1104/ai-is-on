@@ -9,9 +9,22 @@ import type {
   MatterDetail,
   MatterListItem,
   RelationshipItem,
+  RuntimeStatus,
   SignalCard,
   TopicStatus,
 } from '../types';
+
+/**
+ * runtime 健康度快照（2026-06-12）。WS runtime_status 只在状态变化时推送 ——
+ * 页面加载/重连晚于 ready 广播就会永远停在 starting/离线。初始加载与每次
+ * WS (re-)open 都要主动拉一次兜底。
+ */
+export async function fetchRuntimeStatus(): Promise<RuntimeStatus> {
+  const r = await fetch('/api/health');
+  if (!r.ok) throw new Error(`health ${r.status}`);
+  const j = (await r.json()) as { runtime?: RuntimeStatus };
+  return j.runtime ?? 'error';
+}
 
 export async function fetchTopics(): Promise<ChatTopic[]> {
   const r = await fetch('/api/topics');

@@ -10,6 +10,7 @@ import {
   getAttentionItem as dbGetAttentionItem,
   listLiveAttentionItems as dbListLiveAttentionItems,
   updateAttentionItemStatus as dbUpdateAttentionItemStatus,
+  updateAttentionItemPriority as dbUpdateAttentionItemPriority,
   markAttentionItemsSupersededByHash as dbMarkSupersededByHash,
   markAttentionSupersededForResolvedMatters as dbMarkSupersededForResolvedMatters,
   markAttentionItemsExpired as dbMarkExpired,
@@ -174,6 +175,16 @@ export function updateAttentionItemStatus(
   now: string
 ): AttentionItem | null {
   const row = dbUpdateAttentionItemStatus(id, status, now);
+  return row ? rowToAttentionItem(row) : null;
+}
+
+/** churn guard v2：等价内容优先级变化时原地改 priority，保卡片身份。 */
+export function updateAttentionItemPriority(
+  id: string,
+  priority: AttentionPriority,
+  now: string
+): AttentionItem | null {
+  const row = dbUpdateAttentionItemPriority(id, priority, now);
   return row ? rowToAttentionItem(row) : null;
 }
 

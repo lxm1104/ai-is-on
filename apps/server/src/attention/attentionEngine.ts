@@ -20,6 +20,7 @@ import { runOneShot } from '../triage/backgroundRuntime.js';
 import { broadcast } from '../ws.js';
 import { registerUpsertHook } from '../context/contextStore.js';
 import { assembleGlobalContextPacket } from '../context/agentContextAssembler.js';
+import { absolutizeRelativeDatesInTitle, titlesEquivalent } from './titleHygiene.js';
 import {
   ATTENTION_SYSTEM_PROMPT,
   ATTENTION_PROMPT_VERSION,
@@ -38,6 +39,7 @@ import {
   findRecentSuccessfulRunByInputHash,
   nextGeneration,
   updateAttentionItemStatus,
+  updateAttentionItemPriority,
 } from './attentionStore.js';
 import type {
   AttentionEngineRunSummary,
@@ -238,6 +240,15 @@ async function doRunAttentionTick(
     return summary(runId, generation, packet.inputHash, 'failed', 0, startedAt, completedAt, error);
   }
 
+  // 6.5) 标题相对日期治理：prompt v3 禁了但 turbo 偶发不守，跨天即错；解析处确定性改写兜底。
+  for (const it of llmItems) {
+    const fixed = absolutizeRelativeDatesInTitle(it.title);
+    if (fixed !== it.title) {
+      console.warn(`[attention] 标题相对日期改写: "${it.title}" → "${fixed}"`);
+      it.title = fixed;
+    }
+  }
+
   // 7) 幂等：把同 inputHash 的旧 live 标 superseded（即便我们刚跑、cache 没命中，
   //    也可能因为上一轮成功且数据没变；我们用 inputHash 而不是 time 来判同源）。
   const persistAt = new Date().toISOString();
@@ -253,7 +264,16 @@ async function doRunAttentionTick(
   let keptAsEquivalentCount = 0;
   const itemsToPersist: typeof llmItems = [];
 
-  // 内容等价 = 同 matterId，或 signal 集合完全一致。title 措辞差异不算变化。
+  // 提案卡/系统卡（办结确认 proposal:*、授权失效/采集停滞 system:*）生命周期归各自服务管：
+  // 用户动作、matter resolve、看门狗恢复才能动它们。LLM 点名替代与防抖等价机制一律无权染指
+  // —— 2026-06-12 实测首张办结提案升起 20 分钟即被「优先级升级替代」误杀（同 matter 的
+  // P0 催办卡与 P1 提案卡被判定等价）。
+  const liveById = new Map(currentLive.map((x) => [x.id, x]));
+  const isProtectedCard = (x: { inputHash: string }) =>
+    x.inputHash.startsWith('proposal:') || x.inputHash.startsWith('system:');
+
+  // 内容等价 = 同 matterId，或 signal 集合完全一致，或标题归一化全等（churn guard v2）。
+  // 不同 matterId 是硬否决（即使标题相同也不合并）。
   const contentEquivalent = (
     old: (typeof currentLive)[number],
     it: (typeof llmItems)[number]
@@ -261,23 +281,34 @@ async function doRunAttentionTick(
     if (old.matterId && it.matterId) return old.matterId === it.matterId;
     const a = [...old.signalIds].sort().join(',');
     const b = [...(it.signalIds ?? [])].sort().join(',');
-    return a !== '' && a === b;
+    if (a !== '' && a === b) return true;
+    // v2：模型重发时 signalIds 常略有出入 → 仅靠集合等价判不出「同一张卡」，
+    // 实测 5min 内同标题卡成对 superseded+新建（洗牌）。标题全等兜底。
+    return titlesEquivalent(old.title, it.title);
   };
   // 等价（含 priority）→「保留旧卡」；仅内容等价但 priority 变了 →「升级」：
   // 自动替掉旧卡（即使模型忘了声明 supersedeIds —— 2026-06-11 实测 P2→P1 升级产生跨优先级双卡）。
   const findEquivalentLive = (it: (typeof llmItems)[number]) =>
-    currentLive.find((old) => old.priority === it.priority && contentEquivalent(old, it));
+    currentLive.find(
+      (old) => !isProtectedCard(old) && old.priority === it.priority && contentEquivalent(old, it)
+    );
   const findPriorityShiftedLive = (it: (typeof llmItems)[number]) =>
-    currentLive.filter((old) => old.priority !== it.priority && contentEquivalent(old, it));
+    currentLive.filter(
+      (old) => !isProtectedCard(old) && old.priority !== it.priority && contentEquivalent(old, it)
+    );
 
   for (const it of llmItems) {
-    const sIds = (it.supersedeIds ?? []).filter((id) => liveIds.has(id));
+    // 受保护卡从 LLM 点名替代里剔除（liveById 必含，因为 sIds 已过 liveIds 过滤）
+    const sIds = (it.supersedeIds ?? []).filter(
+      (id) => liveIds.has(id) && !isProtectedCard(liveById.get(id)!)
+    );
     // 宽匹配：模型常写 "supersede 已过期的XX" 带后缀（2026-06-11 实测泄漏成真卡），
     // 只要以 supersede 开头且带 supersedeIds 就视为清理指令。
+    // 以 supersede 开头的 title 永远是清理指令、绝不落地成真卡 —— 不再要求带
+    // supersedeIds（2026-06-12 实测模型发过不带 ids 的「supersede: 清理…」，
+    // 旧条件漏成了用户可见的 P3 卡；没 ids 就当 no-op 丢弃）。
     const titleLower = it.title.trim().toLowerCase();
-    const isSupersedeOnly =
-      titleLower === 'supersede' ||
-      (titleLower.startsWith('supersede') && (it.supersedeIds?.length ?? 0) > 0);
+    const isSupersedeOnly = titleLower.startsWith('supersede');
 
     if (!isSupersedeOnly) {
       // 对照**所有** live 卡（不只 supersedeIds 指到的）：模型重发时常忘了声明替代，
@@ -298,17 +329,36 @@ async function doRunAttentionTick(
       }
     }
 
+    if (!isSupersedeOnly) {
+      // churn guard v2：内容等价但 priority 变了 → 原地升降级，保卡片身份
+      //（id/created_at/用户状态），不再「杀旧建新」。旧版的杀旧建新在 2026-06-12
+      // 实测导致每轮洗牌（同标题卡成对 superseded+重建）。
+      const shifted = findPriorityShiftedLive(it);
+      if (shifted.length > 0) {
+        const keep = shifted[0];
+        updateAttentionItemStatus(keep.id, 'live', persistAt); // 可能已被 same-hash supersede，先恢复
+        updateAttentionItemPriority(keep.id, it.priority, persistAt);
+        keptAsEquivalentCount++;
+        for (const oldId of sIds) {
+          if (oldId === keep.id) continue;
+          updateAttentionItemStatus(oldId, 'superseded', persistAt);
+          llmDrivenSupersededCount++;
+        }
+        // 同内容多张旧卡（真双卡）只留一张
+        for (const extra of shifted.slice(1)) {
+          if (sIds.includes(extra.id)) continue; // 已替过
+          updateAttentionItemStatus(extra.id, 'superseded', persistAt);
+          llmDrivenSupersededCount++;
+        }
+        continue; // 新卡丢弃，身份保留在旧卡上
+      }
+    }
+
     for (const oldId of sIds) {
       updateAttentionItemStatus(oldId, 'superseded', persistAt);
       llmDrivenSupersededCount++;
     }
     if (!isSupersedeOnly) {
-      // 升级场景兜底：同内容不同 priority 的旧卡自动替掉，防跨优先级双卡。
-      for (const old of findPriorityShiftedLive(it)) {
-        if (sIds.includes(old.id)) continue; // 已在上面替过
-        updateAttentionItemStatus(old.id, 'superseded', persistAt);
-        llmDrivenSupersededCount++;
-      }
       itemsToPersist.push(it);
     }
   }
