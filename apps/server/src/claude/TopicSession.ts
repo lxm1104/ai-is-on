@@ -27,6 +27,9 @@ export type SendOptions = {
   onSessionId?: (sessionId: string) => void;
 };
 
+/** runTurn 的收尾信息：'stop' 正常 / 'tool-calls' 烂尾 / 'interrupted' 用户中断 / null 未观测到。 */
+type TurnFinish = { finishReason: string | null };
+
 export class TopicSession extends EventEmitter {
   readonly topicId: string;
   private status: TopicStatus = 'idle';
@@ -74,18 +77,29 @@ export class TopicSession extends EventEmitter {
       }
     }
 
+    // 捕获本轮实际使用的 session id（新 topic 在 turn 内才出现），供烂尾自动续跑复用。
+    let capturedSessionId = opts.sessionId ?? null;
+    const wrappedOpts: SendOptions = {
+      ...opts,
+      onSessionId: (sid) => {
+        capturedSessionId = sid;
+        opts.onSessionId?.(sid);
+      },
+    };
+
     this.setStatus('busy');
     try {
       // 主模型 → 副模型 fallback：主失败仅 console.warn，只有副模型也失败才 emit runtime_error。
+      let finish: TurnFinish | null = null;
       try {
-        await this.runTurn(content, config.opencodeModel, opts);
+        finish = await this.runTurn(content, config.opencodeModel, wrappedOpts);
       } catch (primaryErr) {
         const primaryMsg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
         console.warn(
           `[opencode chat topic=${this.topicId}] primary ${config.opencodeModel} failed, fallback: ${primaryMsg.slice(0, 300)}`
         );
         try {
-          await this.runTurn(content, config.opencodeFallbackModel, opts);
+          finish = await this.runTurn(content, config.opencodeFallbackModel, wrappedOpts);
         } catch (fallbackErr) {
           const fallbackMsg =
             fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
@@ -94,6 +108,27 @@ export class TopicSession extends EventEmitter {
             topicId: this.topicId,
             error: `opencode 两次调用均失败。\n[primary]: ${primaryMsg}\n[fallback]: ${fallbackMsg}`,
           });
+        }
+      }
+
+      // 烂尾 turn 兜底（2026-06-12 实测）：glm 在工具报错后可能直接弃疗，turn 以
+      // finishReason='tool-calls' 而非 'stop' 终结——用户拿到半截"让我看看…"就没下文。
+      // 自动续跑一轮（仅一次，防循环），让模型基于已有信息收尾出结论。
+      if (finish?.finishReason === 'tool-calls' && capturedSessionId) {
+        console.warn(
+          `[opencode chat topic=${this.topicId}] turn 以 tool-calls 烂尾，自动续跑一轮收尾`
+        );
+        try {
+          await this.runTurn(
+            '上一轮在工具调用后意外中断了。请基于目前已获得的信息直接完成任务并给出明确结论；如果关键信息缺失，列出缺什么、建议下一步怎么拿。不要再重复刚才失败的工具调用。',
+            config.opencodeModel,
+            { ...wrappedOpts, sessionId: capturedSessionId, skipContext: true }
+          );
+        } catch (err) {
+          console.warn(
+            `[opencode chat topic=${this.topicId}] 烂尾续跑也失败:`,
+            err instanceof Error ? err.message.slice(0, 200) : String(err)
+          );
         }
       }
     } finally {
@@ -181,8 +216,9 @@ export class TopicSession extends EventEmitter {
   /**
    * 调一次 opencode CLI（一个 turn）。逻辑与原 ClaudeRuntime.runTurn 等价，仅把全局
    * activeChild / topicId 换成 this.activeChild / this.topicId。
+   * resolve 值带最后一个 step-finish 的 reason（'stop' 正常收尾 / 'tool-calls' 烂尾）。
    */
-  private runTurn(content: string, model: string, opts: SendOptions): Promise<void> {
+  private runTurn(content: string, model: string, opts: SendOptions): Promise<TurnFinish> {
     return new Promise((resolve, reject) => {
       const args = ['run', '--agent', 'aiisn-chat', '-m', model, '--format', 'json'];
       if (opts.sessionId) {
@@ -201,6 +237,7 @@ export class TopicSession extends EventEmitter {
       let stderrBuf = '';
       let interrupted = false;
       let lastTurnText = '';
+      let lastFinishReason: string | null = null;
       let observedSessionId = opts.sessionId ?? null;
 
       const stdoutStream = child.stdout!;
@@ -221,6 +258,11 @@ export class TopicSession extends EventEmitter {
           } catch {
             process.stderr.write(`[opencode non-json topic=${this.topicId}] ${line}\n`);
             continue;
+          }
+          // 记录最后一个 step-finish 的 reason（烂尾检测用）
+          const jPart = (json as { part?: { type?: string; reason?: string } }).part;
+          if (jPart?.type === 'step-finish' && typeof jPart.reason === 'string') {
+            lastFinishReason = jPart.reason;
           }
           const turnTextDelta = this.handleOpencodeEvent(json, {
             onSessionId: (sid) => {
@@ -256,7 +298,7 @@ export class TopicSession extends EventEmitter {
             result: lastTurnText || undefined,
             raw: { model, exitCode: code, signal },
           });
-          resolve();
+          resolve({ finishReason: interrupted ? 'interrupted' : lastFinishReason });
           return;
         }
 

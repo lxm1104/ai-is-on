@@ -12,6 +12,7 @@
 //   - 孤儿 run → 标 failed，让监控/调试视图反映真实状态。
 import { db, type EventRow } from './db.js';
 import { enqueueEvents } from './triage/triageQueue.js';
+import { sendTopicMessage } from './chat/chatTopics.js';
 
 /** 超过该年龄的未处理事件不再回灌 triage，直接销账。 */
 const RECOVERY_MAX_AGE_HOURS = 48;
@@ -24,7 +25,50 @@ export type StartupRecoveryReport = {
   eventsWrittenOff: number;
   eventsRequeued: number;
   eventsLeftBehind: number;
+  chatTurnsResumed: number;
 };
+
+/** 重启被杀的聊天 turn：只续最近 30 分钟内、且中止标记是该 topic 最后一条消息的。 */
+const CHAT_RESUME_WINDOW_MIN = 30;
+const CHAT_RESUME_CAP = 2;
+
+// tsx watch 下改码即重启，正在跑的聊天 turn 会被 forceKill 杀掉（2026-06-12 实测：
+// 用户点「让 AI 处理」后两次拿到半截调查就没下文）。messageBus 现在会把「本轮被中止」
+// 落成 system 消息——这里据此找到被杀 topic，自动补一条续跑指令。
+function resumeKilledChatTurns(): number {
+  const rows = db
+    .prepare(
+      `SELECT t.id AS topic_id
+       FROM chat_topics t
+       JOIN runtime_messages m ON m.topic_id = t.id
+       WHERE m.id = (
+         SELECT id FROM runtime_messages WHERE topic_id = t.id
+         ORDER BY created_at DESC LIMIT 1
+       )
+         AND m.role = 'system'
+         AND m.text LIKE '%本轮被中止%'
+         AND m.created_at > strftime('%Y-%m-%dT%H:%M:%S', 'now', '-${CHAT_RESUME_WINDOW_MIN} minutes')
+       LIMIT ${CHAT_RESUME_CAP}`
+    )
+    .all() as Array<{ topic_id: string }>;
+  let resumed = 0;
+  for (const r of rows) {
+    try {
+      sendTopicMessage({
+        topicId: r.topic_id,
+        text: '（系统恢复）上一轮因服务重启被中止。请基于已有进展继续完成任务，并以明确结论收尾；不要从头重做已完成的步骤。',
+        skipContext: true,
+      });
+      resumed += 1;
+    } catch (err) {
+      console.warn(
+        '[recovery] chat turn resume failed:',
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  }
+  return resumed;
+}
 
 export function runStartupRecovery(): StartupRecoveryReport {
   const now = new Date().toISOString();
@@ -86,11 +130,15 @@ export function runStartupRecovery(): StartupRecoveryReport {
       .get() as { n: number }
   ).n - rows.length;
 
+  // 6) 重启被杀的聊天 turn 自动续跑（标记由 messageBus 持久化的「本轮被中止」消息提供）。
+  const chatTurnsResumed = resumeKilledChatTurns();
+
   return {
     orphanedAttentionRuns,
     orphanedAgentRuns,
     eventsWrittenOff: writtenOffOld + writtenOffSkip,
     eventsRequeued: rows.length,
     eventsLeftBehind: Math.max(0, leftBehind),
+    chatTurnsResumed,
   };
 }

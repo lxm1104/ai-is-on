@@ -179,7 +179,16 @@ export function startMessageBus() {
         return;
       }
       case 'system_info': {
-        // suppress in chat stream
+        // 2026-06-12 起不再吞掉：restart/shutdown 杀 turn 的「本轮被中止」必须让用户看见，
+        // 同时作为 startupRecovery 识别"被杀 turn"的持久标记。
+        addMessage({
+          id: randomUUID(),
+          topicId: e.topicId,
+          role: 'system',
+          text: e.text,
+          level: 'info',
+          createdAt: nowIso(),
+        });
         return;
       }
       case 'runtime_error': {
