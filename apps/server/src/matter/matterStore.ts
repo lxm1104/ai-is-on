@@ -28,6 +28,7 @@ import {
   listMatterRows,
   listMatterTransitionRows,
   updateMatter,
+  updateMatterResolveVerification,
   upsertMatterContextLink,
   upsertMatterEntity,
 } from '../db.js';
@@ -39,6 +40,7 @@ import {
   type MatterEntityLink,
   type MatterEntityRole,
   type MatterPriority,
+  type MatterResolveVerification,
   type MatterScope,
   type MatterStatus,
   type MatterTransition,
@@ -72,7 +74,34 @@ export function rowToMatter(row: MatterRow): Matter {
     updatedAt: row.updated_at,
     resolvedAt: row.resolved_at ?? null,
     droppedAt: row.dropped_at ?? null,
+    resolveVerification: parseResolveVerification(row.resolve_verification_json),
   };
+}
+
+// MVP32：verification 列只在读取时水合；坏 JSON 当 null（不让一列脏数据拖垮整个 matter 读取）。
+function parseResolveVerification(json: string | null | undefined): MatterResolveVerification | null {
+  if (!json) return null;
+  try {
+    const v = JSON.parse(json) as Partial<MatterResolveVerification>;
+    if (
+      (v.verdict === 'confirmed' ||
+        v.verdict === 'unverifiable' ||
+        v.verdict === 'contradicted' ||
+        v.verdict === 'user_confirmed') &&
+      typeof v.checkedAt === 'string'
+    ) {
+      return {
+        verdict: v.verdict,
+        confidence: typeof v.confidence === 'number' ? v.confidence : 0,
+        evidence: typeof v.evidence === 'string' ? v.evidence : '',
+        checkedAt: v.checkedAt,
+        userNote: typeof v.userNote === 'string' ? v.userNote : undefined,
+      };
+    }
+  } catch {
+    /* fallthrough */
+  }
+  return null;
 }
 
 function matterToRow(m: Matter): MatterRow {
@@ -240,9 +269,18 @@ export function createMatter(input: CreateMatterInput): Matter {
   return matter;
 }
 
-/** 覆盖式持久化一个已修改的 Matter（version/updated_at 由调用方维护）。MVP27 reducer 用。 */
+/** 覆盖式持久化一个已修改的 Matter（version/updated_at 由调用方维护）。MVP27 reducer 用。
+ *  注意：不触碰 resolve_verification_json（matterToRow 不映射它，updateMatter SQL 也没有该列）。 */
 export function saveMatter(matter: Matter): void {
   updateMatter(matterToRow(matter));
+}
+
+/** MVP32：写/清办结核实结果。专用单列 UPDATE，不 bump version/updated_at。 */
+export function setMatterResolveVerification(
+  matterId: string,
+  v: MatterResolveVerification | null
+): void {
+  updateMatterResolveVerification(matterId, v ? JSON.stringify(v) : null);
 }
 
 export function attachMatterEntity(input: {

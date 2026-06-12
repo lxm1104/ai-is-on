@@ -31,6 +31,7 @@ import { DECISION_AUTHORITY_SYSTEM_PROMPT } from '../util/decisionAuthorityPromp
 import { COLLAB_TYPE_SYSTEM_PROMPT } from '../util/collabTypePrompt.js';
 import { MATTER_REDUCE_SYSTEM_PROMPT } from '../matter/matterReducerPrompt.js';
 import { CHAT_CONCLUSION_SYSTEM_PROMPT } from '../matter/chatConclusionPrompt.js';
+import { MATTER_VERIFY_SYSTEM_PROMPT } from '../matter/matterVerifyPrompt.js';
 
 export type OpencodeAgentName =
   | 'aiisn-chat'
@@ -48,7 +49,8 @@ export type OpencodeAgentName =
   | 'aiisn-decision-authority'
   | 'aiisn-collab-type'
   | 'aiisn-matter-reducer'
-  | 'aiisn-chat-conclusion';
+  | 'aiisn-chat-conclusion'
+  | 'aiisn-matter-verify';
 
 type Permission = 'allow' | 'ask' | 'deny';
 type AgentDef = {
@@ -163,6 +165,12 @@ const AGENTS: readonly AgentDef[] = [
     description: 'AI is ON MVP31 ask_agent 对话结论 → 事项状态提案抽取',
     permission: READ_ONLY,
     prompt: CHAT_CONCLUSION_SYSTEM_PROMPT,
+  },
+  {
+    name: 'aiisn-matter-verify',
+    description: 'AI is ON MVP32 mark_done 办结核实判定',
+    permission: READ_ONLY,
+    prompt: MATTER_VERIFY_SYSTEM_PROMPT,
   },
 ];
 

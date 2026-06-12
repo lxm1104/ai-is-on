@@ -12,7 +12,9 @@ export type AttentionInteractionAction =
   | 'not_relevant'
   | 'ask_agent'
   | 'create_task'
-  | 'matter_resolve'; // MVP31：办结提案确认
+  | 'matter_resolve' // MVP31：办结提案确认
+  | 'mark_done'      // MVP32：用户标记已处理（matter 同步 resolved）
+  | 'matter_reopen'; // MVP32：重开事项（核实存疑确认 / 撤销已处理）
 
 export type AttentionInteraction = {
   id: string;
@@ -44,6 +46,8 @@ function coerceAction(action: string): AttentionInteractionAction {
     case 'ask_agent':
     case 'create_task':
     case 'matter_resolve':
+    case 'mark_done':
+    case 'matter_reopen':
       return action;
     default:
       return 'ack';

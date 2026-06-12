@@ -16,6 +16,8 @@ import type {
 } from '../claude/protocol.js';
 import type { AttentionItem, AttentionStatus } from './attentionTypes.js';
 import { resolveAttentionSignalDetails, signalIdsForOrigin } from '../cards/contextProjection.js';
+import { matchMatterId } from '../db.js';
+import { getMatterById } from '../matter/matterStore.js';
 
 export function projectAttentionItemToCard(item: AttentionItem): SignalCard {
   // 后续："查看原始信息"——若所有 signal 指向同一个 url，就透出为顶层 sourceUrl，
@@ -30,6 +32,26 @@ export function projectAttentionItemToCard(item: AttentionItem): SignalCard {
     if (urls.length === 1) inferredSourceUrl = urls[0];
   }
 
+  // MVP32：acted + 绑定 matter 已 resolved → 投影成 'done'（已处理抽屉里诚实显示「已完成」），
+  // 并透出办结核实结果。matter_id 可能是 LLM 截断前缀（MVP29D），统一 matchMatterId 还原。
+  // 只对 acted item 多做这 1-2 次单行查询；live 卡片不付此成本。
+  let status = mapAttentionStatus(item.status);
+  let verification: SignalCard['verification'];
+  if (item.status === 'acted' && item.matterId) {
+    const fullMatterId = matchMatterId(item.matterId);
+    const matter = fullMatterId ? getMatterById(fullMatterId) : null;
+    if (matter?.status === 'resolved') {
+      status = 'done';
+      if (matter.resolveVerification) {
+        verification = {
+          verdict: matter.resolveVerification.verdict,
+          evidence: matter.resolveVerification.evidence || undefined,
+          checkedAt: matter.resolveVerification.checkedAt,
+        };
+      }
+    }
+  }
+
   return {
     id: item.id,
     priority: item.priority,
@@ -38,12 +60,13 @@ export function projectAttentionItemToCard(item: AttentionItem): SignalCard {
     summary: item.why,
     reason: item.why,
     suggestedAction: item.suggestedAction ?? undefined,
-    status: mapAttentionStatus(item.status),
+    status,
     actions: defaultAttentionActions(item),
     rawEventId: item.signalIds[0] ?? undefined,
     sourceUrl: inferredSourceUrl,
     sourceKind: 'agent_run' as CardSourceKind,
     sourceRefId: item.id,
+    verification,
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
   };
@@ -74,9 +97,24 @@ export function defaultAttentionActions(item: AttentionItem): CardAction[] {
     ];
   }
 
-  const actions: CardAction[] = [
-    { id: 'ack', label: '知道了', kind: 'ack' },
-  ];
+  // MVP32：核实存疑提案卡（matterVerifyService 产）——用户裁决"重开跟进"还是"确实已完成"。
+  // 「确实已完成」走 dismiss 通道但不学 not_relevant 负反馈（cardsService 按前缀白名单豁免）。
+  if (item.inputHash.startsWith('proposal:matter-reopen:')) {
+    return [
+      { id: 'matter_reopen', label: '重新打开', kind: 'matter_reopen' },
+      { id: 'dismiss', label: '确实已完成', kind: 'dismiss' },
+    ];
+  }
+
+  const actions: CardAction[] = [];
+
+  // MVP32：绑定 Matter 的卡片头部给「已处理」——用户在系统外办完事的一键闭环
+  // （resolve matter + 落处理说明 + 清同事项催办）。无 matter 的卡不出（与「知道了」无差别，避免按钮通胀）。
+  if (item.matterId) {
+    actions.push({ id: 'mark_done', label: '已处理', kind: 'mark_done' });
+  }
+
+  actions.push({ id: 'ack', label: '知道了', kind: 'ack' });
 
   // MVP23：有处理角度 → 逐个投影成 'opt:<id>' 角度按钮（kind 仍是 ask_agent，复用执行通道）。
   //   directive 不下发前端，由 applyAttentionAction 按 id 在后端取回。

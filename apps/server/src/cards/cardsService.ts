@@ -6,6 +6,7 @@ import {
   insertCard,
   insertUserRule,
   listOpenCards,
+  matchMatterId,
   updateCardStatus,
 } from '../db.js';
 import { evaluateCard, type CardCandidate } from '../boundary/boundaryEvaluator.js';
@@ -36,7 +37,18 @@ import { buildRichAskAgentPrompt } from '../attention/askAgentPrompt.js';
 import { applyAttentionFeedback } from '../attention/attentionFeedback.js';
 import { recordAttentionInteraction } from '../attention/attentionInteractions.js';
 import { enqueueAttentionTickSoon } from '../attention/attentionEngine.js';
-import { userResolveMatter } from '../matter/matterActions.js';
+import { userReopenMatter, userResolveMatter } from '../matter/matterActions.js';
+import {
+  attachMatterContextLink,
+  getMatterById,
+  setMatterResolveVerification,
+} from '../matter/matterStore.js';
+import { upsertContextUnit } from '../context/contextStore.js';
+import { config } from '../config.js';
+import {
+  MATTER_REOPEN_PROPOSAL_PREFIX,
+  scheduleMatterResolveVerification,
+} from '../matter/matterVerifyService.js';
 
 export function rowToCard(row: CardRow): SignalCard {
   let actions: CardAction[] = [];
@@ -188,7 +200,7 @@ export type CardActionResult = { ok: boolean; card?: SignalCard; topic?: ChatTop
 export async function applyCardAction(
   cardId: string,
   actionId: string,
-  opts?: { extraPrompt?: string }
+  opts?: { extraPrompt?: string; note?: string }
 ): Promise<CardActionResult> {
   // MVP14 Step 2: 同一个 id 命名空间下，先看是不是 AttentionItem。
   // 命中则走 attention 分支；不命中再走原 cards 表。
@@ -312,7 +324,7 @@ export async function applyCardAction(
 async function applyAttentionAction(
   attn: ReturnType<typeof getAttentionItem> & object,
   actionId: string,
-  opts?: { extraPrompt?: string }
+  opts?: { extraPrompt?: string; note?: string }
 ): Promise<CardActionResult> {
   const actions = defaultAttentionActions(attn);
   let action = actions.find((a) => a.id === actionId);
@@ -321,6 +333,15 @@ async function applyAttentionAction(
   //   走 rich prompt + 用户指令、不带任何角度 directive。
   if (!action && actionId === 'ask_agent') {
     action = { id: 'ask_agent', label: '让 AI 处理', kind: 'ask_agent' };
+  }
+  // MVP32：done 卡上的「撤销已处理」是前端合成动作（不在投影动作组里），同 ask_agent 兜底合法化。
+  if (!action && actionId === 'matter_reopen') {
+    action = { id: 'matter_reopen', label: '撤销已处理', kind: 'matter_reopen' };
+  }
+  // MVP32：mark_done 投影只下发给 matter 卡，但旧前端缓存/竞态可能打到无 matter 卡——兜底合法化，
+  // 分支内按"无 matter"路径处理（仅 acted + 交互记录）。
+  if (!action && actionId === 'mark_done') {
+    action = { id: 'mark_done', label: '已处理', kind: 'mark_done' };
   }
   if (!action) return { ok: false, error: `unknown action ${actionId}` };
 
@@ -376,7 +397,9 @@ async function applyAttentionAction(
   // MVP31：办结提案确认 —— 回写 matter 状态，催办卡由下一轮 tick 自动清除。
   if (action.kind === 'matter_resolve') {
     if (!attn.matterId) return { ok: false, error: 'item has no matterId' };
-    const resolved = userResolveMatter(attn.matterId, 'AI 处理结论提案，用户确认办结', now);
+    const fullMatterId = matchMatterId(attn.matterId);
+    if (!fullMatterId) return { ok: false, error: `matter ${attn.matterId} not found` };
+    const resolved = userResolveMatter(fullMatterId, 'AI 处理结论提案，用户确认办结', now);
     if (!resolved) return { ok: false, error: `matter ${attn.matterId} resolve failed` };
     recordAttentionInteraction(attn, 'matter_resolve', now);
     const updated = updateAttentionItemStatus(attn.id, 'acted', now);
@@ -387,11 +410,130 @@ async function applyAttentionAction(
     return { ok: true, card };
   }
 
-  const isResolveProposal = attn.inputHash.startsWith('proposal:matter-resolve:');
+  // MVP32：「已处理」——用户在系统外办完了。落 Matter 层（resolved + 处理说明 + 证据链接），
+  // 同事项催办经 tick 自动清除；随后异步核实（第二档，可配置关闭）。零 LLM、点了即生效。
+  if (action.kind === 'mark_done') {
+    const note = opts?.note?.trim().slice(0, 2000) || undefined;
+    // matter_id 可能是 LLM 截断前缀（MVP29D），canonical 化后再操作；解不出 → 按无 matter 卡兜底。
+    const fullMatterId = attn.matterId ? matchMatterId(attn.matterId) : null;
 
-  if (action.kind === 'dismiss' && isResolveProposal) {
-    // 提案卡的「还没完」≠ 内容不相关：只关卡片，不学 not_relevant 负反馈。
+    // ① Matter → resolved（幂等：已 resolved/dropped 跳过，不写重复 transition）
+    if (fullMatterId) {
+      const m = getMatterById(fullMatterId);
+      if (m && m.status !== 'resolved' && m.status !== 'dropped') {
+        userResolveMatter(
+          fullMatterId,
+          note ? `用户标记已处理：${note}` : '用户标记已处理',
+          now
+        );
+      }
+    }
+
+    // ② 处理说明 → action_result unit（silent：状态已确定性落库，不再触发 Reducer echo）
+    if (note) {
+      try {
+        const { unit } = upsertContextUnit({
+          kind: 'action_result',
+          origin: { kind: 'card_action', refId: attn.id },
+          title: `已处理：${attn.title.slice(0, 60)}`,
+          content: note,
+          scope: 'work',
+          actionability: 'record',
+          confidence: 1,
+          mergeHint: `mark-done:${attn.id}`, // 幂等：重复提交合并为同一 unit
+          silent: true,
+        });
+        if (fullMatterId) {
+          attachMatterContextLink({
+            matterId: fullMatterId,
+            contextUnitId: unit.id,
+            relation: 'resolved_by',
+            effect: 'resolve',
+            confidence: 1,
+            reason: '用户标记已处理时填写的处理说明',
+            now,
+          });
+        }
+      } catch (err) {
+        // note 落库失败不阻塞主流程（matter 已 resolved，卡片状态照常推进），只记日志。
+        console.warn(
+          '[mark-done] note unit write failed:',
+          err instanceof Error ? err.message : String(err)
+        );
+      }
+    }
+
+    // ③ 交互记录 + 卡片状态
+    recordAttentionInteraction(attn, 'mark_done', now);
+    const updated = updateAttentionItemStatus(attn.id, 'acted', now);
+    if (!updated) return { ok: false, error: 'update failed' };
+
+    // ④ 尽快清同事项其余催办卡
+    enqueueAttentionTickSoon();
+
+    // ⑤ 第二档：异步核实（默认延迟 ~5min，等 collector 把新证据采进来）
+    if (fullMatterId && config.matterVerifyEnabled) {
+      scheduleMatterResolveVerification({
+        matterId: fullMatterId,
+        attentionId: attn.id,
+        userNote: note,
+      });
+    }
+
+    const card = projectAttentionItemToCard(updated);
+    broadcast({ type: 'card_updated', card });
+    return { ok: true, card };
+  }
+
+  // MVP32：重开事项。两个入口共用：
+  //   a) 「核实存疑」提案卡的「重新打开」→ matter 重开，提案卡自身 acted（原催办由下轮 tick 对
+  //      active matter 自然重生，不手工复活旧卡）；
+  //   b) done 卡上的「撤销已处理」（前端合成动作）→ matter 重开 + 该 item 置回 live（卡片回到待处理）。
+  if (action.kind === 'matter_reopen') {
+    if (!attn.matterId) return { ok: false, error: 'item has no matterId' };
+    const fullMatterId = matchMatterId(attn.matterId);
+    if (!fullMatterId) return { ok: false, error: `matter ${attn.matterId} not found` };
+    const isReopenProposal = attn.inputHash.startsWith(MATTER_REOPEN_PROPOSAL_PREFIX);
+
+    const m = getMatterById(fullMatterId);
+    if (m && (m.status === 'resolved' || m.status === 'dropped')) {
+      userReopenMatter(
+        fullMatterId,
+        isReopenProposal ? '核实存疑，用户确认重开' : '用户撤销已处理',
+        now
+      );
+    } // matter 已是活跃态（如 Reducer 先一步自动重开）→ 幂等跳过，只动卡片状态
+
+    recordAttentionInteraction(attn, 'matter_reopen', now);
+    const updated = updateAttentionItemStatus(attn.id, isReopenProposal ? 'acted' : 'live', now);
+    if (!updated) return { ok: false, error: 'update failed' };
+    enqueueAttentionTickSoon();
+    const card = projectAttentionItemToCard(updated);
+    broadcast({ type: 'card_updated', card });
+    return { ok: true, card };
+  }
+
+  // MVP31/32 提案卡（matter-resolve / matter-reopen）的 dismiss 都不学 not_relevant 负反馈：
+  // 用户只是裁决提案，不是说内容不相关。
+  const isResolveProposal = attn.inputHash.startsWith('proposal:matter-resolve:');
+  const isReopenProposal = attn.inputHash.startsWith(MATTER_REOPEN_PROPOSAL_PREFIX);
+
+  if (action.kind === 'dismiss' && (isResolveProposal || isReopenProposal)) {
+    // 提案卡的「还没完 / 确实已完成」≠ 内容不相关：只关卡片，不学 not_relevant 负反馈。
     recordAttentionInteraction(attn, 'dismiss', now);
+    // MVP32：重开提案上的「确实已完成」是用户对核实结论的否决——把 verification 改记 user_confirmed。
+    if (isReopenProposal && attn.matterId) {
+      const fullMatterId = matchMatterId(attn.matterId);
+      const matter = fullMatterId ? getMatterById(fullMatterId) : null;
+      if (fullMatterId && matter?.resolveVerification) {
+        setMatterResolveVerification(fullMatterId, {
+          ...matter.resolveVerification,
+          verdict: 'user_confirmed',
+          checkedAt: now,
+        });
+        broadcast({ type: 'matter_updated', matterId: fullMatterId });
+      }
+    }
     const updated = updateAttentionItemStatus(attn.id, 'dismissed', now);
     if (!updated) return { ok: false, error: 'update failed' };
     const card = projectAttentionItemToCard(updated);

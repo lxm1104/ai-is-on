@@ -50,8 +50,9 @@ export function CardList(props: {
   collectorsHint?: string;
 }) {
   const open = props.cards.filter((c) => c.status === 'new');
+  // MVP32：'done'（已处理且事项办结）也进已处理抽屉——带「已完成」pill、「✓已核实」章与撤销入口。
   const processed = props.cards.filter(
-    (c) => c.status === 'acknowledged' || c.status === 'snoozed'
+    (c) => c.status === 'acknowledged' || c.status === 'snoozed' || c.status === 'done'
   );
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [scanning, setScanning] = useState(false);

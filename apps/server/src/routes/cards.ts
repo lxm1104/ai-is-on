@@ -20,11 +20,13 @@ cardsRouter.post('/cards/:id/action', async (req, res) => {
   // MVP11.0-b：前端 ask_agent / draft_reply 可附带自由文本指令覆盖默认 prompt。
   const extraPrompt =
     typeof req.body?.extraPrompt === 'string' ? req.body.extraPrompt : undefined;
+  // MVP32：mark_done 可附带一句话处理说明（落 matter transition reason + action_result unit）。
+  const note = typeof req.body?.note === 'string' ? req.body.note : undefined;
   if (!actionId) {
     res.status(400).json({ error: 'actionId is required' });
     return;
   }
-  const result = await applyCardAction(cardId, actionId, { extraPrompt });
+  const result = await applyCardAction(cardId, actionId, { extraPrompt, note });
   if (!result.ok) {
     res.status(400).json({ error: result.error });
     return;

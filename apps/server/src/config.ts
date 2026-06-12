@@ -138,6 +138,15 @@ export const config = {
   attentionModel: envStr('ATTENTION_MODEL', 'zai-coding-plan/glm-5-turbo'),
   attentionFallbackModel: envStr('ATTENTION_FALLBACK_MODEL', 'zai-coding-plan/glm-5.1'),
 
+  // ---------- MVP32 办结核实（mark_done 第二档） ----------
+  // 总开关（第一档「已处理」无开关——它是核心语义）。
+  matterVerifyEnabled: envBool('MATTER_VERIFY_ENABLED', true),
+  // mark_done → 核实的延迟。≥ IM collector 一轮（imIntervalMs 默认 3min），
+  // 让"刚回的消息"先经 collector → Reducer 挂到 matter_context_links，核实 agent 才看得到。
+  matterVerifyDelayMs: envInt('MATTER_VERIFY_DELAY_MS', 300_000),
+  // one-shot 超时，对齐 chat-conclusion 的 EXTRACT_TIMEOUT_MS。
+  matterVerifyTimeoutMs: envInt('MATTER_VERIFY_TIMEOUT_MS', 90_000),
+
   // ---------- MVP13 §S4 LLM chat_affinity ranker ----------
   mvp13RankerEnabled: envBool('MVP13_LLM_RANKER_ENABLED', true),
   mvp13RankerTimeoutMs: envInt('MVP13_LLM_RANKER_TIMEOUT_MS', 90_000),

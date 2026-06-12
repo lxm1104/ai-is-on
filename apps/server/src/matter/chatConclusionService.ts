@@ -14,7 +14,7 @@
 import { randomUUID } from 'node:crypto';
 import { claudeRuntime } from '../claude/ClaudeRuntime.js';
 import type { RuntimeEvent } from '../claude/protocol.js';
-import { db } from '../db.js';
+import { db, matchMatterId } from '../db.js';
 import { runOneShot } from '../triage/backgroundRuntime.js';
 import { getAttentionItem, insertAttentionItem } from '../attention/attentionStore.js';
 import { getMatterById } from './matterStore.js';
@@ -75,7 +75,9 @@ export async function handleTurnDone(topicId: string): Promise<void> {
   // 2) 源 attention 卡必须绑定 matter，且 matter 仍活跃
   const attn = getAttentionItem(topic.source_ref_id);
   if (!attn?.matterId) return;
-  const matter = getMatterById(attn.matterId);
+  // MVP32 顺带修复：matter_id 可能是 LLM 截断前缀（MVP29D），精确查不到会静默漏提案。
+  const fullMatterId = matchMatterId(attn.matterId);
+  const matter = fullMatterId ? getMatterById(fullMatterId) : null;
   if (!matter || matter.status === 'resolved' || matter.status === 'dropped') return;
 
   // 3) 已有同事项的在场提案 → 不重复

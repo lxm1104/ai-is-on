@@ -39,6 +39,7 @@ import { bootstrapAgents } from './agents/index.js';
 import { migrateUserRulesIfNeeded } from './boundary/migration.js';
 import { runStartupRecovery } from './startupRecovery.js';
 import { startChatConclusionService } from './matter/chatConclusionService.js';
+import { startMatterVerifyService, stopMatterVerifyService } from './matter/matterVerifyService.js';
 import { startMaintenance, stopMaintenance } from './maintenance.js';
 
 const app = express();
@@ -109,6 +110,8 @@ server.listen(config.port, '127.0.0.1', () => {
   startMatterTracker();
   // MVP31：ask_agent 对话结论 → 办结提案回流
   startChatConclusionService();
+  // MVP32：mark_done 办结核实（恢复扫描补排重启丢失的 timer）
+  startMatterVerifyService();
   // 日常维护：opencode 一次性 session 清理（防 db 无限增长拖垮 checkpoint）
   startMaintenance();
   startTriggerScheduler();
@@ -140,6 +143,9 @@ const shutdown = async (signal: string) => {
   } catch {}
   try {
     stopAttentionScheduler();
+  } catch {}
+  try {
+    stopMatterVerifyService();
   } catch {}
   try {
     await claudeRuntime.stop();

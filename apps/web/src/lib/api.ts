@@ -191,11 +191,15 @@ export async function postActionItemsConfirm(
 export async function postCardAction(
   cardId: string,
   actionId: string,
-  opts?: { extraPrompt?: string }
+  opts?: { extraPrompt?: string; note?: string }
 ): Promise<{ card: SignalCard; topic?: ChatTopic }> {
   const body: Record<string, unknown> = { actionId };
   if (opts?.extraPrompt && opts.extraPrompt.trim()) {
     body.extraPrompt = opts.extraPrompt.trim();
+  }
+  // MVP32：mark_done 的可选处理说明
+  if (opts?.note && opts.note.trim()) {
+    body.note = opts.note.trim();
   }
   const r = await fetch(`/api/cards/${encodeURIComponent(cardId)}/action`, {
     method: 'POST',

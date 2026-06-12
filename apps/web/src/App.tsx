@@ -167,7 +167,9 @@ export function App() {
   function applyCard(c: SignalCard, mode: 'add' | 'update') {
     setCards((prev) => {
       const idx = prev.findIndex((x) => x.id === c.id);
-      const visible = c.status !== 'dismissed' && c.status !== 'done';
+      // MVP32：'done'（已处理且事项已办结）进「已处理」抽屉展示（带「✓已核实」章 + 撤销入口），
+      // 不再直接消失；只有 dismissed 彻底隐藏。
+      const visible = c.status !== 'dismissed';
       if (idx >= 0) {
         if (!visible) return prev.filter((x) => x.id !== c.id);
         const next = prev.slice();
@@ -350,7 +352,7 @@ export function App() {
   async function onCardAction(
     cardId: string,
     actionId: string,
-    opts?: { extraPrompt?: string }
+    opts?: { extraPrompt?: string; note?: string }
   ) {
     try {
       const result = await postCardAction(cardId, actionId, opts);

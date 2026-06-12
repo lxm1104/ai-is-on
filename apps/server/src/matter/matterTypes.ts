@@ -66,6 +66,24 @@ export type Matter = {
   updatedAt: string;
   resolvedAt?: string | null;
   droppedAt?: string | null;
+
+  // MVP32：办结核实结果（只读水合；写入走 matterStore.setMatterResolveVerification 专用通道）
+  resolveVerification?: MatterResolveVerification | null;
+};
+
+// ---- MVP32 办结核实 ----
+
+// verdict 语义：
+//   confirmed      —— 核实 agent 找到独立证据支持"已完成"
+//   unverifiable   —— 现有证据无法独立验证（含解析失败/低置信降级；不打扰用户）
+//   contradicted   —— 有具体反证（已升「核实存疑」提案卡）
+//   user_confirmed —— 用户在「核实存疑」卡上裁决"确实已完成"，覆盖 contradicted
+export type MatterResolveVerification = {
+  verdict: 'confirmed' | 'unverifiable' | 'contradicted' | 'user_confirmed';
+  confidence: number;
+  evidence: string;
+  checkedAt: string;
+  userNote?: string;
 };
 
 // ---- §4.2 Matter Entity Link ----

@@ -536,6 +536,10 @@ if (legacyRuntimeMessages.count > 0) {
 // MVP2: events 加 context_extracted_at（与 processed_at 解耦）
 ensureColumn('events', 'context_extracted_at', 'TEXT');
 
+// MVP32: 办结核实结果（MatterResolveVerification JSON）。注意：updateMatter/insertMatter 的
+// 命名参数列集不含此列（better-sqlite3 对多余 key 抛错），读走 SELECT *，写走专用 UPDATE。
+ensureColumn('matters', 'resolve_verification_json', 'TEXT');
+
 // MVP7: boundary_rules 加 condition_hash 做幂等。结构化字段稳定 JSON → sha1。
 // 重跑 bootstrap / 同样的 card_action 学到完全相同的 rule 时只更新 updated_at，不新建行。
 ensureColumn('boundary_rules', 'condition_hash', 'TEXT');
@@ -900,7 +904,7 @@ db.exec(`
 CREATE TABLE IF NOT EXISTS attention_interactions (
   id TEXT PRIMARY KEY,
   attention_id TEXT NOT NULL,
-  action TEXT NOT NULL,                         -- 'ack' | 'dismiss' | 'not_relevant' | 'ask_agent' | 'create_task'
+  action TEXT NOT NULL,                         -- 'ack' | 'dismiss' | 'not_relevant' | 'ask_agent' | 'create_task' | 'matter_resolve' | 'mark_done' | 'matter_reopen'
   input_hash TEXT NOT NULL,
   priority TEXT NOT NULL,
   title TEXT NOT NULL,
@@ -3888,6 +3892,9 @@ export type MatterRow = {
   updated_at: string;
   resolved_at: string | null;
   dropped_at: string | null;
+  // MVP32: 仅读取路径（SELECT *）水合；matterToRow 不映射此字段——insertMatter/updateMatter 的
+  // 命名参数 SQL 没有 @resolve_verification_json，对象多带这个 key 会被 better-sqlite3 拒绝。
+  resolve_verification_json?: string | null;
 };
 
 export function insertMatter(row: MatterRow): void {
@@ -3921,6 +3928,12 @@ export function updateMatter(row: MatterRow): void {
 
 export function getMatter(id: string): MatterRow | null {
   return (db.prepare(`SELECT * FROM matters WHERE id = ?`).get(id) as MatterRow | undefined) ?? null;
+}
+
+// MVP32: 办结核实结果专用单列 UPDATE（不走 updateMatter，避免被 saveMatter 全量覆盖语义裹挟；
+// 也不 bump version/updated_at——verification 是元数据，不代表事项本身有新动静）。
+export function updateMatterResolveVerification(id: string, json: string | null): void {
+  db.prepare(`UPDATE matters SET resolve_verification_json = ? WHERE id = ?`).run(json, id);
 }
 
 // MVP26 backfill 幂等：一条 commitment 只 seed 一个 Matter。

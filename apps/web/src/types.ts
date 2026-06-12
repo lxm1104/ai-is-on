@@ -53,7 +53,8 @@ export type CardActionKind =
   | 'mark_done'
   | 'auto_henceforth'
   | 'create_task'    // MVP23 M2：处理角度的结构化执行器，点击走建任务确认通道
-  | 'matter_resolve'; // MVP31：办结提案卡的确认按钮，直接 POST 标准 action 通道
+  | 'matter_resolve' // MVP31：办结提案卡的确认按钮，直接 POST 标准 action 通道
+  | 'matter_reopen'; // MVP32：重开事项（核实存疑提案确认 / done 卡「撤销已处理」）
 
 export type CardAction = {
   id: string;
@@ -82,6 +83,8 @@ export type SignalCard = {
   sourceUrl?: string;
   sourceKind?: CardSourceKind;
   sourceRefId?: string;
+  // MVP32：办结核实结果（仅 attention 卡且核实已跑完时存在）
+  verification?: { verdict: string; evidence?: string; checkedAt: string };
   createdAt: string;
   updatedAt: string;
 };

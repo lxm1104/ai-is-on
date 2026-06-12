@@ -53,6 +53,10 @@ function fmtTime(iso: string) {
 
 const REOPEN_ACTION: CardAction = { id: '__reopen', label: '标记未读', kind: 'ack' };
 
+// MVP32：done 卡（已处理且事项办结）的撤销入口——从 Matter 层重开（__reopen 只翻卡片状态，
+// 对 attention 卡不可用，且事项还 resolved 着下轮 tick 又会清卡，撤销必须落 matter 层才有意义）。
+const UNDO_DONE_ACTION: CardAction = { id: 'matter_reopen', label: '撤销已处理', kind: 'matter_reopen' };
+
 const FEEDBACK_REASONS: Array<{ id: string; label: string }> = [
   { id: 'wrong_entity', label: '人/项目认错了' },
   { id: 'wrong_priority', label: '优先级不对' },
@@ -65,7 +69,7 @@ export function SignalCardView(props: {
   onAction: (
     cardId: string,
     actionId: string,
-    opts?: { extraPrompt?: string }
+    opts?: { extraPrompt?: string; note?: string }
   ) => Promise<void>;
 }) {
   const { card } = props;
@@ -99,6 +103,9 @@ export function SignalCardView(props: {
   const [taskResult, setTaskResult] = useState<LarkTaskCreateResult | null>(null);
   const [moreOpen, setMoreOpen] = useState(false); // MVP23 M1.5：角度「⋯更多」溢出菜单
   const [askFocused, setAskFocused] = useState(false); // MVP23：行尾指令框聚焦→同行铺满、隐藏其它按钮
+  // MVP32：「已处理」点击后展开可选处理说明输入
+  const [markDoneOpen, setMarkDoneOpen] = useState(false);
+  const [markDoneNote, setMarkDoneNote] = useState('');
 
   // "查看原始信息"：抽屉里列出 signalIds 对应的原始 events（含飞书原文 URL）
   // items 是混排块（IM conversation 合并 + 其他单条 signal，按最新动静倒序）；
@@ -287,6 +294,22 @@ export function SignalCardView(props: {
     }
   }
 
+  // MVP32：提交「已处理」（可带一句话处理说明）。后端 resolve matter + 落库 + 清同事项催办。
+  async function submitMarkDone(actionId: string) {
+    setBusy(actionId);
+    setErr(null);
+    try {
+      const note = markDoneNote.trim();
+      await props.onAction(card.id, actionId, note ? { note } : undefined);
+      setMarkDoneOpen(false);
+      setMarkDoneNote('');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   // MVP23 M2：opt 参数来自「拟成待办」角度（create_task 执行器）；缺省=常驻「加入任务」按钮。
   async function createLarkTask(opt?: { optionId: string; label: string }) {
     const ok = window.confirm(`确认把「${card.title}」加入飞书任务？`);
@@ -304,20 +327,23 @@ export function SignalCardView(props: {
     }
   }
 
-  const isAcked = card.status === 'acknowledged' || card.status === 'snoozed';
+  const isAcked =
+    card.status === 'acknowledged' || card.status === 'snoozed' || card.status === 'done';
 
   // For acked/snoozed cards keep only "active" actions (the ones that still make
   // sense after you've already ack'd — i.e. ask agent / draft reply), and add a
   // reopen button so it's obvious the state changed and can be undone.
   // MVP23：已处理卡若有多个处理角度（opt:* 按钮），折叠成单个「再让 AI 处理」，
   //   避免在「已处理」抽屉里平铺三四个角度按钮。
+  // MVP32：done（已处理且事项办结）的 attention 卡，撤销入口换成 matter 层重开。
   const ackedAskActions = (() => {
     const asks = card.actions.filter((a) => a.kind === 'ask_agent' || a.kind === 'draft_reply');
     if (asks.length <= 1) return asks;
     return [{ id: asks[0].id, label: '再让 AI 处理', kind: asks[0].kind }];
   })();
+  const undoAction = card.status === 'done' && isAttention ? UNDO_DONE_ACTION : REOPEN_ACTION;
   const visibleActions: CardAction[] = isAcked
-    ? [...ackedAskActions, REOPEN_ACTION]
+    ? [...ackedAskActions, undoAction]
     : card.actions;
 
   return (
@@ -325,13 +351,23 @@ export function SignalCardView(props: {
       <header className="card__head">
         <span className={`badge badge--${card.priority.toLowerCase()}`}>{card.priority}</span>
         <span className="card__source">{SOURCE_LABEL[card.source]}</span>
-        <span className={`card__lineage card__lineage--${card.sourceKind ?? 'triage'}`}>
-          {lineageLabel(card)}
-        </span>
+        {lineageLabel(card) !== SOURCE_LABEL[card.source] && (
+          <span className={`card__lineage card__lineage--${card.sourceKind ?? 'triage'}`}>
+            {lineageLabel(card)}
+          </span>
+        )}
         <span className="card__time">{fmtTime(card.createdAt)}</span>
         {card.status !== 'new' && (
           <span className={`status-pill status-pill--${card.status}`}>
             {statusIcon(card.status)} {statusLabel(card.status)}
+          </span>
+        )}
+        {card.verification?.verdict === 'confirmed' && (
+          <span
+            className="status-pill status-pill--verified"
+            title={card.verification.evidence ? `核实依据：${card.verification.evidence}` : '系统已核实该事项确已完成'}
+          >
+            ✓ 已核实
           </span>
         )}
       </header>
@@ -343,7 +379,7 @@ export function SignalCardView(props: {
           <ResolvedText text={card.summary} />
         </p>
       )}
-      {card.reason && (
+      {card.reason && card.reason !== card.summary && (
         <p className="card__reason">
           <span className="card__label">为什么：</span>
           <ResolvedText text={card.reason} />
@@ -731,9 +767,62 @@ export function SignalCardView(props: {
 
           // 非角度、非 ask_agent 动作：ask_agent 由行尾 endAsk 统一承载（这里跳过）；
           //   ack/dismiss/reopen 纯按钮；draft_reply 保留自己的指令输入。
+          //   MVP32：mark_done 点击后展开可选处理说明输入（确认/Esc 取消）。
           const renderOther = (a: CardAction) => {
             if (a.kind === 'ask_agent' && !isAngle(a)) {
               return null; // 交给行尾 endAsk
+            }
+            if (a.kind === 'mark_done') {
+              if (!markDoneOpen) {
+                return (
+                  <button
+                    key={a.id}
+                    className="btn btn--card btn--mark_done"
+                    onClick={() => setMarkDoneOpen(true)}
+                    disabled={!!busy || taskBusy}
+                    title="我已在外部处理完——标记办结、记录处理结果、停掉这类催办"
+                  >
+                    {a.label}
+                  </button>
+                );
+              }
+              return (
+                <div key={a.id} className="card__ask-inline card__markdone">
+                  <input
+                    type="text"
+                    className="card__ask-input"
+                    placeholder="（可选）一句话：怎么处理的？"
+                    value={markDoneNote}
+                    autoFocus
+                    onChange={(e) => setMarkDoneNote(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !busy) void submitMarkDone(a.id);
+                      if (e.key === 'Escape') {
+                        setMarkDoneOpen(false);
+                        setMarkDoneNote('');
+                      }
+                    }}
+                    disabled={!!busy}
+                  />
+                  <button
+                    className="btn btn--card btn--mark_done"
+                    onClick={() => void submitMarkDone(a.id)}
+                    disabled={!!busy}
+                  >
+                    {busy === a.id ? '…' : '确认'}
+                  </button>
+                  <button
+                    className="btn btn--card btn--ghost"
+                    onClick={() => {
+                      setMarkDoneOpen(false);
+                      setMarkDoneNote('');
+                    }}
+                    disabled={!!busy}
+                  >
+                    取消
+                  </button>
+                </div>
+              );
             }
             if (a.kind === 'draft_reply') {
               return (

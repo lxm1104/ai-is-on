@@ -51,6 +51,10 @@ export type UpsertContextUnitInput = ContextUnitDraft & {
   subjectId?: string;
   scope: ContextScope;
   origin: { kind: ContextOriginKind; refId: string };
+  /** MVP32：true 时跳过 upsert hooks（trigger/attention/matterReducer 都不触发）。
+   *  仅限"状态已被确定性通道同步落库"的用户断言 unit（如 mark_done 的处理说明）——
+   *  这类 unit 再进 Reducer 只会对已落定的 matter 重复跑 LLM 判定（echo），纯浪费。勿滥用。 */
+  silent?: boolean;
 };
 
 export type UpsertResult = {
@@ -221,7 +225,7 @@ export function upsertContextUnit(input: UpsertContextUnitInput): UpsertResult {
     // 否则 resolveUnitToSpaces 在 hook 里读到空 cache。
     materializeRoutingForUnit(newUnit, now);
     const result: UpsertResult = { unit: newUnit, wasUpdate: true };
-    invokeHook(result.unit, changeContext);
+    if (!input.silent) invokeHook(result.unit, changeContext);
     return result;
   }
 
@@ -263,7 +267,7 @@ export function upsertContextUnit(input: UpsertContextUnitInput): UpsertResult {
   };
   // MVP12 §4.1 P1.5：见 update 分支注释。
   materializeRoutingForUnit(result.unit, now);
-  invokeHook(result.unit, createdChangeContext());
+  if (!input.silent) invokeHook(result.unit, createdChangeContext());
   return result;
 }
 
