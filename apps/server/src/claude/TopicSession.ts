@@ -89,25 +89,33 @@ export class TopicSession extends EventEmitter {
 
     this.setStatus('busy');
     try {
-      // 主模型 → 副模型 fallback：主失败仅 console.warn，只有副模型也失败才 emit runtime_error。
+      // 模型链按序降级（默认 5.2 > 5.1 > 5-turbo）：每级失败仅 console.warn，
+      // 只有整条链都失败才 emit runtime_error。
+      const modelChain = [config.opencodeModel, ...config.opencodeFallbackModels].filter(
+        (m, i, arr) => arr.indexOf(m) === i
+      );
       let finish: TurnFinish | null = null;
-      try {
-        finish = await this.runTurn(content, config.opencodeModel, wrappedOpts);
-      } catch (primaryErr) {
-        const primaryMsg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
-        console.warn(
-          `[opencode chat topic=${this.topicId}] primary ${config.opencodeModel} failed, fallback: ${primaryMsg.slice(0, 300)}`
-        );
+      const failures: string[] = [];
+      for (let i = 0; i < modelChain.length; i++) {
+        const model = modelChain[i];
         try {
-          finish = await this.runTurn(content, config.opencodeFallbackModel, wrappedOpts);
-        } catch (fallbackErr) {
-          const fallbackMsg =
-            fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
-          this.emitEvent({
-            type: 'runtime_error',
-            topicId: this.topicId,
-            error: `opencode 两次调用均失败。\n[primary]: ${primaryMsg}\n[fallback]: ${fallbackMsg}`,
-          });
+          finish = await this.runTurn(content, model, wrappedOpts);
+          break;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          failures.push(`[${model}]: ${msg}`);
+          const next = modelChain[i + 1];
+          if (next) {
+            console.warn(
+              `[opencode chat topic=${this.topicId}] model ${model} failed, 降级到 ${next}: ${msg.slice(0, 300)}`
+            );
+          } else {
+            this.emitEvent({
+              type: 'runtime_error',
+              topicId: this.topicId,
+              error: `opencode 整条模型链（${modelChain.join(' > ')}）均失败。\n${failures.join('\n')}`,
+            });
+          }
         }
       }
 

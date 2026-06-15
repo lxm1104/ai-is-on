@@ -14,8 +14,8 @@ export type OneShotResult = {
 /**
  * 一次性 LLM 调用（opencode CLI 后端）。
  *
- * - 模型默认 `config.opencodeModel`（GLM-5.1），失败后自动 fallback 到
- *   `config.opencodeFallbackModel`（GLM-5-turbo）。
+ * - 模型默认 `config.opencodeModel`（GLM-5.2），失败后按 `config.opencodeFallbackModels`
+ *   逐级降级（GLM-5.1 → GLM-5-turbo），整条链都失败才抛错。
  * - 系统 prompt 不在这里传，而是通过 `agentName` 指向 `.opencode/agent/<name>.md`
  *   预生成的 agent 文件（见 [opencode/agents.ts](opencode/agents.ts)）。
  * - opencode `run --format json` 输出 NDJSON 事件流；我们把所有 `text` 块
@@ -34,8 +34,8 @@ export type OneShotOptions = {
   priority?: boolean;
   /** 覆盖主模型（默认 config.opencodeModel）。 */
   model?: string;
-  /** 覆盖 fallback 模型（默认 config.opencodeFallbackModel）。 */
-  fallbackModel?: string;
+  /** 覆盖 fallback 模型链，按序降级（默认 config.opencodeFallbackModels）。 */
+  fallbackModels?: string[];
 };
 
 type OpencodePart = {
@@ -166,7 +166,11 @@ export async function runOneShot(
 ): Promise<OneShotResult> {
   const timeoutMs = opts.timeoutMs ?? config.triageTimeoutMs;
   const primaryModel = opts.model ?? config.opencodeModel;
-  const fallbackModel = opts.fallbackModel ?? config.opencodeFallbackModel;
+  const fallbackModels = opts.fallbackModels ?? config.opencodeFallbackModels;
+  // 按序尝试的模型链：主模型 → 各级 fallback（去重，保持优先级顺序）。
+  const modelChain = [primaryModel, ...fallbackModels].filter(
+    (m, i, arr) => arr.indexOf(m) === i
+  );
 
   const waitStart = Date.now();
   await gate.acquire(opts.priority === true);
@@ -185,26 +189,27 @@ export async function runOneShot(
   });
 
   try {
-    return withTiming(
-      await runOpencodeOnce(userMessage, opts.agentName, primaryModel, timeoutMs)
-    );
-  } catch (primaryErr) {
-    const primaryMsg =
-      primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
-    console.warn(
-      `[opencode] primary model ${primaryModel} 失败，fallback 到 ${fallbackModel}：${primaryMsg.slice(0, 300)}`
-    );
-    try {
-      return withTiming(
-        await runOpencodeOnce(userMessage, opts.agentName, fallbackModel, timeoutMs)
-      );
-    } catch (fallbackErr) {
-      const fallbackMsg =
-        fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
-      throw new Error(
-        `opencode 两次调用均失败。\n[primary ${primaryModel}]: ${primaryMsg}\n[fallback ${fallbackModel}]: ${fallbackMsg}`
-      );
+    const failures: string[] = [];
+    for (let i = 0; i < modelChain.length; i++) {
+      const model = modelChain[i];
+      try {
+        return withTiming(
+          await runOpencodeOnce(userMessage, opts.agentName, model, timeoutMs)
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        failures.push(`[${model}]: ${msg}`);
+        const next = modelChain[i + 1];
+        if (next) {
+          console.warn(
+            `[opencode] model ${model} 失败，降级到 ${next}：${msg.slice(0, 300)}`
+          );
+        }
+      }
     }
+    throw new Error(
+      `opencode 整条模型链（${modelChain.join(' > ')}）均失败。\n${failures.join('\n')}`
+    );
   } finally {
     gate.release();
   }

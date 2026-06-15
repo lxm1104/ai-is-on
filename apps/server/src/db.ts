@@ -1177,6 +1177,10 @@ export function listEvents(limit = 50): EventRow[] {
     .all(limit) as EventRow[];
 }
 
+export function getEventById(id: string): EventRow | undefined {
+  return db.prepare(`SELECT * FROM events WHERE id = ?`).get(id) as EventRow | undefined;
+}
+
 /**
  * MVP11.0-b：列出近 sinceIso 之后、指定 source/kind 的 events，按 occurred_at desc。
  * 给 driveCommentCollector 用来获取「近 14 天编辑过的 doc」候选 file_token 集合。

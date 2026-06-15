@@ -33,16 +33,28 @@ function envFloat(name: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+// 逗号分隔的列表，用于模型 fallback 链等。空段被丢弃；env 未设时用 fallback。
+function envList(name: string, fallback: string[]): string[] {
+  const v = process.env[name];
+  if (v === undefined || v === '') return fallback;
+  const items = v
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s !== '');
+  return items.length > 0 ? items : fallback;
+}
+
 export const config = {
   port: envInt('PORT', 8787),
   webOrigin: envStr('WEB_ORIGIN', 'http://127.0.0.1:5173'),
   sqlitePath: path.resolve(REPO_ROOT, envStr('SQLITE_PATH', 'data/ai-is-on.sqlite')),
   opencodeBin: envStr('OPENCODE_BIN', 'opencode'),
-  opencodeModel: envStr('OPENCODE_MODEL', 'zai-coding-plan/glm-5.1'),
-  opencodeFallbackModel: envStr(
-    'OPENCODE_FALLBACK_MODEL',
-    'zai-coding-plan/glm-5-turbo'
-  ),
+  opencodeModel: envStr('OPENCODE_MODEL', 'zai-coding-plan/glm-5.2'),
+  // 主模型失败后按序降级的 fallback 链（优先级 5.2 > 5.1 > 5-turbo）。
+  opencodeFallbackModels: envList('OPENCODE_FALLBACK_MODELS', [
+    'zai-coding-plan/glm-5.1',
+    'zai-coding-plan/glm-5-turbo',
+  ]),
   opencodeAgentDir: path.resolve(
     REPO_ROOT,
     envStr('OPENCODE_AGENT_DIR', '.opencode/agent')
@@ -156,13 +168,22 @@ export const config = {
   // attention 引擎单次 LLM 超时。实测 glm-5.1 单次 ~26k input 需要 ~104s，
   // 180s 贴着 p50 跑必然误杀，误杀后 fallback 重试又加倍 provider 负载。
   attentionTimeoutMs: envInt('ATTENTION_TIMEOUT_MS', 300_000),
-  // attention 专用模型（2026-06-10）：turbo + thinking-disabled（见 opencode.json provider 配置）
-  // 实测 13.4k chars 输入 15-94s，vs glm-5.1 的 171-225s；fallback 用 glm-5.1 兜质量。
-  attentionModel: envStr('ATTENTION_MODEL', 'zai-coding-plan/glm-5-turbo'),
-  attentionFallbackModel: envStr('ATTENTION_FALLBACK_MODEL', 'zai-coding-plan/glm-5.1'),
+  // attention 专用模型（2026-06-14 测试切到 glm-5.2，与主路径对齐）。
+  // 历史：turbo + thinking-disabled（见 opencode.json）实测 13.4k chars 输入 15-94s，
+  // vs glm-5.1 的 171-225s；现按 5.2 > 5.1 > 5-turbo 降级，turbo 作为最后兜底。
+  attentionModel: envStr('ATTENTION_MODEL', 'zai-coding-plan/glm-5.2'),
+  attentionFallbackModels: envList('ATTENTION_FALLBACK_MODELS', [
+    'zai-coding-plan/glm-5.1',
+    'zai-coding-plan/glm-5-turbo',
+  ]),
 
   // ---------- MVP32 办结核实（mark_done 第二档） ----------
   // 总开关（第一档「已处理」无开关——它是核心语义）。
+  // MVP36 自主排查 dispatcher：默认**关**（硬只读边界已就位，但自动派发会消耗 LLM/lark-cli，opt-in）。
+  investigationDispatchEnabled: envBool('INVESTIGATION_DISPATCH_ENABLED', false),
+  investigationTickMs: envInt('INVESTIGATION_TICK_MS', 600_000), // 10min 低频，让位 attention
+  investigationCooldownMs: envInt('INVESTIGATION_COOLDOWN_MS', 21_600_000), // 同 matter 6h 内不重查
+  investigationMaxRounds: envInt('INVESTIGATION_MAX_ROUNDS', 3),
   matterVerifyEnabled: envBool('MATTER_VERIFY_ENABLED', true),
   // mark_done → 核实的延迟。≥ IM collector 一轮（imIntervalMs 默认 3min），
   // 让"刚回的消息"先经 collector → Reducer 挂到 matter_context_links，核实 agent 才看得到。

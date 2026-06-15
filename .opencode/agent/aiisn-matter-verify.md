@@ -1,7 +1,7 @@
 ---
 description: "AI is ON MVP32 mark_done 办结核实判定"
 mode: primary
-model: zai-coding-plan/glm-5.1
+model: zai-coding-plan/glm-5.2
 permission:
   bash: allow
   edit: deny

@@ -32,6 +32,8 @@ import { COLLAB_TYPE_SYSTEM_PROMPT } from '../util/collabTypePrompt.js';
 import { MATTER_REDUCE_SYSTEM_PROMPT } from '../matter/matterReducerPrompt.js';
 import { CHAT_CONCLUSION_SYSTEM_PROMPT } from '../matter/chatConclusionPrompt.js';
 import { MATTER_VERIFY_SYSTEM_PROMPT } from '../matter/matterVerifyPrompt.js';
+import { INVESTIGATE_SYSTEM_PROMPT, renderToolsDoc } from '../investigation/investigationPrompt.js';
+import { listReadTools } from '../investigation/readTools.js';
 
 export type OpencodeAgentName =
   | 'aiisn-chat'
@@ -50,7 +52,8 @@ export type OpencodeAgentName =
   | 'aiisn-collab-type'
   | 'aiisn-matter-reducer'
   | 'aiisn-chat-conclusion'
-  | 'aiisn-matter-verify';
+  | 'aiisn-matter-verify'
+  | 'aiisn-investigate';
 
 type Permission = 'allow' | 'ask' | 'deny';
 type AgentDef = {
@@ -171,6 +174,20 @@ const AGENTS: readonly AgentDef[] = [
     description: 'AI is ON MVP32 mark_done 办结核实判定',
     permission: READ_ONLY,
     prompt: MATTER_VERIFY_SYSTEM_PROMPT,
+  },
+  {
+    // MVP36 排查推理器：纯文本进 JSON 出，不碰任何工具（连 shell 都没有）——
+    // 它只输出"想读什么"的结构化请求，由后端用白名单只读工具执行。硬边界比 prompt 软约束更强。
+    name: 'aiisn-investigate',
+    description: 'AI is ON MVP36 自主排查推理器（后端中介式只读取数）',
+    // 全工具 deny（含 read）——模型不得用任何 opencode 原生工具（实测它偶尔想 tool-call
+    // 本地 read/grep，既偏离 JSON 协议、又有读本地文件系统的风险、还会拖慢 runOneShot）。
+    // 它唯一的输出方式是返回纯 JSON 文本，由后端用白名单只读工具执行。
+    permission: { bash: 'deny', edit: 'deny', write: 'deny', webfetch: 'deny', read: 'deny' },
+    prompt: INVESTIGATE_SYSTEM_PROMPT.replace(
+      '{{TOOLS}}',
+      renderToolsDoc(listReadTools())
+    ),
   },
 ];
 

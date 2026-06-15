@@ -12,6 +12,7 @@ export type AttentionInteractionAction =
   | 'not_relevant'
   | 'ask_agent'
   | 'create_task'
+  | 'send_reply'     // MVP34：用户确认后由 AI 代发飞书 IM 回复（首个对外执行动作）
   | 'matter_resolve' // MVP31：办结提案确认
   | 'mark_done'      // MVP32：用户标记已处理（matter 同步 resolved）
   | 'matter_reopen'; // MVP32：重开事项（核实存疑确认 / 撤销已处理）
@@ -45,6 +46,7 @@ function coerceAction(action: string): AttentionInteractionAction {
     case 'not_relevant':
     case 'ask_agent':
     case 'create_task':
+    case 'send_reply':
     case 'matter_resolve':
     case 'mark_done':
     case 'matter_reopen':

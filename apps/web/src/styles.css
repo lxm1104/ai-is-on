@@ -662,6 +662,38 @@ body { background: var(--bg); color: var(--text); }
   border-style: solid;
 }
 
+/* MVP34：AI 代发飞书 IM 回复 */
+.card__reply { margin-top: 8px; }
+.btn--reply { background: transparent; color: var(--accent); border-color: var(--accent); }
+.btn--reply:hover:not(:disabled) { background: var(--accent); color: white; }
+.card__reply-panel {
+  margin-top: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-subtle, rgba(127,127,127,0.06));
+}
+.card__reply-target { font-size: 12px; color: var(--text); margin: 0 0 4px; }
+.card__reply-quote { font-size: 12px; color: var(--text-dim); margin: 0 0 6px; font-style: italic; }
+.card__reply-text {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 13px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  resize: vertical;
+}
+.card__reply-actions { display: flex; gap: 8px; margin-top: 6px; }
+.btn--reply-send { background: var(--accent); border-color: var(--accent); color: white; }
+.btn--reply-send:hover:not(:disabled) { background: var(--accent-strong); }
+.card__reply-err { font-size: 12px; color: var(--danger, #d9534f); margin: 0 0 6px; }
+.card__reply-sent { font-size: 12px; color: var(--accent); margin-top: 8px; }
+.card__doc { margin-top: 6px; }
+.btn--doc { background: transparent; color: var(--text-dim); border-color: var(--border); }
+.btn--doc:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+
 /* MVP32：「已处理」一键办结 + 撤销 */
 .btn--mark_done {
   background: rgba(34, 197, 94, 0.16);

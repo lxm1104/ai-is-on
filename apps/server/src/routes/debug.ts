@@ -1,9 +1,47 @@
 import { Router } from 'express';
-import { listEvents, listTriageResults } from '../db.js';
+import { getContextEntityById, listEvents, listTriageResults, matchMatterId } from '../db.js';
 import { backfillUnitRouting } from '../bootstrap/backfillUnitRouting.js';
 import { listInducers } from '../structure/inducerRegistry.js';
+import { getMatterById, listMatterEntities } from '../matter/matterStore.js';
+import { runInvestigation } from '../investigation/investigationLoop.js';
+import { applyInvestigationResult } from '../investigation/investigationWriteback.js';
 
 export const debugRouter = Router();
+
+// MVP36：在真实 matter 上跑一次「自主排查」（硬只读，安全）。手动验证用。
+debugRouter.post('/debug/investigation/run', async (req, res) => {
+  const body = req.body ?? {};
+  if (typeof body.matterId !== 'string') return res.status(400).json({ error: 'matterId required' });
+  const matterId = matchMatterId(body.matterId) ?? body.matterId;
+  const m = getMatterById(matterId);
+  if (!m) return res.status(404).json({ error: `matter ${matterId} not found` });
+  const entities = listMatterEntities(matterId)
+    .map((l) => {
+      const e = getContextEntityById(l.entityId);
+      return e ? { type: e.type, name: e.name, role: String(l.role) } : null;
+    })
+    .filter((x): x is { type: string; name: string; role: string } => x !== null)
+    .slice(0, 8);
+  try {
+    const result = await runInvestigation({
+      matterTitle: m.title,
+      matterType: m.type,
+      currentSummary: m.currentSummary,
+      nextAction: m.nextAction ?? '确认该事项的当前进展',
+      entities,
+      maxRounds: typeof body.maxRounds === 'number' ? body.maxRounds : 3,
+      priority: true, // 手动验证：走 high 队列尽快拿 gate，不被 attention 饿死
+    });
+    let writeback;
+    if (body.apply === true) {
+      const toolSummary = result.toolLog.map((l) => `${l.tool}:${l.ok ? l.summary : '失败'}`).join('；');
+      writeback = applyInvestigationResult({ matterId, conclusion: result.conclusion, toolSummary });
+    }
+    res.json({ ok: true, matter: { id: matterId, title: m.title, nextAction: m.nextAction }, ...result, writeback });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
 
 debugRouter.get('/debug/events', (_req, res) => {
   res.json({ events: listEvents(50) });

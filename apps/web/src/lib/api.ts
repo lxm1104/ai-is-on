@@ -262,6 +262,55 @@ export async function postCardLarkTask(input: {
   return j as LarkTaskCreateResult;
 }
 
+// MVP34：AI 代发飞书 IM 回复 —— 先 preview 拿到"回复给谁"，用户确认后 send。
+export type ImReplyTarget = {
+  chatId: string;
+  chatName?: string;
+  messageId?: string;
+  replyToActor?: string;
+  replyToText?: string;
+};
+
+export async function previewImReply(
+  cardId: string
+): Promise<{ target: ImReplyTarget; suggestedText: string }> {
+  const r = await fetch(`/api/cards/${encodeURIComponent(cardId)}/im-reply/preview`);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `im-reply preview ${r.status}`);
+  return { target: j.target, suggestedText: j.suggestedText ?? '' };
+}
+
+export async function postImReply(input: {
+  cardId: string;
+  text: string;
+}): Promise<{ ok: true; target: ImReplyTarget; sentMessageId?: string }> {
+  const r = await fetch(`/api/cards/${encodeURIComponent(input.cardId)}/im-reply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirm: true, text: input.text }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `im-reply ${r.status}`);
+  return j;
+}
+
+// MVP35：AI 起草并新建飞书文档（内部可逆，单击确认即创建）。
+export async function postCardLarkDoc(input: {
+  cardId: string;
+  title?: string;
+}): Promise<{ ok: true; documentId?: string; url?: string; title: string; reused: boolean }> {
+  const body: Record<string, unknown> = { confirm: true };
+  if (input.title?.trim()) body.title = input.title.trim();
+  const r = await fetch(`/api/cards/${encodeURIComponent(input.cardId)}/lark-doc`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `lark-doc ${r.status}`);
+  return j;
+}
+
 export async function fetchCollectors(): Promise<CollectorStatus[]> {
   const r = await fetch('/api/collectors');
   if (!r.ok) throw new Error(`collectors ${r.status}`);

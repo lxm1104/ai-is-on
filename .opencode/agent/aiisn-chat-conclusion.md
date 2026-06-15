@@ -1,7 +1,7 @@
 ---
 description: "AI is ON MVP31 ask_agent 对话结论 → 事项状态提案抽取"
 mode: primary
-model: zai-coding-plan/glm-5.1
+model: zai-coding-plan/glm-5.2
 permission:
   bash: allow
   edit: deny

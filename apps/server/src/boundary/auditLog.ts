@@ -18,7 +18,12 @@ export type AuditAction =
   | 'attention_entity_demoted'
   | 'attention_preference_added'
   | 'lark_task_created'
-  | 'lark_task_failed';
+  | 'lark_task_failed'
+  | 'im_reply_sent'                     // MVP34：AI 代发飞书 IM 回复
+  | 'im_reply_failed'
+  | 'lark_doc_created'                  // MVP35：AI 新建飞书文档草稿
+  | 'lark_doc_failed'
+  | 'investigation_written_back';       // MVP36：AI 自主排查结论回写 matter
 
 export function writeAudit(input: {
   action: AuditAction;

@@ -57,3 +57,31 @@ test('空标题不等价任何东西', () => {
   assert.equal(titlesEquivalent('', ''), false);
   assert.equal(titlesEquivalent('  ', 'x'), false);
 });
+
+// ---------- isDismissSuppressed（负反馈确定性压制，2026-06-14） ----------
+import { isDismissSuppressed } from '../src/attention/titleHygiene.js';
+
+test('同标题被 dismiss + 同优先级 → 压制（不再打扰）', () => {
+  const neg = [{ title: '检查张天赐招聘日报触发器配置', priority: 'P2' }];
+  assert.equal(isDismissSuppressed({ title: '检查张天赐招聘日报触发器配置', priority: 'P2' }, neg), true);
+  // 标题归一化（空格/大小写）也命中
+  assert.equal(isDismissSuppressed({ title: '检查张天赐招聘日报触发器配置 ', priority: 'P3' }, neg), true);
+});
+
+test('优先级明确升级（更紧急）→ 放行', () => {
+  const neg = [{ title: '检查张天赐招聘日报触发器配置', priority: 'P2' }];
+  assert.equal(isDismissSuppressed({ title: '检查张天赐招聘日报触发器配置', priority: 'P1' }, neg), false);
+  assert.equal(isDismissSuppressed({ title: '检查张天赐招聘日报触发器配置', priority: 'P0' }, neg), false);
+});
+
+test('优先级降低或持平 → 仍压制', () => {
+  const neg = [{ title: 'X 任务', priority: 'P1' }];
+  assert.equal(isDismissSuppressed({ title: 'X 任务', priority: 'P1' }, neg), true);  // 持平
+  assert.equal(isDismissSuppressed({ title: 'X 任务', priority: 'P3' }, neg), true);  // 更不紧急
+});
+
+test('未被 dismiss 的标题 → 不压制', () => {
+  const neg = [{ title: '别的卡', priority: 'P0' }];
+  assert.equal(isDismissSuppressed({ title: '一张全新的卡', priority: 'P2' }, neg), false);
+  assert.equal(isDismissSuppressed({ title: '任意', priority: 'P0' }, []), false);
+});

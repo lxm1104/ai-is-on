@@ -1,7 +1,7 @@
 ---
 description: "AI is ON work map draft"
 mode: primary
-model: zai-coding-plan/glm-5.1
+model: zai-coding-plan/glm-5.2
 permission:
   bash: allow
   edit: deny

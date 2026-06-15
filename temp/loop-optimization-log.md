@@ -19,6 +19,147 @@ MVP31 生产验证负例（第 16 轮·会话 A：判定「未完成」→ 正�
 
 ## 迭代记录
 
+### 2026-06-15 第 29 轮：能力一收尾 —— 结论回写 + 自主 dispatcher（MVP36 能力一完整）
+
+- **结论回写**（`investigation/investigationWriteback.ts`）：把排查结论**安全**落到 matter——① 事实+证据写成
+  action_result unit 挂 matter 作证据（effect=no_change），② factSummary 并进 currentSummary（卡片直接显示
+  "［AI 排查］…"），③ verdict=resolved 高置信只把 nextAction 改成"疑似已完成待确认"。**绝不自动改 status**
+  （办结仍由用户确认，保守不伤信任）。审计 investigation_written_back。
+- **自主 dispatcher**（`investigation/investigationDispatcher.ts`）：后台低频自动挑"需排查"matter→跑只读排查→回写。
+  - 纯函数 `isInvestigationWorthy`（regex 认"确认是否/核实/排查进展/查证"类，排除 deriveDefaultNextAction 泛兜底）
+    + `selectInvestigationCandidate`（worthy + 非冷却 → 优先级↑ 再最久未动↑ 取 top-1）—— 可单测。
+  - 安全闸：**默认关**（config.investigationDispatchEnabled，opt-in）；每 tick≤1 件；同 matter 冷却 6h；
+    单件 in-flight 锁；priority:false **让位 attention**（解决第 28 轮发现的 gate 饿死）；硬只读全程。
+  - config 旋钮（默认关/10min tick/6h 冷却/3 轮）+ index.ts start/stop 接线。
+- **验证**：tsc ✓；新增回写 5 测 + dispatcher 5 测，MVP36 累计 25 测全过；**全量 583/583 全绿**（含 collector-hang）。代码按约定不提交。
+- **能力一完整**：只读工具→prompt/解析→循环→aiisn-investigate(全 deny)→回写→dispatcher→调试路由，全部就绪。
+  开启方式：`INVESTIGATION_DISPATCH_ENABLED=true`，或调试路由 `POST /api/debug/investigation/run {matterId, apply:true}` 手动单查。
+- **下一步**：能力二（操作流程全量 tool I/O 落库 + 蒸馏 playbook，suggest 档）；前端展示"AI 已排查"标记 + 证据。
+
+### 2026-06-14 第 28 轮：自主排查执行循环（MVP36 能力一核心，后端中介式硬只读）
+
+- **落地**：在 MVP36 只读工具层之上建排查执行循环。
+  - `investigation/investigationPrompt.ts`：排查推理器 prompt（模型每轮输出 JSON：请求只读工具 或 给结论
+    {verdict/confidence/factSummary/evidence}）+ 鲁棒解析（非法降级 unknown）。
+  - `investigation/investigationLoop.ts`：循环引擎——judge↔runTool 交替，LLM 调用数严格 ≤ maxRounds（每次过单并发 gate）；
+    未知/写工具名直接记失败不执行；judge/runTool 全注入可测。
+  - 注册 `aiisn-investigate` agent：**permission 全 deny（bash/edit/write/webfetch 全关）**——纯文本进 JSON 出，
+    连 shell 都没有。比 aiisn-chat 的软约束硬一档：排查推理器无法执行任何动作，只能"请求读"，由后端白名单只读工具执行。
+- **验证**：tsc ✓；新增 8 测试（解析 conclude/investigate/降级/抛错 + 循环投查→结论/轮数上限/未知写工具不执行/解析失败收尾），
+  readTools 7 + loop 8 = 15 个 MVP36 测试全过；agent 文件物化确认 `bash: deny` + 工具清单注入。
+  **真实端到端验证（关键）**：直接喂真实 matter「长对话评测集→确认评测集是否已发给鲁升纲」给 aiisn-investigate(绕开拥塞的 gate)，
+  模型**正确输出合法 JSON、action=investigate、请求对的只读工具 search_im_messages + 合理 query（"评测集 鲁升纲"/"长对话评测集"）**
+  ——证明 AI 面对真实事项会正确决定去查并选对工具。读工具侧 task +get-my-tasks 真实读到数据；循环逻辑 8 测；硬只读护栏 7 测。
+- **过程中两个真实发现 + 修复**：
+  ① **gate 拥塞/饿死**：背景排查 priority:false 会被 attention 的 high 队列持续插队饿死（实测 curl 等满超时）；
+     且单个挂死的 attention opencode 调用会占住单并发 gate 阻塞所有 LLM 数分钟。→ 给循环加 priority 选项（背景让路、手动验证可插队）。
+  ② **原生工具误调**：实测模型偶尔想用 opencode 原生 read/grep 工具而非输出 JSON（read 默认 allow 没堵），既偏协议、又有读本地
+     文件风险、还拖慢 runOneShot。→ agent 改 **全工具 deny（含 read）** + prompt 强化"严禁调用任何工具"，彻底封死。
+- tsc ✓；MVP36 累计 15 测全过；agent 物化确认全 deny。代码按约定不提交。
+- **下一步**：dispatcher（后台低频挑 top-1 需排查 matter、matter 级 in-flight 锁、让路 attention、一键关）+ 结论结构化回写
+  matter（progressed/blocked 经 reduceUnitWithCandidates 双闸、证据链接挂 action_result）；能力二 tool I/O 全量落库。
+
+### 2026-06-14 第 27 轮：自主排查+流程记忆 —— 多 agent 调研定方向 + 硬只读边界基座（MVP36）
+
+- **背景**：用户提出 next_action 里"需排查/外部取数"类希望 AI 自主执行，并希望"吸取用户操作流程"形成可复用记忆。
+- **调研**（7-agent 工作流，~70 万 token，带 file:line）：① AI 已能自主排查取数但仅用户手点 ask_agent 触发、结论几乎不回流、"只读"是 prompt 软约束；② 流程记忆=零（boundary 只学分类不学操作，routine kind 死代码，141d119 还禁止沉淀操作经验）；③ **对抗审查挖出关键纠错**：chat turn 不过 llmGate（多 topic 真并发），原设计"派发太松饿死闸门"反了，真实风险是并发 opencode 进程爆炸。详见记忆 [[aiisn-investigation-playbook-design]]。
+- **用户拍板**：两条能力**并行**推进；**先建硬只读边界再开自动**。
+- **本轮落地（MVP36 硬只读边界基座）**：放弃在不可靠的 opencode bash 模式匹配上建边界，改**后端中介式**——模型不碰 shell，
+  只能请求白名单只读工具，后端用 lark-cli 读命令执行（顺带绕开并发爆炸：走后端读+gated one-shot，不开 turn）。
+  新增 `investigation/readTools.ts`：4 个只读工具（search_im_messages/read_chat_messages/list_my_tasks/read_doc）+
+  `assertReadOnly()` 读动词白名单+写动词黑名单双重护栏（写命令按构造不可能发出）。
+- **验证**：tsc ✓；新增 7 测试（写动词必拒/白名单放行/默认拒绝/构造正确/缺参不调/注册表无写能力），全量 565（1 个 collector-hang flaky 重跑即过，余全绿）✓；真实只读命令（task +get-my-tasks）live 验证返回数据 ✓。代码按约定不提交。
+- **下一步**：能力一——排查执行循环（runOneShot aiisn-investigate：给 matter 上下文+工具清单→模型选只读工具→后端执行→回喂→判断是否继续→结构化回写 matter）+ dispatcher（后台挑 top-1 需排查 matter，matter 级 in-flight 锁）；能力二——全量 tool I/O 落库 + 蒸馏 suggest 档。
+
+### 2026-06-14 第 26 轮：判断准确度 —— 负反馈确定性压制（dismiss 的卡不再复发）
+
+- **质量体检发现**（无新使用数据时转向打磨准确度）：① 无相对日期违规、优先级分布健康（P0=3/P1=4/P2=5）；
+  ② **信任杀手**：一张被 dismiss 的卡「检查张天赐招聘日报触发器配置」4 天内被引擎重生 ~50 次。
+- **根因**：复发压制**完全依赖 prompt 里 `recentAttentionInteractions`（7 天窗）让 LLM 自觉不重发**——
+  但实测 dismiss 在窗内（距今 3 天）LLM 仍重生；且该卡 signalIds 丢空、无 entity 可降权，
+  negative-feedback 的两条间接机制都兜不住。结论：**靠 LLM 守负反馈不可靠**（同 titleHygiene/churn guard 教训）。
+- **修复**：`titleHygiene.isDismissSuppressed`（纯函数）+ attentionEngine emit 前确定性过滤：新生成卡若归一化标题
+  命中近 7 天 dismiss/not_relevant 且**优先级未升级**（不比被 dismiss 时更紧急）→ 直接不落地。
+  优先级升级（如 dismiss 时 P2、现 P0/P1 有新紧急证据）才放行，与 prompt 规则一致。
+- **验证**：tsc ✓；新增 4 单测（同级压制/升级放行/降级仍压/未 dismiss 不压），title-hygiene 13/13、全量 **558/558** ✓；
+  对照实测：该卡 dismiss 时 P0、复发为 P1 → `rank(P1)≥rank(P0)` 命中压制 ✓；清理存量 live 复发卡（live 12→11，复发 1→0）；
+  重启后真实 attention run status=ok（新代码路径不崩）。代码按约定不提交。
+
+### 2026-06-14 第 25 轮：执行腿第二刀 —— AI 起草并新建飞书文档（MVP35，内部可逆，无授权阻塞）
+
+- **选型**：IM 代发待用户授权（第 24 轮），故并行推进**已授权 scope**（docx:document:create）的内部可逆动作——
+  把事项一键整理成飞书文档草稿。复用 execute-on-confirm 范式，不重造。
+- **落地**：新增 `lark/larkDocService.ts`（confirm 门控；v1 内容**确定性生成** = 标题+当前情况+下一步+相关上下文证据，
+  不依赖慢 LLM；`docs +create --api-version v2 --content '<title>..'`；无 idempotency-key 故复用 external_task_bindings
+  provider='lark_doc' 本地去重；XML 转义；写回 silent action_result + 挂 Matter 作 progress 证据；审计 lark_doc_created；
+  缺 scope 也给友好提示）。路由 POST `/cards/:id/lark-doc`（支持 dryRun）。前端 SignalCard「📄 起草成飞书文档」按钮，
+  成功显示文档链接。
+- **验证**：tsc（server+web）✓；新增 4 测试（confirm 门控/命令+content 正确/幂等复用/dry-run 不写回），全量 **554/554** ✓；
+  **真实 dry-run 实测**：经路由→服务→真 lark-cli，`ok:true` 无 missing_scopes（docx scope 已授权、命令受理、标题从 matter
+  正确解析），即真实创建路径完全通；**前端实测**（截图）：12 张卡均渲染「📄 起草成飞书文档」+「🤖 代我回复飞书」双按钮。
+- **克制**：UI 标「只读飞书」，且用户本会话才批准对外执行——**未自动创建真实文档**（dry-run 已证路径通），真实创建留用户点击，
+  既尊重只读姿态又能产生真实使用数据。代码按约定不提交。
+- **现状小结**（执行腿）：① IM 代发：建好+验证到授权边界，待用户跑 `lark-cli auth login --scope im:message.send_as_user`；
+  ② 建文档：建好+路径全通（scope 已授权），用户点即真实产出；③ 建任务：既有，已授权。三类自主完成动作就位，等真实使用数据。
+
+### 2026-06-14 第 24 轮：MVP34 生产验证 —— 真实 dry-run 揭示唯一阻塞 = 缺发消息授权
+
+- **加 dry-run 安全验证**：`sendImReplyFromCard` 支持 `dryRun`（附 lark-cli `--dry-run`，鉴权+目标校验+命令受理
+  但不真发；不写回/不标记/不审计为已发）。路由 POST 支持 `dryRun`。
+- **真实 dry-run 实测**（经 路由→服务→真 lark-cli，零发送）：命令构造正确、身份识别为 user、目标解析有效，
+  **唯一阻塞 = 缺 OAuth scope `im:message.send_as_user`**（exit 3, missing_scopes 明示）。即整条执行路径已通，
+  距真实投递只差一次用户授权。
+- **已授权 scope 盘点**：发消息缺 `im:message.send_as_user`；但 **建任务 `task:task:write` ✓、建文档
+  `docx:document:create` ✓ 均已授权**（task 历史真建过 2 次为证）。→ 内部可逆动作（建文档/任务）无需新授权即可执行。
+- **缺 scope → 自助解锁**：catch 检出 missing_scopes 即抛友好可操作提示（"运行 lark-cli auth login
+  --scope im:message.send_as_user 完成浏览器验证后重试"），前端回复面板直接显示。实测 dry-run 返回该友好文案 ✓。
+- **验证**：tsc ✓，全量 **550/550** ✓。
+- **给用户的决策点**：要真实启用 IM 代发，需你跑一次 `lark-cli auth login --scope "im:message.send_as_user"`
+  （浏览器授权"以你身份发消息"，是你账号的权限决策，我不能代办）。在你授权前，下一步我推进**已授权 scope** 的
+  「AI 起草并新建飞书文档」（docx:document:create 已有）—— 内部可逆、可立即端到端验证真实产出。
+
+### 2026-06-14 第 23 轮：执行腿第一刀 —— AI 代发飞书 IM 回复（MVP34，对外执行 execute-on-confirm）
+
+- **断点定性**（量化）：用户点「让 AI 处理」(ask_agent) 18 次，AI **全部只调研/起草**（cardsService 的
+  buildDefaultPrompt 与 askAgentPrompt 都硬写「不要执行任何对外发送或写操作」）；唯一真实执行
+  create_task（建飞书任务）一生只用过 2 次且 6-09 后停滞。"AI 自主完成任务数"≈2。系统停在"告诉你怎么做"。
+- **架构发现（避免重造）**：执行能力其实**已存在**——opencode.json 虽 `skill:{"*":deny}`，但 agent 都
+  `bash:allow`，lark-cli 写操作走 bash；只读是 prompt 层刻意约束。且 `larkTaskService.createLarkTaskFromCard`
+  已是一套成熟的 execute-on-confirm 范式（confirm 门控+幂等+审计+回写 context+绑定）。
+- **方向决策（已问用户拍板）**：用户选「同时含对外发送」——AI 备好草稿+收件人，用户一键「发送」才真发出，
+  每次确认都是不可撤回的对外消息（用户接受此风险）。
+- **落地（MVP34，最高价值切口 = IM 回复）**：新增 `lark/larkImReplyService.ts`：
+  - 目标**服务端确定性解析**（不信前端 chatId）：signalIds→context unit.origin.refId→event→raw_json
+    的 chat_id/message_id；**多会话歧义即拒绝、无 IM 消息即拒绝，绝不猜**；优先 `+messages-reply`
+    锚定对方原消息，退化 `+messages-send`。confirm 必填、空/超长拒发、lark-cli `--idempotency-key` 防重发。
+  - 发完写 silent action_result + 挂 Matter 作证据（真实"我发出的消息"由 im collector 自然采回交 reducer，
+    不在此替用户判办结）。审计 `im_reply_sent`/`im_reply_failed`。
+  - 路由 `routes/larkReply.ts`：GET preview（只读、给前端看"回复给谁"）+ POST 发送。
+  - 前端 SignalCard「🤖 代我回复飞书」：点击→preview→**先展示目标会话+对方原话+可编辑草稿**→「确认发送」。
+    不可逆动作前必让用户看清打给谁。
+- **验证**：tsc（server+web）✓；新增 7 测试（解析/歧义拒绝/空值拒绝/confirm 门控/参数正确/回写挂链/幂等键），
+  全量 **550/550** ✓；**真实数据只读 preview 实测**：P0 卡正确解析到与孔恩培单聊+锚定其消息，群消息卡解析到真实群，
+  文档来源卡正确拒绝；**前端 preview 实测**：点击后确认面板正确显示"回复给 oc_…·回应 孔恩培"+原话+草稿
+  （**未点确认发送**，不向真人试发）。代码按约定不提交。
+- **下一步**：① 真实场景由用户点一次「确认发送」端到端验证投递；② 把执行扩到文档评论回复 / 起草并新建飞书文档
+  （内部可逆，门槛更低）；③ 高频可逆动作沉淀 boundary rule 走渐进放权（少确认）。
+
+### 2026-06-14 第 22 轮：matter.next_action 87% 为空 → 修复 create 丢字段 + prompt + 兜底 + 回填
+
+- **体检**：系统健康（采集水位滞后 1-13min、attention 全 ok、无挂死 lark-cli）。最痛的是**目标缺口**而非稳定性：
+  55 个活跃 matter 里仅 7 个（13%）有 `next_action` —— 其余只是提醒，不是"自主判断该如何完成"。
+- **根因**：`matterReducer.applyDecision` 的 **create 分支调用 `createFromUnit()` 时根本没传 `decision.nextAction`**，
+  LLM 已产出的下一步被直接丢弃（attach 分支 line 381 正常）。由于多数 matter 走 create，故 87% 空。
+  次因：reducer prompt 把 nextAction 标"可选，没有就 null"，未要求 create 必给。
+- **修复（3 处）**：① create 路径接 `decision.nextAction`；② `deriveDefaultNextAction(type)` 类型化兜底，
+  保证活跃事项 next_action 永不为空（无 LLM 的规则建路径也覆盖）；③ prompt 加规则 7：create / progress / block / reopen
+  必给具体可执行 nextAction（带动作+对象、≤40字、禁空话），resolve / ignore 给 null。一次性回填存量 48 条。
+- **验证**：tsc ✓；新增 T12-T14 三测（LLM 给值保留 / 未给走兜底 / 规则建也兜底），reducer 14/14 ✓，全量 540/540 ✓；
+  agent 文件已物化规则 7（证明服务重启生效）；**live API 实测活跃 matter next_action 非空率 13% → 100%（55/55）**。
+  前端 MatterPanel 每张卡显示"下一步：…"；attentionPrompt 也复用它生成 suggestedAction（更一致、少幻觉）。
+- **下一步方向**（留给后续轮）：兜底是"地板"，真正逼近目标是让这些 next_action 变成**可一键执行的提案**
+  （MVP31 Agent Inbox：accept/edit/respond/ignore），把"告诉用户怎么做"升级成"AI 直接做掉大部分"。
+
 ### 2026-06-10 第 1 轮：attention 引擎 87% 失败 → 修复调用层
 
 **体检发现：**

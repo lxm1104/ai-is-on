@@ -20,7 +20,8 @@ import { runOneShot } from '../triage/backgroundRuntime.js';
 import { broadcast } from '../ws.js';
 import { registerUpsertHook } from '../context/contextStore.js';
 import { assembleGlobalContextPacket } from '../context/agentContextAssembler.js';
-import { absolutizeRelativeDatesInTitle, titlesEquivalent } from './titleHygiene.js';
+import { absolutizeRelativeDatesInTitle, titlesEquivalent, isDismissSuppressed } from './titleHygiene.js';
+import { listRecentAttentionInteractions } from './attentionInteractions.js';
 import {
   ATTENTION_SYSTEM_PROMPT,
   ATTENTION_PROMPT_VERSION,
@@ -191,10 +192,10 @@ async function doRunAttentionTick(
         systemPrompt: ATTENTION_SYSTEM_PROMPT,
         timeoutMs: ONE_SHOT_TIMEOUT_MS,
         priority: true, // attention 是用户可感知引擎，闸门插队，不排在 triage/matter 后
-        // turbo（thinking disabled，见 opencode.json）实测 13.4k 输入 15-94s；
-        // glm-5.1 兜底质量。P0 从严标定见 attentionPrompt v2。
+        // 模型链 5.2 > 5.1 > 5-turbo（turbo thinking-disabled，见 opencode.json）。
+        // P0 从严标定见 attentionPrompt v2。
         model: config.attentionModel,
-        fallbackModel: config.attentionFallbackModel,
+        fallbackModels: config.attentionFallbackModels,
       });
       llmText = shot.text;
       inputSummary.llmWaitMs = shot.timing.waitMs;
@@ -262,7 +263,7 @@ async function doRunAttentionTick(
   const liveIds = new Set(currentLive.map((x) => x.id));
   let llmDrivenSupersededCount = 0;
   let keptAsEquivalentCount = 0;
-  const itemsToPersist: typeof llmItems = [];
+  let itemsToPersist: typeof llmItems = [];
 
   // 提案卡/系统卡（办结确认 proposal:*、授权失效/采集停滞 system:*）生命周期归各自服务管：
   // 用户动作、matter resolve、看门狗恢复才能动它们。LLM 点名替代与防抖等价机制一律无权染指
@@ -364,6 +365,29 @@ async function doRunAttentionTick(
   }
   if (keptAsEquivalentCount > 0) {
     console.log(`[attention] churn guard kept ${keptAsEquivalentCount} equivalent item(s) unchanged`);
+  }
+
+  // 7.9) 确定性负反馈压制（2026-06-14）：用户近期 dismiss/not_relevant 过的同标题卡，除非优先级
+  //   明确升级（新卡更紧急），否则不再落地。**不依赖 LLM 守负反馈** —— 实测某卡 dismiss 后仍在
+  //   7 天提示窗内被反复重生 ~50 次（且 signalIds 丢空、无 entity 可降权，prompt 负反馈兜不住）。
+  //   与 titleHygiene / churn guard 同philosophy：引擎层确定性兜底。
+  const NEG_SUPPRESS_WINDOW_MS = 7 * 24 * 3600_000;
+  const negInteractions = listRecentAttentionInteractions({
+    sinceIso: new Date(Date.now() - NEG_SUPPRESS_WINDOW_MS).toISOString(),
+    limit: 200,
+  }).filter((i) => i.action === 'dismiss' || i.action === 'not_relevant');
+  let dismissSuppressedCount = 0;
+  if (negInteractions.length > 0) {
+    itemsToPersist = itemsToPersist.filter((it) => {
+      if (isDismissSuppressed(it, negInteractions)) {
+        dismissSuppressedCount++;
+        return false;
+      }
+      return true;
+    });
+    if (dismissSuppressedCount > 0) {
+      console.log(`[attention] 负反馈压制 ${dismissSuppressedCount} 张被 dismiss 的同标题卡（未升级）`);
+    }
   }
 
   // 8) 批量插入新 items（不含 supersede-only）

@@ -247,3 +247,35 @@ test('T11 commitmentAgent：关联 Matter resolved → skip', async () => {
   assert.equal((out.data as { skipped?: string }).skipped, 'matter_resolved');
   assert.equal(out.proposalIds.length, 0);
 });
+
+test('T12 judge=create 带 nextAction → 落库保留（核心目标：自主判断如何完成）', async () => {
+  resetDb();
+  await seedOpenMatter(); // 制造候选，逼 judge 路径
+  const u2 = mkUnit({ kind: 'commitment', title: '跟 Yufan 对下周排期', content: '约 Yufan 过排期', entities: [YUFAN], actionability: 'act' });
+  const res = await mr.reduceMatterForContextUnit(u2, undefined, {
+    now: NOW,
+    judge: mkJudge({ action: 'create', confidence: 0.9, nextAction: '把排期草案发给 Yufan 确认', reason: '不同事项' }),
+  });
+  assert.equal(res.action, 'create');
+  assert.equal(ms.getMatterById(res.matterId!)!.nextAction, '把排期草案发给 Yufan 确认');
+});
+
+test('T13 judge=create 未给 nextAction → 按事项类型兜底，绝不为空', async () => {
+  resetDb();
+  await seedOpenMatter();
+  const u2 = mkUnit({ kind: 'commitment', title: '给 Yufan 出一版测评方案', content: '需要交付测评方案', entities: [YUFAN], actionability: 'act' });
+  const res = await mr.reduceMatterForContextUnit(u2, undefined, {
+    now: NOW,
+    judge: mkJudge({ action: 'create', confidence: 0.9, reason: '新交付' }),
+  });
+  assert.equal(res.action, 'create');
+  const na = ms.getMatterById(res.matterId!)!.nextAction;
+  assert.ok(na && na.trim().length > 0, '创建的活跃事项必须有兜底 nextAction');
+});
+
+test('T14 规则建（无候选不调 judge）也有兜底 nextAction', async () => {
+  resetDb();
+  const { m } = await seedOpenMatter(); // discussion 类型，无候选 → 规则建
+  const na = ms.getMatterById(m.id)!.nextAction;
+  assert.ok(na && na.trim().length > 0, '规则建的活跃事项也必须有兜底 nextAction');
+});

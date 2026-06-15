@@ -203,7 +203,36 @@ function summarize(unit: ContextUnit): string {
   return oneLine.length > 200 ? oneLine.slice(0, 199) + '…' : oneLine;
 }
 
-function createFromUnit(unit: ContextUnit, now: number, nowIso: string, titleOverride?: string): Matter {
+// 活跃事项必有「下一步」——LLM 没给时按事项类型兜底一句具体动作，
+// 保证 attentionPrompt / MatterPanel / 提案链路永远拿得到「该如何完成」（核心目标）。
+function deriveDefaultNextAction(type: MatterType, status: MatterStatus): string | null {
+  if (status === 'resolved' || status === 'dropped') return null;
+  switch (type) {
+    case 'blocker':
+      return '向相关方澄清阻塞点并推动解除';
+    case 'delivery':
+      return '推进交付并向对方确认收到';
+    case 'review':
+      return '完成评审并反馈意见';
+    case 'decision':
+      return '确认决策结论并同步相关方';
+    case 'coordination':
+      return '协调相关方对齐时间与分工';
+    case 'discussion':
+      return '参与讨论并推动形成结论';
+    case 'follow_up':
+    default:
+      return '跟进进展并确认结果';
+  }
+}
+
+function createFromUnit(
+  unit: ContextUnit,
+  now: number,
+  nowIso: string,
+  titleOverride?: string,
+  nextAction?: string | null
+): Matter {
   const { entities, primaryEntityIds } = deriveEntities(unit);
   const selfId = loadSelfCanonicalId();
   const selfRole = computeSelfRoleOnUnit(unit.id, selfId);
@@ -212,7 +241,10 @@ function createFromUnit(unit: ContextUnit, now: number, nowIso: string, titleOve
   const type: MatterType =
     unit.kind === 'uncertainty' ? 'blocker' : classifyMatterType({ title: unit.title, content: unit.content });
   const status: MatterStatus = unit.kind === 'uncertainty' ? 'blocked' : 'open';
+  const resolvedNextAction =
+    (typeof nextAction === 'string' && nextAction.trim()) || deriveDefaultNextAction(type, status);
   return createMatter({
+    nextAction: resolvedNextAction,
     subjectId: unit.subjectId,
     scope: unit.scope,
     type,
@@ -319,7 +351,7 @@ function applyDecision(
 
   if (decision.action === 'create') {
     if (decision.confidence < ATTACH_ONLY) return IGNORE(`create conf<${ATTACH_ONLY}`);
-    const m = createFromUnit(unit, now, nowIso, decision.title);
+    const m = createFromUnit(unit, now, nowIso, decision.title, decision.nextAction);
     return { action: 'create', matterId: m.id, applied: true, reason: decision.reason || 'judge: create' };
   }
 

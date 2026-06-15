@@ -8,9 +8,13 @@ import {
   postAttentionFeedback,
   postCardCorrection,
   postContextFeedback,
+  previewImReply,
+  postImReply,
+  postCardLarkDoc,
   type AttentionConversation,
   type AttentionOriginItem,
   type AttentionSignalDetail,
+  type ImReplyTarget,
   type LarkTaskCreateResult,
   type CorrectionApplyResult,
 } from '../lib/api';
@@ -92,8 +96,69 @@ export function SignalCardView(props: {
   const [corrBusy, setCorrBusy] = useState(false);
   const [corrErr, setCorrErr] = useState<string | null>(null);
 
+  // MVP34：AI 代发飞书 IM 回复（执行腿首个对外动作）。preview→展示目标→用户确认→send。
+  const [replyOpen, setReplyOpen] = useState(false);
+  const [replyTarget, setReplyTarget] = useState<ImReplyTarget | null>(null);
+  const [replyText, setReplyText] = useState('');
+  const [replyBusy, setReplyBusy] = useState(false);
+  const [replyErr, setReplyErr] = useState<string | null>(null);
+  const [replySent, setReplySent] = useState(false);
+
   // MVP14 Step 4 attention feedback state
   const isAttention = card.source === 'agent' && card.sourceKind === 'agent_run';
+
+  async function openReply() {
+    setReplyBusy(true);
+    setReplyErr(null);
+    try {
+      const { target, suggestedText } = await previewImReply(card.id);
+      setReplyTarget(target);
+      setReplyText(suggestedText || card.draftReply || '');
+      setReplyOpen(true);
+    } catch (e) {
+      // 非 IM 卡 / 会话不唯一 → 展示原因，不开编辑框
+      setReplyTarget(null);
+      setReplyErr(e instanceof Error ? e.message : String(e));
+      setReplyOpen(true);
+    } finally {
+      setReplyBusy(false);
+    }
+  }
+
+  async function sendReply() {
+    if (!replyText.trim()) {
+      setReplyErr('回复内容不能为空');
+      return;
+    }
+    setReplyBusy(true);
+    setReplyErr(null);
+    try {
+      await postImReply({ cardId: card.id, text: replyText.trim() });
+      setReplySent(true);
+      setReplyOpen(false);
+    } catch (e) {
+      setReplyErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReplyBusy(false);
+    }
+  }
+
+  // MVP35：AI 起草并新建飞书文档（内部可逆，单击确认即创建）
+  const [docBusy, setDocBusy] = useState(false);
+  const [docResult, setDocResult] = useState<{ url?: string; title: string } | null>(null);
+  const [docErr, setDocErr] = useState<string | null>(null);
+  async function makeDoc() {
+    setDocBusy(true);
+    setDocErr(null);
+    try {
+      const r = await postCardLarkDoc({ cardId: card.id });
+      setDocResult({ url: r.url, title: r.title });
+    } catch (e) {
+      setDocErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDocBusy(false);
+    }
+  }
   const [attnFbBusy, setAttnFbBusy] = useState<string | null>(null);
   const [attnFbDone, setAttnFbDone] = useState<string | null>(null);
   const [attnFbErr, setAttnFbErr] = useState<string | null>(null);
@@ -398,6 +463,97 @@ export function SignalCardView(props: {
             <ResolvedText text={card.draftReply} />
           </pre>
         </details>
+      )}
+      {/* MVP34：AI 代发飞书 IM 回复 —— 先看清回复给谁，确认后才真正发送 */}
+      {(isAttention || card.draftReply) && !replySent && (
+        <div className="card__reply">
+          {!replyOpen ? (
+            <button
+              type="button"
+              className="btn btn--card btn--reply"
+              disabled={replyBusy}
+              onClick={() => void openReply()}
+              title="由 AI 代你在飞书发送回复（发送前你会先看到回复给谁）"
+            >
+              {replyBusy ? '解析中…' : '🤖 代我回复飞书'}
+            </button>
+          ) : (
+            <div className="card__reply-panel">
+              {replyErr ? (
+                <p className="card__reply-err">⚠ {replyErr}</p>
+              ) : (
+                <>
+                  <p className="card__reply-target">
+                    回复给：<b>{replyTarget?.chatName || replyTarget?.chatId}</b>
+                    {replyTarget?.replyToActor ? ` · 回应 ${replyTarget.replyToActor}` : ''}
+                  </p>
+                  {replyTarget?.replyToText && (
+                    <p className="card__reply-quote">「{replyTarget.replyToText}」</p>
+                  )}
+                  <textarea
+                    className="card__reply-text"
+                    value={replyText}
+                    onChange={(e) => setReplyText(e.target.value)}
+                    rows={3}
+                    placeholder="编辑要发送到飞书的回复…"
+                  />
+                </>
+              )}
+              <div className="card__reply-actions">
+                {!replyErr && (
+                  <button
+                    type="button"
+                    className="btn btn--card btn--reply-send"
+                    disabled={replyBusy || !replyText.trim()}
+                    onClick={() => void sendReply()}
+                  >
+                    {replyBusy ? '发送中…' : '确认发送'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn--card"
+                  disabled={replyBusy}
+                  onClick={() => {
+                    setReplyOpen(false);
+                    setReplyErr(null);
+                  }}
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      {replySent && <p className="card__reply-sent">✓ 已通过飞书发送回复</p>}
+      {/* MVP35：AI 起草并新建飞书文档（内部可逆） */}
+      {isAttention && !docResult && (
+        <div className="card__doc">
+          <button
+            type="button"
+            className="btn btn--card btn--doc"
+            disabled={docBusy}
+            onClick={() => void makeDoc()}
+            title="由 AI 把该事项整理成一份飞书文档草稿（草稿态，可改可删）"
+          >
+            {docBusy ? '创建中…' : '📄 起草成飞书文档'}
+          </button>
+          {docErr && <p className="card__reply-err">⚠ {docErr}</p>}
+        </div>
+      )}
+      {docResult && (
+        <p className="card__reply-sent">
+          ✓ 已新建文档「{docResult.title}」
+          {docResult.url && (
+            <>
+              {' '}
+              <a href={docResult.url} target="_blank" rel="noreferrer">
+                打开 ↗
+              </a>
+            </>
+          )}
+        </p>
       )}
       {card.sourceUrl && (
         <a className="card__link" href={card.sourceUrl} target="_blank" rel="noreferrer">

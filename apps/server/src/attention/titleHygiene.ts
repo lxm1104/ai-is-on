@@ -39,3 +39,25 @@ export function titlesEquivalent(a: string, b: string): boolean {
   const na = norm(a);
   return na !== '' && na === norm(b);
 }
+
+const PRIO_RANK: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
+function prioRank(p: string): number {
+  return PRIO_RANK[p] ?? 3;
+}
+
+export type DismissRef = { title: string; priority: string };
+
+/**
+ * 负反馈压制判定（2026-06-14）：用户近期 dismiss/not_relevant 过的卡，引擎重生同标题卡时，
+ * 除非**优先级明确升级**（新卡比被 dismiss 时更紧急）才放行，否则压制不再打扰用户。
+ * 纯函数 —— 不依赖 LLM 守负反馈（实测窗内仍复发），引擎层确定性兜底。
+ */
+export function isDismissSuppressed(
+  item: { title: string; priority: string },
+  negInteractions: DismissRef[]
+): boolean {
+  const dismissed = negInteractions.find((n) => titlesEquivalent(n.title, item.title));
+  if (!dismissed) return false;
+  // rank 越小越紧急；新卡 rank >= 被 dismiss 时 rank（即不更紧急）→ 压制。
+  return prioRank(item.priority) >= prioRank(dismissed.priority);
+}

@@ -38,6 +38,10 @@ attach 时给 effect：
 4. reopen 只在**明确**信号下给（对方再次催 / 说没收到 / 要求重做）；只是同一个人又出现、同项目有新消息，不要 reopen。
 5. 不要输出 effect="drop"；放弃由用户手动决定。
 6. confidence ∈ [0,1]，如实标定你对这次判断的把握。证据弱就给低分。
+7. nextAction 是给用户看的「下一步最该做的一件事」，必须**具体、可执行**：带上动作 + 对象（谁/什么），≤40 字，别写"关注一下""持续跟进"这类空话。规则：
+   - action=create，或 effect ∈ {progress, block, reopen} → **必须**给一句具体 nextAction（事项还没结，用户总有下一步）。
+   - effect=resolve 或 action=ignore → nextAction 为 null（事已了，无需下一步）。
+   - effect=no_change → 若你比该事项现有的下一步更清楚，就给出更新；否则省略（不要为了填而填）。
 
 输出 schema：
 {
@@ -47,7 +51,7 @@ attach 时给 effect：
   "status": "resolved",
   "title": "<create 时给规范化标题；attach 可省略>",
   "summaryPatch": "<对该事项当前状态的一句话更新，可选>",
-  "nextAction": "<下一步要做什么，可选；没有就 null>",
+  "nextAction": "<下一步最该做的一件具体事，见规则 7；事已了或无关给 null>",
   "confidence": 0.82,
   "reason": "<一句话依据，≤80 字>"
 }`;

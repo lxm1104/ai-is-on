@@ -1,7 +1,7 @@
 ---
 description: "AI is ON MVP15B 推断某人对某项目的决策权重"
 mode: primary
-model: zai-coding-plan/glm-5.1
+model: zai-coding-plan/glm-5.2
 permission:
   bash: allow
   edit: deny

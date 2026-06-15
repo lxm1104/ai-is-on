@@ -26,6 +26,7 @@ import { resolveRouter } from './routes/resolve.js';
 import { adminSuggestionRouter } from './routes/adminSuggestion.js';
 import { attentionRouter } from './routes/attention.js';
 import { larkTasksRouter } from './routes/larkTasks.js';
+import { larkReplyRouter } from './routes/larkReply.js';
 import { graphRouter } from './routes/graph.js';
 import { projectsRouter } from './routes/projects.js';
 import { toneProfileRouter } from './routes/toneProfile.js';
@@ -39,6 +40,7 @@ import {
 import { startMatterTracker, stopMatterTracker } from './matter/matterScheduler.js';
 import { startTriggerScheduler, stopTriggerScheduler } from './triggers/triggerScheduler.js';
 import { startAttentionScheduler, stopAttentionScheduler } from './attention/attentionEngine.js';
+import { startInvestigationDispatcher, stopInvestigationDispatcher } from './investigation/investigationDispatcher.js';
 import { bootstrapAgents } from './agents/index.js';
 import { migrateUserRulesIfNeeded } from './boundary/migration.js';
 import { runStartupRecovery } from './startupRecovery.js';
@@ -75,6 +77,7 @@ app.use('/api', resolveRouter);
 app.use('/api', adminSuggestionRouter);
 app.use('/api', attentionRouter);
 app.use('/api', larkTasksRouter);
+app.use('/api', larkReplyRouter);
 app.use('/api', graphRouter);
 app.use('/api', projectsRouter);
 app.use('/api', toneProfileRouter);
@@ -133,6 +136,7 @@ server.listen(config.port, '127.0.0.1', () => {
   startMaintenance();
   startTriggerScheduler();
   startAttentionScheduler();
+  startInvestigationDispatcher(); // MVP36：默认关，opt-in 才自动派发只读排查
   // MVP15A §7.2.1: 10s 后台预热 graph inducer（首次 LLM project taxonomy 慢，
   // 这样 /api/graph/* 第一次访问命中缓存）。失败不阻塞 server。
   setTimeout(() => {
@@ -148,6 +152,9 @@ const shutdown = async (signal: string) => {
   console.log(`[server] received ${signal}, shutting down`);
   try {
     stopCollectorScheduler();
+  } catch {}
+  try {
+    stopInvestigationDispatcher();
   } catch {}
   try {
     stopFreshnessWatchdog();

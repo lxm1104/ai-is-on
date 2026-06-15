@@ -18,24 +18,38 @@ const { evaluateFreshness } = await import('../src/collectors/freshnessWatchdog.
 // ---------- runLarkCli 硬超时 ----------
 
 test('runLarkCli: 挂死子进程被超时终止，按失败 resolve', async () => {
+  // 核心断言是 code===-1 + stderr 含超时文案（只有超时真正触发才会出现，进程自然
+  // 退出则 code=0 且无此文案），它们与 CPU 负载无关。
+  // elapsed 断言只是“没有干等满子进程时长”的兜底守卫：把子进程拉长到 30s、阈值放到
+  // 5s，既保留“远早于自然退出即返回”的语义（6× 余量），又能吸收全量并发跑时事件
+  // 循环被饿导致的定时器迟发抖动（实测最坏 ~1.1s，留 >4× 余量），不再 flaky。
   const t0 = Date.now();
-  const r = await runLarkCli(['5']); // /bin/sleep 5 —— 模拟挂死
+  const r = await runLarkCli(['30']); // /bin/sleep 30 —— 模拟挂死（超时会 SIGTERM 立刻杀掉）
   const elapsed = Date.now() - t0;
-  assert.ok(elapsed < 2_000, `应在超时(300ms)附近返回，实际 ${elapsed}ms`);
+  assert.ok(elapsed < 5_000, `应因超时(300ms)远早于 30s 自然退出而返回，实际 ${elapsed}ms`);
   assert.equal(r.code, -1);
   assert.match(r.stderr, /timeout after 300ms/);
 });
 
 test('runLarkCli: 正常退出不受超时影响', async () => {
-  const r = await runLarkCli(['0']); // /bin/sleep 0 —— 立即正常退出
+  // 用宽松 per-call 超时（30s），而非默认 300ms。本用例验证的是“正常退出的进程
+  // 返回真实退出码、不被超时干扰”，与超时阈值无关。300ms 在全量并发跑（75 个 tsx
+  // 工作进程争 8 核）时会输给 /bin/sleep 0 的 spawn→exit 延迟（实测可达 1100ms+），
+  // 导致硬超时误杀、返回 code=-1 —— 这正是该用例历史性 flaky 的根因。给足超时即可
+  // 解耦“正常退出”与“spawn 调度延迟恰好跑赢 300ms”这两件事，不削弱任何断言。
+  // 需要超时真正触发的用例（sleep 30）仍用各自的短超时，见上/下两个用例。
+  const r = await runLarkCli(['0'], undefined, { timeoutMs: 30_000 }); // /bin/sleep 0 —— 立即正常退出
   assert.equal(r.code, 0);
   assert.ok(!/timeout/.test(r.stderr));
 });
 
 test('runLarkCli: per-call timeoutMs 覆盖生效', async () => {
+  // per-call 100ms 覆盖是否生效，由 stderr 的「timeout after 100ms」文案证明（默认是
+  // 300ms，文案不同），与负载无关。elapsed 同上仅作兜底：sleep 30 + 阈值 5s，避免
+  // 原 `< 1_000` 在并发跑时被定时器迟发顶破（实测曾达 1132ms）。
   const t0 = Date.now();
-  const r = await runLarkCli(['5'], undefined, { timeoutMs: 100 });
-  assert.ok(Date.now() - t0 < 1_000);
+  const r = await runLarkCli(['30'], undefined, { timeoutMs: 100 });
+  assert.ok(Date.now() - t0 < 5_000, `应因 100ms 超时远早于 30s 自然退出而返回，实际 ${Date.now() - t0}ms`);
   assert.match(r.stderr, /timeout after 100ms/);
 });
 
