@@ -1,5 +1,6 @@
 import { Router } from 'express';
-import { getContextEntityById, listEvents, listTriageResults, matchMatterId } from '../db.js';
+import { db, getContextEntityById, listEvents, listTriageResults, matchMatterId } from '../db.js';
+import { raiseMatterProgressProposal } from '../matter/matterResolveProposal.js';
 import { backfillUnitRouting } from '../bootstrap/backfillUnitRouting.js';
 import { listInducers } from '../structure/inducerRegistry.js';
 import { getMatterById, listMatterEntities } from '../matter/matterStore.js';
@@ -10,6 +11,35 @@ import { captureInvestigationTrace } from '../playbook/playbookCapture.js';
 import { config } from '../config.js';
 
 export const debugRouter = Router();
+
+// MVP40：把已有的 progressed/blocked 排查结果回填成「进展回执」卡（一次性，让用户立刻看到价值）。
+debugRouter.post('/debug/investigation/backfill-progress', (_req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT json_extract(payload_json,'$.matterId') mid,
+              json_extract(payload_json,'$.verdict') v,
+              MAX(json_extract(payload_json,'$.confidence')) conf
+       FROM audit_logs WHERE action='investigation_written_back'
+         AND json_extract(payload_json,'$.verdict') IN ('progressed','blocked')
+         AND json_extract(payload_json,'$.confidence') >= 0.6
+       GROUP BY mid`
+    )
+    .all() as Array<{ mid: string; v: 'progressed' | 'blocked'; conf: number }>;
+  let raised = 0;
+  const done: string[] = [];
+  for (const row of rows) {
+    const m = getMatterById(row.mid);
+    if (!m) continue;
+    // 从 currentSummary 的「［AI 排查］X｜…」段取 factSummary，取不到退回标题
+    const seg = (m.currentSummary || '').match(/［AI 排查］([^｜]+)/);
+    const factSummary = (seg?.[1] || m.currentSummary || m.title).trim();
+    if (raiseMatterProgressProposal(m, { verdict: row.v, factSummary, evidence: [], confidence: row.conf })) {
+      raised++;
+      done.push(`${m.title.slice(0, 20)}(${row.v})`);
+    }
+  }
+  res.json({ ok: true, candidates: rows.length, raised, done });
+});
 
 // MVP36：查自主排查 dispatcher 状态（确认试运行是否开启）。
 debugRouter.get('/debug/investigation/status', (_req, res) => {
