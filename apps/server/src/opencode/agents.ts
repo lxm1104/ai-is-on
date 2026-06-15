@@ -33,6 +33,7 @@ import { MATTER_REDUCE_SYSTEM_PROMPT } from '../matter/matterReducerPrompt.js';
 import { CHAT_CONCLUSION_SYSTEM_PROMPT } from '../matter/chatConclusionPrompt.js';
 import { MATTER_VERIFY_SYSTEM_PROMPT } from '../matter/matterVerifyPrompt.js';
 import { INVESTIGATE_SYSTEM_PROMPT, renderToolsDoc } from '../investigation/investigationPrompt.js';
+import { PLAYBOOK_DISTILL_SYSTEM_PROMPT } from '../playbook/playbookDistillPrompt.js';
 import { listReadTools } from '../investigation/readTools.js';
 
 export type OpencodeAgentName =
@@ -53,7 +54,8 @@ export type OpencodeAgentName =
   | 'aiisn-matter-reducer'
   | 'aiisn-chat-conclusion'
   | 'aiisn-matter-verify'
-  | 'aiisn-investigate';
+  | 'aiisn-investigate'
+  | 'aiisn-playbook-distill';
 
 type Permission = 'allow' | 'ask' | 'deny';
 type AgentDef = {
@@ -188,6 +190,12 @@ const AGENTS: readonly AgentDef[] = [
       '{{TOOLS}}',
       renderToolsDoc(listReadTools())
     ),
+  },
+  {
+    name: 'aiisn-playbook-distill',
+    description: 'AI is ON MVP37 流程蒸馏器（同类轨迹 → 标准 playbook 草稿）',
+    permission: READ_ONLY,
+    prompt: PLAYBOOK_DISTILL_SYSTEM_PROMPT,
   },
 ];
 

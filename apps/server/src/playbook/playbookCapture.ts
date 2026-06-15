@@ -6,6 +6,7 @@
  */
 import { insertTaskTrace } from './playbookStore.js';
 import { deriveTaskTypeKey, type TraceStep, type TaskTrace } from './PlaybookTypes.js';
+import { maybeDistillPlaybook } from './playbookDistillService.js';
 import type { InvestigationResult } from '../investigation/investigationLoop.js';
 
 /** 把一次排查的 toolLog 转成有序 TraceStep（read 类）。 */
@@ -26,12 +27,16 @@ export function captureInvestigationTrace(
 ): TaskTrace | null {
   const steps = investigationToSteps(result);
   if (steps.length === 0) return null;
-  return insertTaskTrace({
-    taskTypeKey: deriveTaskTypeKey(matter),
+  const taskTypeKey = deriveTaskTypeKey(matter);
+  const trace = insertTaskTrace({
+    taskTypeKey,
     matterId: matter.id,
     source: 'investigation',
     title: matter.title,
     steps,
     outcome: `${result.conclusion.verdict}（置信 ${result.conclusion.confidence.toFixed(2)}）：${result.conclusion.factSummary.slice(0, 120)}`,
   });
+  // 攒够同类轨迹 → fire-and-forget 蒸馏一份 suggest 草稿（失败静默，不影响主流程）。
+  void maybeDistillPlaybook(taskTypeKey).catch(() => {});
+  return trace;
 }

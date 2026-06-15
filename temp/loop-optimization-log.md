@@ -19,6 +19,24 @@ MVP31 生产验证负例（第 16 轮·会话 A：判定「未完成」→ 正�
 
 ## 迭代记录
 
+### 2026-06-15 第 34 轮：playbook 流程蒸馏（自发探索学成草稿）+ 并行会话协调
+
+- **协调情况**：用户说"本地 fornax-cli 等存在的，不用写死，直接让本地 AI 用上"。动手前发现**并行 Claude 会话
+  正在同仓库实现 run_command**（readTools.ts + config.ts 未提交、3min 前刚改，正是这个本地工具能力）。
+  按记忆纪律"改同文件前先看 git diff"——**不重复 run_command，避开它的文件**，转去做互补的蒸馏。
+- **流程蒸馏（MVP37，全在 playbook/ 新文件 + 低冲突文件）**：
+  - `playbookDistillPrompt.ts`：蒸馏 prompt（同类轨迹→去具体化的标准 playbook）+ 解析。
+  - `playbookDistillService.ts`：`shouldDistill`（纯函数：≥3 条同类轨迹才蒸、有权威版不蒸、每+3条重蒸）
+    + `maybeDistillPlaybook`（runOneShot('aiisn-playbook-distill')→parse→distillUpsert）。
+  - 注册 agent `aiisn-playbook-distill`（agents.ts，READ_ONLY）。
+  - 触发：`captureInvestigationTrace` 落轨迹后 fire-and-forget 蒸馏（失败静默）。
+  - **联动纪律保持**：distillUpsert 避让用户权威版；shouldDistill 也早退（有权威版不跑 LLM）。
+- **验证**：我的 playbook 文件 tsc 干净（唯一报错是并行会话 readTools 的 run_command 半成品，非我代码）；
+  新增蒸馏 4 测（阈值/解析/蒸草稿/避让权威），mvp36+37+38 共 41 测运行时全过。**只提交自己的文件**（不碰
+  readTools/config，留给并行会话）。
+- **下一步**：等并行会话的 run_command 落地后，排查就能用本地工具（fornax-cli/grep 代码库等）；
+  卡片"记住这样处理"按钮；蒸馏在试运行攒够轨迹后会自动产出草稿，到面板等用户批准。
+
 ### 2026-06-15 第 33 轮：项目排查档案（每个项目的额外 context + 做事方法）
 
 - **用户问**：自主排查要用项目外部信息（如 Chatbot 代码库在 /Users/xinming/MyProject/bitable-chatbot、
