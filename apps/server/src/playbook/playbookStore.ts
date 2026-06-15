@@ -3,7 +3,15 @@
  */
 import { randomUUID } from 'node:crypto';
 import { db } from '../db.js';
-import type { TaskTrace, TaskPlaybook, TraceStep, PlaybookStep, PlaybookTier } from './PlaybookTypes.js';
+import {
+  isAuthoritative,
+  type TaskTrace,
+  type TaskPlaybook,
+  type TraceStep,
+  type PlaybookStep,
+  type PlaybookTier,
+  type PlaybookOrigin,
+} from './PlaybookTypes.js';
 
 type TraceRow = {
   id: string;
@@ -82,6 +90,8 @@ type PlaybookRow = {
   title: string;
   steps_json: string;
   tier: string;
+  origin: string;
+  approved: number;
   trace_count: number;
   success_count: number;
   correction_count: number;
@@ -102,6 +112,8 @@ function rowToPlaybook(r: PlaybookRow): TaskPlaybook {
     title: r.title,
     steps,
     tier: r.tier as PlaybookTier,
+    origin: (r.origin as PlaybookOrigin) ?? 'distilled',
+    approved: r.approved === 1,
     traceCount: r.trace_count,
     successCount: r.success_count,
     correctionCount: r.correction_count,
@@ -126,18 +138,32 @@ export function listPlaybooks(opts: { activeOnly?: boolean } = {}): TaskPlaybook
   return (db.prepare(sql).all() as PlaybookRow[]).map(rowToPlaybook);
 }
 
-/** 按 taskTypeKey upsert（蒸馏出新版流程时覆盖 steps + 刷新计数）。 */
-export function upsertPlaybook(input: {
+function insertPlaybook(row: PlaybookRow): TaskPlaybook {
+  db.prepare(
+    `INSERT INTO task_playbooks
+       (id, task_type_key, title, steps_json, tier, origin, approved, trace_count, success_count, correction_count, confidence, active, created_at, updated_at)
+     VALUES (@id, @task_type_key, @title, @steps_json, @tier, @origin, @approved, @trace_count, @success_count, @correction_count, @confidence, @active, @created_at, @updated_at)`
+  ).run(row);
+  return rowToPlaybook(row);
+}
+
+/**
+ * 自发蒸馏写入：**人主导联动规则**——已有权威版（人写/已批准）时**不覆盖**，返回 { skipped:true }
+ * （后续可改成附"建议修订"提案）。否则覆盖/新建一份 distilled 草稿（origin=distilled, approved=0）。
+ */
+export function distillUpsertPlaybook(input: {
   taskTypeKey: string;
   title: string;
   steps: PlaybookStep[];
-  tier?: PlaybookTier;
   traceCount: number;
   confidence: number;
   now?: string;
-}): TaskPlaybook {
+}): { playbook: TaskPlaybook; skipped: boolean } {
   const now = input.now ?? new Date().toISOString();
   const existing = getPlaybookByType(input.taskTypeKey);
+  if (existing && isAuthoritative(existing)) {
+    return { playbook: existing, skipped: true }; // 人主导：不覆盖人写/已批准的
+  }
   if (existing) {
     db.prepare(
       `UPDATE task_playbooks SET title=@title, steps_json=@steps_json, trace_count=@trace_count,
@@ -150,14 +176,16 @@ export function upsertPlaybook(input: {
       confidence: input.confidence,
       updated_at: now,
     });
-    return getPlaybookByType(input.taskTypeKey)!;
+    return { playbook: getPlaybookByType(input.taskTypeKey)!, skipped: false };
   }
-  const row: PlaybookRow = {
+  const pb = insertPlaybook({
     id: randomUUID(),
     task_type_key: input.taskTypeKey,
     title: input.title.slice(0, 200),
     steps_json: JSON.stringify(input.steps),
-    tier: input.tier ?? 'suggest',
+    tier: 'suggest',
+    origin: 'distilled',
+    approved: 0,
     trace_count: input.traceCount,
     success_count: 0,
     correction_count: 0,
@@ -165,11 +193,64 @@ export function upsertPlaybook(input: {
     active: 1,
     created_at: now,
     updated_at: now,
-  };
-  db.prepare(
-    `INSERT INTO task_playbooks
-       (id, task_type_key, title, steps_json, tier, trace_count, success_count, correction_count, confidence, active, created_at, updated_at)
-     VALUES (@id, @task_type_key, @title, @steps_json, @tier, @trace_count, @success_count, @correction_count, @confidence, @active, @created_at, @updated_at)`
-  ).run(row);
-  return rowToPlaybook(row);
+  });
+  return { playbook: pb, skipped: false };
+}
+
+/** 用户直接编写/编辑：权威版（origin=user, approved=1），覆盖一切。教学的核心入口。 */
+export function userUpsertPlaybook(input: {
+  taskTypeKey: string;
+  title: string;
+  steps: PlaybookStep[];
+  tier?: PlaybookTier;
+  now?: string;
+}): TaskPlaybook {
+  const now = input.now ?? new Date().toISOString();
+  const existing = getPlaybookByType(input.taskTypeKey);
+  if (existing) {
+    db.prepare(
+      `UPDATE task_playbooks SET title=@title, steps_json=@steps_json, tier=@tier, origin='user',
+         approved=1, active=1, confidence=@confidence, updated_at=@updated_at WHERE task_type_key=@task_type_key`
+    ).run({
+      task_type_key: input.taskTypeKey,
+      title: input.title.slice(0, 200),
+      steps_json: JSON.stringify(input.steps),
+      tier: input.tier ?? existing.tier,
+      confidence: Math.max(existing.confidence, 0.9),
+      updated_at: now,
+    });
+    return getPlaybookByType(input.taskTypeKey)!;
+  }
+  return insertPlaybook({
+    id: randomUUID(),
+    task_type_key: input.taskTypeKey,
+    title: input.title.slice(0, 200),
+    steps_json: JSON.stringify(input.steps),
+    tier: input.tier ?? 'suggest',
+    origin: 'user',
+    approved: 1,
+    trace_count: 0,
+    success_count: 0,
+    correction_count: 0,
+    confidence: 0.9,
+    active: 1,
+    created_at: now,
+    updated_at: now,
+  });
+}
+
+/** 批准一份蒸馏草稿 → 升为权威（approved=1）。 */
+export function approvePlaybook(taskTypeKey: string, now = new Date().toISOString()): TaskPlaybook | null {
+  const existing = getPlaybookByType(taskTypeKey);
+  if (!existing) return null;
+  db.prepare(`UPDATE task_playbooks SET approved=1, active=1, updated_at=? WHERE task_type_key=?`).run(now, taskTypeKey);
+  return getPlaybookByType(taskTypeKey);
+}
+
+/** 停用/启用一份 playbook。 */
+export function setPlaybookActive(taskTypeKey: string, active: boolean, now = new Date().toISOString()): TaskPlaybook | null {
+  const existing = getPlaybookByType(taskTypeKey);
+  if (!existing) return null;
+  db.prepare(`UPDATE task_playbooks SET active=?, updated_at=? WHERE task_type_key=?`).run(active ? 1 : 0, now, taskTypeKey);
+  return getPlaybookByType(taskTypeKey);
 }

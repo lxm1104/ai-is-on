@@ -39,12 +39,16 @@ export type PlaybookStep = {
   note?: string;
 };
 
+export type PlaybookOrigin = 'user' | 'distilled';
+
 export type TaskPlaybook = {
   id: string;
   taskTypeKey: string;
   title: string;
   steps: PlaybookStep[];
   tier: PlaybookTier;
+  origin: PlaybookOrigin; // 'user'=人写/编辑（权威） | 'distilled'=自发蒸馏（草稿）
+  approved: boolean;      // 用户已批准（人写默认 true；蒸馏草稿 false，批准后 true）
   traceCount: number;
   successCount: number;
   correctionCount: number;
@@ -53,6 +57,11 @@ export type TaskPlaybook = {
   createdAt: string;
   updatedAt: string;
 };
+
+/** 人主导：人写或已批准的 playbook 是权威，自发蒸馏不得覆盖它。 */
+export function isAuthoritative(p: Pick<TaskPlaybook, 'origin' | 'approved'>): boolean {
+  return p.origin === 'user' || p.approved;
+}
 
 // 粗动作意图：从 nextAction/标题归纳出这类任务的核心动作，作为 taskTypeKey 的第二段。
 export function coarseIntent(text: string): string {

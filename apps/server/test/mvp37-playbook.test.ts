@@ -40,16 +40,38 @@ test('insertTaskTrace + list/count', () => {
   assert.equal(store.countTracesByType('delivery:deliver'), 0);
 });
 
-test('upsertPlaybook：首次插入 → 二次覆盖 steps + 刷新 traceCount，tier 默认 suggest', () => {
+test('distillUpsertPlaybook：首次插入草稿(origin=distilled,approved=0,suggest) → 二次覆盖', () => {
   const key = 'follow_up:verify';
-  const p1 = store.upsertPlaybook({ taskTypeKey: key, title: '查证类标准流程', steps: [{ order: 1, intent: '搜相关 IM' }], traceCount: 2, confidence: 0.6 });
-  assert.equal(p1.tier, 'suggest');
-  assert.equal(p1.steps.length, 1);
-  const p2 = store.upsertPlaybook({ taskTypeKey: key, title: '查证类标准流程v2', steps: [{ order: 1, intent: '搜相关 IM' }, { order: 2, intent: '读关联文档确认状态' }], traceCount: 5, confidence: 0.8 });
-  assert.equal(p2.id, p1.id, '同 key upsert 不新建');
-  assert.equal(p2.steps.length, 2);
-  assert.equal(p2.traceCount, 5);
+  const r1 = store.distillUpsertPlaybook({ taskTypeKey: key, title: '查证类标准流程', steps: [{ order: 1, intent: '搜相关 IM' }], traceCount: 2, confidence: 0.6 });
+  assert.equal(r1.skipped, false);
+  assert.equal(r1.playbook.origin, 'distilled');
+  assert.equal(r1.playbook.approved, false);
+  assert.equal(r1.playbook.tier, 'suggest');
+  const r2 = store.distillUpsertPlaybook({ taskTypeKey: key, title: 'v2', steps: [{ order: 1, intent: '搜 IM' }, { order: 2, intent: '读文档确认' }], traceCount: 5, confidence: 0.8 });
+  assert.equal(r2.playbook.id, r1.playbook.id, '同 key 不新建');
+  assert.equal(r2.playbook.steps.length, 2);
   assert.equal(store.listPlaybooks().length, 1);
+});
+
+test('人主导联动：用户写的权威版，自发蒸馏不得覆盖（skipped）', () => {
+  const key = 'delivery:deliver';
+  const u = store.userUpsertPlaybook({ taskTypeKey: key, title: '交付类我的标准做法', steps: [{ order: 1, intent: '先发草稿给对方过目' }] });
+  assert.equal(u.origin, 'user');
+  assert.equal(u.approved, true);
+  assert.ok(u.confidence >= 0.9);
+  // 自发蒸馏来覆盖 → 被挡
+  const d = store.distillUpsertPlaybook({ taskTypeKey: key, title: '蒸馏版', steps: [{ order: 1, intent: '别的做法' }], traceCount: 9, confidence: 0.95 });
+  assert.equal(d.skipped, true, '人写的不得被蒸馏覆盖');
+  assert.equal(store.getPlaybookByType(key)!.steps[0].intent, '先发草稿给对方过目', '步骤仍是用户写的');
+});
+
+test('批准草稿 → 升权威，之后蒸馏也不得覆盖', () => {
+  const key = 'review:review';
+  store.distillUpsertPlaybook({ taskTypeKey: key, title: '评审草稿', steps: [{ order: 1, intent: '看 diff' }], traceCount: 3, confidence: 0.7 });
+  const approved = store.approvePlaybook(key)!;
+  assert.equal(approved.approved, true);
+  const d = store.distillUpsertPlaybook({ taskTypeKey: key, title: '新草稿', steps: [{ order: 1, intent: '别的' }], traceCount: 8, confidence: 0.9 });
+  assert.equal(d.skipped, true, '已批准的不得被蒸馏覆盖');
 });
 
 test('captureInvestigationTrace：toolLog → 有序 read 步骤；空 toolLog → null', () => {

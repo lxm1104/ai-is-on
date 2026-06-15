@@ -588,6 +588,8 @@ CREATE TABLE IF NOT EXISTS task_playbooks (
   title TEXT NOT NULL,
   steps_json TEXT NOT NULL,             -- PlaybookStep[]：{order,intent,toolHint?,note}
   tier TEXT NOT NULL DEFAULT 'suggest', -- 'suggest' | 'semi_auto' | 'auto'
+  origin TEXT NOT NULL DEFAULT 'distilled', -- 'user'(人写/编辑) | 'distilled'(自发蒸馏)
+  approved INTEGER NOT NULL DEFAULT 0,   -- 用户是否已批准（人写默认 1；蒸馏草稿 0）
   trace_count INTEGER NOT NULL DEFAULT 0,
   success_count INTEGER NOT NULL DEFAULT 0,
   correction_count INTEGER NOT NULL DEFAULT 0,
@@ -597,6 +599,9 @@ CREATE TABLE IF NOT EXISTS task_playbooks (
   updated_at TEXT NOT NULL
 );
 `);
+// task_playbooks 可能在本列加入前就建过表（dev 已重启过）→ ensureColumn 补列。
+ensureColumn('task_playbooks', 'origin', "TEXT NOT NULL DEFAULT 'distilled'");
+ensureColumn('task_playbooks', 'approved', 'INTEGER NOT NULL DEFAULT 0');
 
 // MVP12: context_space_links 加 reason_json，记录这条 link 的命中路径
 // （via='person'|'doc'|'chat_seed' ...）。upsertContextSpaceLinkBestHit cap 5 条 evidence。

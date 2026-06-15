@@ -23,7 +23,10 @@ export type AuditAction =
   | 'im_reply_failed'
   | 'lark_doc_created'                  // MVP35：AI 新建飞书文档草稿
   | 'lark_doc_failed'
-  | 'investigation_written_back';       // MVP36：AI 自主排查结论回写 matter
+  | 'investigation_written_back'        // MVP36：AI 自主排查结论回写 matter
+  | 'playbook_user_upsert'              // MVP37：用户编写/编辑 playbook
+  | 'playbook_approved'
+  | 'playbook_active_set';
 
 export function writeAudit(input: {
   action: AuditAction;

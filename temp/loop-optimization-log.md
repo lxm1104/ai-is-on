@@ -19,6 +19,23 @@ MVP31 生产验证负例（第 16 轮·会话 A：判定「未完成」→ 正�
 
 ## 迭代记录
 
+### 2026-06-15 第 31 轮：playbook 教学通道（人主导播种 + 自发探索补空，加速收敛）
+
+- **用户问**：在哪里补充信息帮 agent 快速收敛到正确 playbook？怎么和自发探索联动？
+- **答 + 落地（MVP37 教学通道后端）**：三个输入汇成"一类型一 playbook"，带 `origin`(user/distilled)+`approved`+`confidence`。
+  - **人主导联动规则**（核心）：人写/已批准的是权威，`distillUpsertPlaybook` 遇到权威版**直接 skip 不覆盖**；
+    自发蒸馏只给没人教过的类型出 suggest 草稿。人写 = 立刻高置信(0.9)，跳过攒 N 条轨迹的等待。
+  - store：`userUpsertPlaybook`(origin=user,approved=1,权威)、`distillUpsertPlaybook`(草稿,遇权威 skip)、
+    `approvePlaybook`(草稿升权威)、`setPlaybookActive`(停用/启用)。schema 加 origin/approved 列(ensureColumn 补)。
+  - API `routes/playbooks.ts`：GET /playbooks(列表)、POST /playbooks(用户编写/编辑权威版)、
+    POST /playbooks/:key/approve(批准草稿)、POST /playbooks/:key/active(停用/启用)、GET /playbooks/:key。
+- **验证**：tsc ✓；MVP37 6 测（含"人写的不被蒸馏覆盖""批准后也不被覆盖"两条联动用例）；全量 **589/589**；
+  真实 API 冒烟：建 user playbook(origin=user/approved/2步)、列出成功。代码已提交。
+- **三个"补充信息"入口（这轮建后端，前端随后）**：① Playbook 面板(列表/编辑/批准/停用,主入口)；
+  ② 卡片"记住这样处理"(把"让 AI 处理"的一次性指令沉淀成 playbook)；③ 排查结果"这步对/错"(纠偏调置信)。
+- **下一步**：前端 Playbook 面板 + 卡片"记住这样处理"按钮；蒸馏服务(同类轨迹≥N→LLM 蒸馏 distillUpsert)；
+  召回注入(命中 playbook→塞进 buildRichAskAgentPrompt 当推荐步骤)。
+
 ### 2026-06-15 第 30 轮：开启排查试运行 + 能力二地基（操作流程落库）+ 提交
 
 - **用户批准**：开启能力一真实试运行（`INVESTIGATION_DISPATCH_ENABLED=true` 写入 .env）；继续建能力二；提交代码。
