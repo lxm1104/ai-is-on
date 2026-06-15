@@ -13,6 +13,7 @@ import { TonePanel } from './components/TonePanel';
 import { WorkMapPanel } from './components/WorkMapPanel';
 import { MyCollaboratorsPanel } from './components/MyCollaboratorsPanel';
 import { TabBar, type HistoryTopic, type Tab } from './components/TabBar';
+import { SettingsDrawer } from './components/SettingsDrawer';
 import {
   fetchAttentionCards,
   fetchCollectors,
@@ -514,17 +515,20 @@ export function App() {
             onRunOnce={onRunOnce}
             collectorsHint={collectorsHint}
           />
-          <WorkMapPanel
-            onBootstrapChange={(t) => setBootstrapCompletedAt(t)}
-          />
-          <TonePanel />
-          <MyCollaboratorsPanel />
-          <SpacesPanel />
-          <ProjectProposalsPanel />
-          <RulesPanel />
-          <PlaybookPanel />
-          <MatterPanel refreshSignal={matterTick} />
-          <ContextPanel />
+          {/* 设置 / 管理 / 调试面板统一收进默认折叠的抽屉，不再常驻挤占待处理卡片区。 */}
+          <SettingsDrawer>
+            <WorkMapPanel
+              onBootstrapChange={(t) => setBootstrapCompletedAt(t)}
+            />
+            <TonePanel />
+            <MyCollaboratorsPanel />
+            <SpacesPanel />
+            <ProjectProposalsPanel />
+            <RulesPanel />
+            <PlaybookPanel />
+            <MatterPanel refreshSignal={matterTick} />
+            <ContextPanel />
+          </SettingsDrawer>
         </aside>
         <section className="pane pane--chat">
           {/* MVP18 Stage 3: TabBar 取代 TopicHeader 下拉框 */}

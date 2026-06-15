@@ -387,6 +387,54 @@ body { background: var(--bg); color: var(--text); }
   text-align: center;
 }
 
+/* 设置与管理抽屉 —— 把原本平铺在卡片区下方的 9 个设置 / 管理面板收进一个
+   默认折叠的容器，折叠时只占一行表头，给待处理卡片让出空间。 */
+.settings-drawer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+.settings-drawer.is-open {
+  /* 展开时给个高度上限 + 自身滚动，避免设置面板反过来把卡片挤没 */
+  max-height: 60vh;
+}
+.settings-drawer__toggle {
+  flex-shrink: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+.settings-drawer__toggle:hover { color: var(--text); }
+.settings-drawer__chev { flex-shrink: 0; color: var(--text-dim); }
+.settings-drawer__label { font-weight: 600; letter-spacing: 0.3px; flex-shrink: 0; }
+.settings-drawer__hint {
+  margin-left: auto;
+  min-width: 0;
+  font-size: 11px;
+  opacity: 0.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-drawer__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+}
+
 /* card list */
 .cards {
   flex: 1;
