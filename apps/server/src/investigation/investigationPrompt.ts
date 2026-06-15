@@ -72,6 +72,7 @@ export function buildInvestigateUserMessage(opts: {
   findings: string[]; // 已查到的（前几轮工具结果摘要）
   round: number;
   maxRounds: number;
+  playbookHint?: string; // MVP37 召回：这类任务已学/用户教过的做法，优先照此排查
 }): string {
   const lines = [
     '<matter>',
@@ -83,9 +84,14 @@ export function buildInvestigateUserMessage(opts: {
       ? `涉及：${opts.entities.map((e) => `${e.type}:${e.name}${e.role ? `(${e.role})` : ''}`).join(', ')}`
       : '',
     '</matter>',
-    '',
-    `这是第 ${opts.round}/${opts.maxRounds} 轮${opts.round >= opts.maxRounds ? '（最后一轮，请直接 conclude）' : ''}。`,
   ];
+  if (opts.playbookHint) {
+    lines.push('', '<已知做法>', opts.playbookHint, '</已知做法>');
+  }
+  lines.push(
+    '',
+    `这是第 ${opts.round}/${opts.maxRounds} 轮${opts.round >= opts.maxRounds ? '（最后一轮，请直接 conclude）' : ''}。`
+  );
   if (opts.findings.length) {
     lines.push('', '<已查到>', ...opts.findings.map((f, i) => `[${i + 1}] ${f}`), '</已查到>');
   } else {

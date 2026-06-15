@@ -690,6 +690,20 @@ body { background: var(--bg); color: var(--text); }
 .btn--reply-send:hover:not(:disabled) { background: var(--accent-strong); }
 .card__reply-err { font-size: 12px; color: var(--danger, #d9534f); margin: 0 0 6px; }
 .card__reply-sent { font-size: 12px; color: var(--accent); margin-top: 8px; }
+/* MVP37 Playbook 面板 */
+.playbook__hint { font-size: 12px; color: var(--text-dim); margin: 4px 0 8px; line-height: 1.5; }
+.playbook__hint code, .playbook__row code { font-size: 11px; background: var(--bg-subtle, rgba(127,127,127,0.12)); padding: 1px 4px; border-radius: 3px; }
+.playbook__form { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.playbook__form input, .playbook__form textarea { font: inherit; font-size: 13px; padding: 6px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--text); box-sizing: border-box; }
+.playbook__list { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-direction: column; gap: 8px; }
+.playbook__item { border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
+.playbook__item--off { opacity: 0.5; }
+.playbook__row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.playbook__title { font-size: 13px; font-weight: 600; margin: 4px 0; }
+.playbook__steps { font-size: 12px; color: var(--text-dim); margin: 0 0 6px; padding-left: 18px; }
+.playbook__tag { font-size: 10px; padding: 1px 6px; border-radius: 8px; border: 1px solid var(--border); color: var(--text-dim); }
+.playbook__tag--user { background: var(--accent); color: white; border-color: var(--accent); }
+.playbook__tag--ok { color: var(--accent); border-color: var(--accent); }
 .card__doc { margin-top: 6px; }
 .btn--doc { background: transparent; color: var(--text-dim); border-color: var(--border); }
 .btn--doc:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }

@@ -181,7 +181,10 @@ export const config = {
   // 总开关（第一档「已处理」无开关——它是核心语义）。
   // MVP36 自主排查 dispatcher：默认**关**（硬只读边界已就位，但自动派发会消耗 LLM/lark-cli，opt-in）。
   investigationDispatchEnabled: envBool('INVESTIGATION_DISPATCH_ENABLED', false),
-  investigationTickMs: envInt('INVESTIGATION_TICK_MS', 600_000), // 10min 低频，让位 attention
+  investigationTickMs: envInt('INVESTIGATION_TICK_MS', 600_000), // 10min 低频
+  // 排查走 high 队列公平竞争 gate（默认 true）。频率极低（10min/6h 冷却），偶尔延后一次 attention 可接受；
+  // 设 false 则让位 attention，但在繁忙环境下排查会被持续饿死、出不了数据。
+  investigationPriority: envBool('INVESTIGATION_PRIORITY', true),
   investigationCooldownMs: envInt('INVESTIGATION_COOLDOWN_MS', 21_600_000), // 同 matter 6h 内不重查
   investigationMaxRounds: envInt('INVESTIGATION_MAX_ROUNDS', 3),
   matterVerifyEnabled: envBool('MATTER_VERIFY_ENABLED', true),

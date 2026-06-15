@@ -32,19 +32,22 @@ function mkMatter(p: Partial<Matter> & { id: string }): Matter {
   } as Matter;
 }
 
-test('isInvestigationWorthy：具体"确认是否…"→true', () => {
-  assert.equal(isInvestigationWorthy('确认评测集是否已实际发送给鲁升纲'), true);
-  assert.equal(isInvestigationWorthy('跟进黄炜深/冼晓东排查进展，确认修复排期'), true);
-  assert.equal(isInvestigationWorthy('核实对方是否已收到文档'), true);
+test('isInvestigationWorthy：具体"确认是否…"→true（nextAction 命中）', () => {
+  assert.equal(isInvestigationWorthy({ nextAction: '确认评测集是否已实际发送给鲁升纲' }), true);
+  assert.equal(isInvestigationWorthy({ nextAction: '跟进黄炜深/冼晓东排查进展，确认修复排期' }), true);
+  assert.equal(isInvestigationWorthy({ nextAction: '核实对方是否已收到文档' }), true);
 });
 
-test('isInvestigationWorthy：泛兜底/过短/空 → false', () => {
-  assert.equal(isInvestigationWorthy('跟进进展并确认结果'), false); // 兜底文案
-  assert.equal(isInvestigationWorthy('推进交付并向对方确认收到'), false); // 兜底文案
-  assert.equal(isInvestigationWorthy('开会'), false); // 过短
-  assert.equal(isInvestigationWorthy(''), false);
-  assert.equal(isInvestigationWorthy(null), false);
-  assert.equal(isInvestigationWorthy('把排期草案发给 Yufan'), false); // 纯发送动作，非查证
+test('isInvestigationWorthy：标题命中"排查…"即便 nextAction 是泛兜底 → true', () => {
+  assert.equal(isInvestigationWorthy({ title: '排查宁波力劲 /new 指令上下文清理问题', nextAction: '跟进进展并确认结果' }), true);
+  assert.equal(isInvestigationWorthy({ title: '核实智能体授权超时时长', nextAction: '推进交付并向对方确认收到' }), true);
+});
+
+test('isInvestigationWorthy：泛兜底+无查证标题/过短/空 → false', () => {
+  assert.equal(isInvestigationWorthy({ title: '帮王爽优化数据查询', nextAction: '跟进进展并确认结果' }), false);
+  assert.equal(isInvestigationWorthy({ nextAction: '开会' }), false);
+  assert.equal(isInvestigationWorthy({}), false);
+  assert.equal(isInvestigationWorthy({ nextAction: '把排期草案发给 Yufan' }), false); // 纯发送，非查证
 });
 
 test('select：worthy + 非冷却中 → 按优先级 → 最久未动 取 top-1', () => {

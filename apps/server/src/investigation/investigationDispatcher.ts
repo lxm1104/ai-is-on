@@ -14,6 +14,7 @@ import type { Matter } from '../matter/matterTypes.js';
 import { runInvestigation } from './investigationLoop.js';
 import { applyInvestigationResult } from './investigationWriteback.js';
 import { captureInvestigationTrace } from '../playbook/playbookCapture.js';
+import { matchPlaybookForMatter, renderPlaybookForPrompt } from '../playbook/playbookMatcher.js';
 
 // deriveDefaultNextAction 的兜底文案——这些太泛，不值得自动排查（要具体的"确认X是否…"才查）。
 const GENERIC_NEXT_ACTIONS = new Set([
@@ -29,12 +30,18 @@ const GENERIC_NEXT_ACTIONS = new Set([
 // 需要"去外部系统查证状态"的下一步：确认是否/核实/排查进展/跟进…结果 等。
 const WORTHY_RE = /(是否|核实|排查(进展|结果)?|查清|查证|确认.*(进展|完成|收到|发|回复)|跟进.*(进展|结果|排查))/;
 
-/** 这条 nextAction 值不值得自动排查（纯函数）。 */
-export function isInvestigationWorthy(nextAction: string | null | undefined): boolean {
-  const na = (nextAction ?? '').trim();
-  if (na.length < 6) return false; // 极短的（"开会"）不查；具体查证动作由下方 regex 把关
-  if (GENERIC_NEXT_ACTIONS.has(na)) return false;
-  return WORTHY_RE.test(na);
+/**
+ * 这件事值不值得自动排查（纯函数）。**标题 + 下一步都看**：
+ * - nextAction 具体（非泛兜底）且命中查证词 → worthy；
+ * - 或标题本身命中查证词（如"排查宁波力劲…"，即便 nextAction 是回填的泛兜底）→ worthy。
+ * 这样既不放过标题写着"排查/确认是否"的 P0，也不被泛兜底文案误触发。
+ */
+export function isInvestigationWorthy(input: { title?: string; nextAction?: string | null }): boolean {
+  const na = (input.nextAction ?? '').trim();
+  const ti = (input.title ?? '').trim();
+  const naWorthy = na.length >= 6 && !GENERIC_NEXT_ACTIONS.has(na) && WORTHY_RE.test(na);
+  const tiWorthy = ti.length >= 4 && WORTHY_RE.test(ti);
+  return naWorthy || tiWorthy;
 }
 
 const PRIO_RANK: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
@@ -50,7 +57,7 @@ export function selectInvestigationCandidate(
   const pool = matters.filter(
     (m) =>
       (m.status === 'open' || m.status === 'in_progress') &&
-      isInvestigationWorthy(m.nextAction) &&
+      isInvestigationWorthy({ title: m.title, nextAction: m.nextAction }) &&
       !isCoolingDown(m.id)
   );
   if (pool.length === 0) return null;
@@ -96,6 +103,7 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
   inFlight = true;
   lastInvestigatedAt.set(candidate.id, now); // 进 in-flight 即占冷却，防重入
   try {
+    const matchedPb = matchPlaybookForMatter(candidate);
     const result = await runInvestigation({
       matterTitle: candidate.title,
       matterType: candidate.type,
@@ -103,7 +111,8 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
       nextAction: candidate.nextAction ?? '确认该事项当前进展',
       entities: buildEntities(candidate.id),
       maxRounds: config.investigationMaxRounds,
-      priority: false, // 让位 attention
+      priority: config.investigationPriority, // 低频排查公平竞争 gate（默认 true），否则繁忙时被饿死
+      playbookHint: matchedPb ? renderPlaybookForPrompt(matchedPb) : undefined,
     });
     const toolSummary = result.toolLog.map((l) => `${l.tool}:${l.ok ? l.summary : '失败'}`).join('；');
     applyInvestigationResult({ matterId: candidate.id, conclusion: result.conclusion, toolSummary });

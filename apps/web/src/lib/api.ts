@@ -311,6 +311,64 @@ export async function postCardLarkDoc(input: {
   return j;
 }
 
+// MVP37：playbook 教学/管理（流程记忆）。
+export type PlaybookStep = { order: number; intent: string; toolHint?: string; note?: string };
+export type TaskPlaybook = {
+  id: string;
+  taskTypeKey: string;
+  title: string;
+  steps: PlaybookStep[];
+  tier: string;
+  origin: 'user' | 'distilled';
+  approved: boolean;
+  traceCount: number;
+  successCount: number;
+  correctionCount: number;
+  confidence: number;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export async function fetchPlaybooks(): Promise<TaskPlaybook[]> {
+  const r = await fetch('/api/playbooks');
+  if (!r.ok) throw new Error(`playbooks ${r.status}`);
+  return (await r.json()).items ?? [];
+}
+
+export async function savePlaybook(input: {
+  taskTypeKey: string;
+  title: string;
+  steps: PlaybookStep[];
+}): Promise<TaskPlaybook> {
+  const r = await fetch('/api/playbooks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `save playbook ${r.status}`);
+  return j.playbook;
+}
+
+export async function approvePlaybook(taskTypeKey: string): Promise<TaskPlaybook> {
+  const r = await fetch(`/api/playbooks/${encodeURIComponent(taskTypeKey)}/approve`, { method: 'POST' });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `approve ${r.status}`);
+  return j.playbook;
+}
+
+export async function setPlaybookActive(taskTypeKey: string, active: boolean): Promise<TaskPlaybook> {
+  const r = await fetch(`/api/playbooks/${encodeURIComponent(taskTypeKey)}/active`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ active }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `active ${r.status}`);
+  return j.playbook;
+}
+
 export async function fetchCollectors(): Promise<CollectorStatus[]> {
   const r = await fetch('/api/collectors');
   if (!r.ok) throw new Error(`collectors ${r.status}`);

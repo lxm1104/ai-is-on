@@ -28,6 +28,8 @@ export type InvestigationInput = {
   maxRounds?: number;
   /** 默认 false（背景排查让位 attention）。手动验证可设 true 走 high 队列尽快拿 gate。 */
   priority?: boolean;
+  /** MVP37 召回：这类任务已学/用户教过的做法，注入每轮 prompt 让 AI 照此排查。 */
+  playbookHint?: string;
 };
 
 export type InvestigationToolLogEntry = {
@@ -103,6 +105,7 @@ export async function runInvestigation(
       findings,
       round,
       maxRounds,
+      playbookHint: input.playbookHint,
     });
 
     let step;
