@@ -73,7 +73,8 @@ function shortParams(p: Record<string, unknown>): string {
 async function defaultJudge(userMessage: string, priority: boolean): Promise<string> {
   const r = await runOneShot(userMessage, {
     agentName: 'aiisn-investigate',
-    priority, // 背景排查默认 false（让位 attention）；手动验证可 true
+    priority,
+    lane: 'investigation', // 独立车道：不被主道挂死的 attention 阻塞
   });
   return r.text;
 }

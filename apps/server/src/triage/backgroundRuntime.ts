@@ -36,6 +36,12 @@ export type OneShotOptions = {
   model?: string;
   /** 覆盖 fallback 模型链，按序降级（默认 config.opencodeFallbackModels）。 */
   fallbackModels?: string[];
+  /**
+   * 闸门车道（默认 'main'）。'investigation' 走**独立 gate**——不与 attention/triage/matter 抢同一条
+   * 单并发道，因此一个挂死的 attention 调用不再阻塞自主排查（2026-06-15 实测主道被挂死 attention 占住
+   * 数分钟，排查即便 priority 也饿死）。独立道自身仍限并发 1，避免 opencode 进程爆炸。
+   */
+  lane?: 'main' | 'investigation';
 };
 
 type OpencodePart = {
@@ -59,6 +65,12 @@ type OpencodeEvent = {
 // --------------------------------------------------------------------------
 
 const gate = createLlmGate(config.opencodeMaxConcurrency);
+// MVP36：自主排查独立车道（并发 1），不与主道（attention/triage/matter）相互阻塞。
+const investigationGate = createLlmGate(1);
+
+function gateFor(lane: OneShotOptions['lane']) {
+  return lane === 'investigation' ? investigationGate : gate;
+}
 
 /** 调试/监控用：当前闸门占用与排队深度。 */
 export function getLlmGateStats(): { active: number; queuedHigh: number; queued: number } {
@@ -172,11 +184,12 @@ export async function runOneShot(
     (m, i, arr) => arr.indexOf(m) === i
   );
 
+  const activeGate = gateFor(opts.lane);
   const waitStart = Date.now();
-  await gate.acquire(opts.priority === true);
+  await activeGate.acquire(opts.priority === true);
   const waitMs = Date.now() - waitStart;
   if (waitMs > 15_000) {
-    const st = gate.stats();
+    const st = activeGate.stats();
     console.log(
       `[opencode] gate 排队 ${Math.round(waitMs / 1000)}s (agent=${opts.agentName}, 队列剩余 high=${st.queuedHigh} normal=${st.queued})`
     );
@@ -211,7 +224,7 @@ export async function runOneShot(
       `opencode 整条模型链（${modelChain.join(' > ')}）均失败。\n${failures.join('\n')}`
     );
   } finally {
-    gate.release();
+    activeGate.release();
   }
 }
 
