@@ -88,3 +88,54 @@ test('T5 matter 不存在 → ok:false 不抛', () => {
   assert.equal(r.ok, false);
   assert.match(r.error || '', /not found/);
 });
+
+// MVP39：resolved 高置信 → 升「确认办结」提案卡（浮出给用户，不再埋摘要）
+const dbmod = await import('../src/db.js');
+const attn = await import('../src/attention/attentionStore.js');
+
+function liveResolveProposal(matterId: string) {
+  return dbmod.db
+    .prepare(`SELECT 1 FROM attention_items WHERE status='live' AND input_hash = ? LIMIT 1`)
+    .get(`proposal:matter-resolve:${matterId}`);
+}
+
+test('T6 resolved 高置信(≥0.75) → 升办结提案卡 + proposalRaised', () => {
+  const m = mkMatter();
+  const r = applyInvestigationResult({
+    matterId: m.id,
+    conclusion: { verdict: 'resolved', confidence: 0.85, factSummary: '对方已确认收到并点赞', evidence: ['om_x'] },
+  });
+  assert.equal(r.proposalRaised, true);
+  assert.ok(liveResolveProposal(m.id), '应有在场办结提案');
+  assert.equal(ms.getMatterById(m.id)!.status, 'open', '仍不自动改 status（待用户确认）');
+});
+
+test('T7 resolved 低置信(<0.75) → 不升提案', () => {
+  const m = mkMatter();
+  const r = applyInvestigationResult({
+    matterId: m.id,
+    conclusion: { verdict: 'resolved', confidence: 0.6, factSummary: '可能完成了', evidence: [] },
+  });
+  assert.equal(r.proposalRaised, false);
+  assert.ok(!liveResolveProposal(m.id));
+});
+
+test('T8 progressed → 不升办结提案', () => {
+  const m = mkMatter();
+  const r = applyInvestigationResult({
+    matterId: m.id,
+    conclusion: { verdict: 'progressed', confidence: 0.9, factSummary: '有进展', evidence: [] },
+  });
+  assert.equal(r.proposalRaised, false);
+  assert.ok(!liveResolveProposal(m.id));
+});
+
+test('T9 幂等：已有在场提案 → 再次 resolved 不重复升', () => {
+  const m = mkMatter();
+  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'resolved', confidence: 0.9, factSummary: 'a', evidence: [] } });
+  const before = attn.listLiveAttentionItems(200).filter((x) => x.inputHash === `proposal:matter-resolve:${m.id}`).length;
+  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'resolved', confidence: 0.95, factSummary: 'b', evidence: [] } });
+  const after = attn.listLiveAttentionItems(200).filter((x) => x.inputHash === `proposal:matter-resolve:${m.id}`).length;
+  assert.equal(before, 1);
+  assert.equal(after, 1, '不重复升提案');
+});

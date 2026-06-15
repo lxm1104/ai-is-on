@@ -10,6 +10,7 @@
 import { upsertContextUnit } from '../context/contextStore.js';
 import type { ContextEntityRef } from '../context/ContextUnit.js';
 import { attachMatterContextLink, getMatterById, saveMatter } from '../matter/matterStore.js';
+import { raiseMatterResolveProposal } from '../matter/matterResolveProposal.js';
 import { writeAudit } from '../boundary/auditLog.js';
 import { broadcast } from '../ws.js';
 import type { InvestigationConclusion } from './investigationPrompt.js';
@@ -19,6 +20,7 @@ export type InvestigationWritebackResult = {
   matterId: string;
   resultUnitId?: string;
   summaryUpdated: boolean;
+  proposalRaised?: boolean; // resolved 高置信时是否升了「确认办结」提案卡
   error?: string;
 };
 
@@ -106,9 +108,22 @@ export function applyInvestigationResult(input: {
     payload: { matterId: matter.id, verdict: c.verdict, confidence: c.confidence, resultUnitId },
   });
 
+  // MVP39：resolved 高置信 → 把"AI 查到这件事疑似已完成"浮成「确认办结」提案卡（不再埋在摘要里）。
+  // 用户一键确认 = 一次"用户认可的自主完成"；不自动改 status（仍归用户裁决）。
+  let proposalRaised = false;
+  if (c.verdict === 'resolved' && c.confidence >= 0.75) {
+    proposalRaised = raiseMatterResolveProposal(
+      { ...matter, currentSummary: newSummary, nextAction: newNextAction, version: matter.version + 1, updatedAt: now },
+      {
+        why: `AI 自主排查发现这件事疑似已完成：${clip(factLine, 100)}。确认后该事项标记为已解决、相关催办卡自动清除。`,
+        suggestedAction: '确认办结，或忽略保持跟进',
+      }
+    );
+  }
+
   try {
     broadcast({ type: 'matter_updated', matterId: matter.id });
   } catch {}
 
-  return { ok: true, matterId: matter.id, resultUnitId, summaryUpdated: true };
+  return { ok: true, matterId: matter.id, resultUnitId, summaryUpdated: true, proposalRaised };
 }

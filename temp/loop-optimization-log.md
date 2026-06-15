@@ -19,6 +19,23 @@ MVP31 生产验证负例（第 16 轮·会话 A：判定「未完成」→ 正�
 
 ## 迭代记录
 
+### 2026-06-15 第 35 轮：自主排查的有用结论浮成「确认办结」提案卡（自主完成 + 反馈闭环）
+
+- **体检**：试运行已自主跑 **15 次排查**、采 14 条轨迹——核心指标"AI 自主帮你做事的数量"真实增长。
+  但 12/15 是 unknown（只能搜飞书，很多真相在外部/代码/trace，run_command 由并行会话在做）；
+  且 3 次有价值的发现（resolved "glm-5.2 切换已实际执行"、progressed "黄炜深讨论公式机制对方已回复"）
+  **都埋在 matter 摘要里、用户看不到、没法 react**。
+- **想法→落地（MVP39）**：让自主排查的**高置信 resolved 结论主动浮成「确认办结」提案卡**，用户一键确认
+  = 一次"用户认可的自主完成"，并形成反馈回路。复用 MVP31/32 提案卡机制（projection/动作/保护按字面前缀
+  `proposal:matter-resolve:` 自动生效）。
+  - 抽共享 helper `matter/matterResolveProposal.ts`（幂等、已 resolved/dropped 跳过；前缀字面与既有一致）。
+  - investigationWriteback：verdict=resolved 且 conf≥0.75 → raiseMatterResolveProposal；**仍不自动改 status**
+    （办结归用户裁决）。progressed/blocked 仍走摘要+nextAction（已有催办卡承载）。
+- **验证**：tsc 干净（唯一报错是并行会话 readTools 的 run_command 半成品，非我代码）；回写测试加 4 用例
+  （高置信升/低置信不升/progressed 不升/幂等），共 9 测全过；全量见下。**只提交自己的文件**（避开 readTools/config）。
+- **逼近目标**：把"AI 自主查到这件事已完成"从埋在摘要里 → 变成用户看得到、点一下就闭环的提案，直接服务
+  "用户越少参与并最终认可自主结果"+"根据反馈迭代"。run_command 落地后 resolved 比例会上升，提案会更多。
+
 ### 2026-06-15 第 34 轮：playbook 流程蒸馏（自发探索学成草稿）+ 并行会话协调
 
 - **协调情况**：用户说"本地 fornax-cli 等存在的，不用写死，直接让本地 AI 用上"。动手前发现**并行 Claude 会话
