@@ -41,52 +41,60 @@ export function applyInvestigationResult(input: {
   const c = input.conclusion;
   const now = new Date().toISOString();
   const factLine = c.factSummary?.trim() || '（未得出明确结论）';
+  // 只有"查到了有意义的东西"才动用户可见字段。unknown（没查到 / 排查器没出有效动作）一律**不污染**
+  // 摘要/下一步/证据时钟——否则卡片首行变"没查到"、陈旧度失真、内部失败文案泄漏给用户（2026-06-15 实测）。
+  const meaningful = c.verdict === 'resolved' || c.verdict === 'progressed' || c.verdict === 'blocked';
 
-  // ① 排查事实 → silent action_result unit（挂 matter 作证据；幂等：同 matter+事实合并）
-  const entities: ContextEntityRef[] = [];
+  // ① 仅有意义结论 → 落 silent action_result unit 挂 matter 作证据
   let resultUnitId: string | undefined;
-  try {
-    const unit = upsertContextUnit({
-      kind: 'action_result',
-      title: clip(`AI 排查：${factLine}`, 60),
-      content: [
-        `AI 自主排查结论（${c.verdict}，置信 ${c.confidence.toFixed(2)}）：`,
-        factLine,
-        c.evidence.length ? '\n证据：' : '',
-        ...c.evidence.slice(0, 6).map((e) => `· ${clip(e, 180)}`),
-        input.toolSummary ? `\n（排查用：${clip(input.toolSummary, 120)}）` : '',
-      ]
-        .filter(Boolean)
-        .join('\n'),
-      entities,
-      scope: matter.scope,
-      origin: { kind: 'agent_run', refId: `investigation:${matter.id}` },
-      actionability: 'record',
-      confidence: c.confidence,
-      mergeHint: `investigation:${matter.id}:${clip(factLine, 40)}`,
-      silent: true, // 状态已由本服务确定性处理，不再触发 reducer echo
-    }).unit;
-    resultUnitId = unit.id;
-    attachMatterContextLink({
-      matterId: matter.id,
-      contextUnitId: unit.id,
-      relation: 'evidence',
-      effect: 'no_change', // 保守：只作证据，不改 status
-      confidence: c.confidence,
-      reason: `AI 自主排查（${c.verdict}）`,
-      now,
-    });
-  } catch (err) {
-    return { ok: false, matterId: matter.id, summaryUpdated: false, error: err instanceof Error ? err.message : String(err) };
+  if (meaningful) {
+    const entities: ContextEntityRef[] = [];
+    try {
+      const unit = upsertContextUnit({
+        kind: 'action_result',
+        title: clip(`AI 排查：${factLine}`, 60),
+        content: [
+          `AI 自主排查结论（${c.verdict}，置信 ${c.confidence.toFixed(2)}）：`,
+          factLine,
+          c.evidence.length ? '\n证据：' : '',
+          ...c.evidence.slice(0, 6).map((e) => `· ${clip(e, 180)}`),
+          input.toolSummary ? `\n（排查用：${clip(input.toolSummary, 120)}）` : '',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+        entities,
+        scope: matter.scope,
+        origin: { kind: 'agent_run', refId: `investigation:${matter.id}` },
+        actionability: 'record',
+        confidence: c.confidence,
+        mergeHint: `investigation:${matter.id}:${clip(factLine, 40)}`,
+        silent: true,
+      }).unit;
+      resultUnitId = unit.id;
+      attachMatterContextLink({
+        matterId: matter.id,
+        contextUnitId: unit.id,
+        relation: 'evidence',
+        effect: 'no_change',
+        confidence: c.confidence,
+        reason: `AI 自主排查（${c.verdict}）`,
+        now,
+      });
+    } catch (err) {
+      return { ok: false, matterId: matter.id, summaryUpdated: false, error: err instanceof Error ? err.message : String(err) };
+    }
   }
 
-  // ② 更新 currentSummary（让卡片直接显示排查结论）；高置信 resolved 在 nextAction 留一句提示但不改 status
-  const summaryAddon = `［AI 排查］${factLine}`;
-  const newSummary = matter.currentSummary && !matter.currentSummary.includes(summaryAddon)
-    ? clip(`${summaryAddon}｜${matter.currentSummary}`, 400)
-    : matter.currentSummary || summaryAddon;
-  const newNextAction =
-    c.verdict === 'resolved' && c.confidence >= 0.7
+  // ② 更新 currentSummary —— 只在有意义时；并**剥掉旧的「[AI 排查]…｜」前缀**避免多次排查无限堆叠。
+  let newSummary = matter.currentSummary;
+  if (meaningful) {
+    const stripped = (matter.currentSummary || '').replace(/^［AI 排查］[^｜]*｜?/, '').trim();
+    const addon = `［AI 排查］${factLine}`;
+    newSummary = clip(stripped ? `${addon}｜${stripped}` : addon, 400);
+  }
+  const newNextAction = !meaningful
+    ? matter.nextAction ?? null
+    : c.verdict === 'resolved' && c.confidence >= 0.7
       ? '经 AI 排查疑似已完成，请确认是否办结'
       : c.verdict === 'blocked'
         ? clip(`排查发现受阻：${factLine}`, 60)
@@ -97,7 +105,7 @@ export function applyInvestigationResult(input: {
     currentSummary: newSummary,
     nextAction: newNextAction,
     lastEvidenceContextUnitId: resultUnitId ?? matter.lastEvidenceContextUnitId,
-    lastEvidenceAt: now,
+    lastEvidenceAt: meaningful ? now : matter.lastEvidenceAt, // unknown 不刷新证据时钟（保陈旧度真实）
     version: matter.version + 1,
     updatedAt: now,
   });
@@ -125,5 +133,5 @@ export function applyInvestigationResult(input: {
     broadcast({ type: 'matter_updated', matterId: matter.id });
   } catch {}
 
-  return { ok: true, matterId: matter.id, resultUnitId, summaryUpdated: true, proposalRaised };
+  return { ok: true, matterId: matter.id, resultUnitId, summaryUpdated: meaningful, proposalRaised };
 }

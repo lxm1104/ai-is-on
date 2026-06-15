@@ -72,15 +72,29 @@ test('T3 blocked：nextAction 反映受阻', () => {
 });
 
 test('T4 unknown：仍挂证据记录"查了但没结论"，不动 nextAction/status', () => {
-  const m = mkMatter();
-  const beforeNext = ms.getMatterById(m.id)!.nextAction;
+  const m = mkMatter({ summary: '原始摘要不该被污染' });
+  const before = ms.getMatterById(m.id)!;
   const r = applyInvestigationResult({
     matterId: m.id,
     conclusion: { verdict: 'unknown', confidence: 0.2, factSummary: '未查到评测集相关消息', evidence: [] },
   });
   assert.equal(r.ok, true);
-  assert.ok(r.resultUnitId, 'unknown 也留痕');
-  assert.equal(ms.getMatterById(m.id)!.nextAction, beforeNext, 'unknown 不动 nextAction');
+  assert.equal(r.summaryUpdated, false, 'unknown 不更新摘要');
+  const after = ms.getMatterById(m.id)!;
+  assert.equal(after.nextAction, before.nextAction, 'unknown 不动 nextAction');
+  assert.equal(after.currentSummary, before.currentSummary, 'unknown 不污染摘要（不塞「未查到」）');
+  assert.equal(after.lastEvidenceAt, before.lastEvidenceAt, 'unknown 不刷新证据时钟（保陈旧度真实）');
+  assert.ok(!(after.currentSummary || '').includes('AI 排查'), '摘要不含 AI 排查噪音');
+});
+
+test('T5b 多次有意义排查：不堆叠「[AI 排查]…」前缀（替换而非累加）', () => {
+  const m = mkMatter({ summary: '本来的摘要' });
+  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'progressed', confidence: 0.7, factSummary: '第一次发现', evidence: [] } });
+  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'progressed', confidence: 0.7, factSummary: '第二次发现', evidence: [] } });
+  const s = ms.getMatterById(m.id)!.currentSummary;
+  assert.equal((s.match(/［AI 排查］/g) || []).length, 1, '只保留最新一条 AI 排查前缀');
+  assert.ok(s.includes('第二次发现') && !s.includes('第一次发现'), '替换为最新发现');
+  assert.ok(s.includes('本来的摘要'), '原摘要保留');
 });
 
 test('T5 matter 不存在 → ok:false 不抛', () => {
