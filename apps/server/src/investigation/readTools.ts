@@ -113,7 +113,9 @@ const TOOLS: Record<ReadToolName, ReadTool> = {
     build: (p) => {
       const chatId = str(p.chatId);
       if (!chatId) throw new Error('read_chat_messages 需要 chatId');
-      const args = ['im', '+chat-messages-list', '--chat-id', chatId, '--page-limit', String(clampLimit(p.limit, 20, 50)), '--format', 'json'];
+      // 注意：chat-messages-list 用 --page-size（不是 messages-search 的 --page-limit）。
+      // 2026-06-15 试运行实测：用错 flag → lark-cli exit 2 unknown flag。
+      const args = ['im', '+chat-messages-list', '--chat-id', chatId, '--page-size', String(clampLimit(p.limit, 20, 50)), '--format', 'json'];
       if (str(p.start)) args.push('--start', str(p.start)!);
       if (str(p.end)) args.push('--end', str(p.end)!);
       return args;

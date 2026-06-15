@@ -58,6 +58,15 @@ test('T5 缺必要参数 → ok:false 不调用 runner', async () => {
   assert.equal(calls.length, 0);
 });
 
+test('T5b read_chat_messages 用 --page-size（非 --page-limit，2026-06-15 试运行抓到的 flag bug）', async () => {
+  const calls: string[][] = [];
+  const runJson = async (args: string[]) => { calls.push(args); return { items: [] }; };
+  await runReadTool('read_chat_messages', { chatId: 'oc_x', limit: 10 }, { runJson });
+  const args = calls[0];
+  assert.deepEqual(args.slice(0, 4), ['im', '+chat-messages-list', '--chat-id', 'oc_x']);
+  assert.ok(args.includes('--page-size') && !args.includes('--page-limit'), 'chat-messages-list 必须用 --page-size');
+});
+
 test('T6 list_my_tasks 固定读命令', async () => {
   const calls: string[][] = [];
   const runJson = async (args: string[]) => { calls.push(args); return { items: [] }; };

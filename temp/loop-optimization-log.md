@@ -19,6 +19,27 @@ MVP31 生产验证负例（第 16 轮·会话 A：判定「未完成」→ 正�
 
 ## 迭代记录
 
+### 2026-06-15 第 32 轮：能力二召回注入 + 前端面板 + 排查独立车道 + 真实试运行抓 bug
+
+- **召回注入**：命中的 playbook 步骤注入「让 AI 处理」(askAgentPrompt) 与自主排查(investigationPrompt `<已知做法>`)，
+  让 AI 照用户教过/自学的步骤做（人写/已批准措辞"优先照此"，草稿"仅供参考"）。新增 `playbookMatcher`。
+- **前端 Playbook 面板**：列出/新建/编辑(权威)/批准草稿/停用——"在哪补充信息"的可见入口（preview 实测渲染 ✓）。
+- **worthy 选件改看标题+下一步**：标题写"排查/确认是否"的 P0 也进候选（此前被 round22 回填的泛兜底 nextAction 漏掉）。
+- **排查独立 gate 车道（关键 infra 修复）**：实测主道单并发 gate 被**挂死的 aiisn-attention** 占住数分钟，
+  排查即便 priority 也饿死、试运行 3 次空转。根因：所有 one-shot 共用一条单并发 gate。
+  修复：runOneShot 加 lane 选项 + `investigationGate=createLlmGate(1)` 独立道；排查走独立道，与主道互不阻塞、
+  自身仍限并发 1（不爆进程）。另加 config.investigationPriority（默认 true）。
+- **真实试运行（独立车道后端到端跑通）**：手动 tick 2 次均 dispatched:true。
+  - 第 1 次：模型偶发未出有效 JSON → 优雅降级 unknown（系统不崩）。
+  - 第 2 次：**完整成功**——AI 自主排查「排查智能体授权超时(对高虎伟承诺)」，真连查 5 步
+    (搜"授权超时/超时时长/高虎伟"IM + 列待办)，结论"未找到进展证据"(合理 unknown)，回写 matter + 采到轨迹。
+  - **试运行抓到真 bug**：`read_chat_messages` 用了 `--page-limit`，但 `im +chat-messages-list` 实际要 `--page-size`
+    （lark-cli exit 2 unknown flag）→ 已修，真实命令 live 验证 `--page-size` 被接受 ✓，加回归断言。
+- **验证**：tsc ✓；新增 worthy-by-title / read_chat_messages flag / 召回 等用例，全量 590+ 绿；
+  4 次提交（6af9227 召回+面板 / 46cecba 独立车道 / 本轮 flag 修复）。
+- **下一步**：蒸馏服务（同类轨迹≥N → LLM 蒸馏 distillUpsert，自动避让权威版）；模型 JSON 合规健壮性
+  （偶发"未出有效动作"，可加一次"只输出JSON"重试）；卡片"记住这样处理"按钮。
+
 ### 2026-06-15 第 31 轮：playbook 教学通道（人主导播种 + 自发探索补空，加速收敛）
 
 - **用户问**：在哪里补充信息帮 agent 快速收敛到正确 playbook？怎么和自发探索联动？
