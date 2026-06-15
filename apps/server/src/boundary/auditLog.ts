@@ -26,7 +26,8 @@ export type AuditAction =
   | 'investigation_written_back'        // MVP36：AI 自主排查结论回写 matter
   | 'playbook_user_upsert'              // MVP37：用户编写/编辑 playbook
   | 'playbook_approved'
-  | 'playbook_active_set';
+  | 'playbook_active_set'
+  | 'project_profile_set';              // MVP38：用户设置项目排查档案
 
 export function writeAudit(input: {
   action: AuditAction;

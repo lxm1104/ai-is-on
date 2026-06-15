@@ -30,6 +30,8 @@ export type InvestigationInput = {
   priority?: boolean;
   /** MVP37 召回：这类任务已学/用户教过的做法，注入每轮 prompt 让 AI 照此排查。 */
   playbookHint?: string;
+  /** MVP38 项目排查档案：所属项目的代码库路径/trace 方法/术语等。 */
+  projectProfile?: string;
 };
 
 export type InvestigationToolLogEntry = {
@@ -107,6 +109,7 @@ export async function runInvestigation(
       round,
       maxRounds,
       playbookHint: input.playbookHint,
+      projectProfile: input.projectProfile,
     });
 
     let step;

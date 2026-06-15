@@ -13,7 +13,8 @@ import {
   type SpaceType,
 } from '../spaces/contextSpaceService.js';
 import { getContextUnitById } from '../context/contextStore.js';
-import { listDecisionsBySpace } from '../db.js';
+import { listDecisionsBySpace, getContextSpace, setSpaceInvestigationProfile } from '../db.js';
+import { writeAudit } from '../boundary/auditLog.js';
 import { runSuggestionWorker } from '../spaces/suggestionWorker.js';
 import { classifyContextUnit } from '../context/layerClassifier.js';
 import type { ContextUnit } from '../context/ContextUnit.js';
@@ -88,6 +89,17 @@ contextSpacesRouter.get('/context-spaces/:id', (req, res) => {
     recentEvents: (byKind.get('event') ?? []).slice(0, 10).map(attachHint),
     allUnitCount: units.length,
   });
+});
+
+// MVP38：设置项目排查档案（用户写的额外 context + 做事方法）。自主排查/「让 AI 处理」会注入它。
+contextSpacesRouter.post('/context-spaces/:id/profile', (req, res) => {
+  const space = getContextSpace(req.params.id);
+  if (!space) return res.status(404).json({ error: 'not found' });
+  const profile = typeof (req.body ?? {}).profile === 'string' ? req.body.profile : '';
+  if (profile.length > 8000) return res.status(400).json({ error: '档案过长（>8000 字）' });
+  const ok = setSpaceInvestigationProfile(space.id, profile, new Date().toISOString());
+  if (ok) writeAudit({ action: 'project_profile_set', reason: `设置项目排查档案：${space.name}`, payload: { spaceId: space.id, len: profile.trim().length } });
+  res.json({ ok, profile: profile.trim() || null });
 });
 
 contextSpacesRouter.post('/context-spaces/:id/archive', (req, res) => {

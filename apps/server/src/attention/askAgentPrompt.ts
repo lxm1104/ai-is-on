@@ -16,6 +16,7 @@ import {
 } from '../db.js';
 import { getMatterById } from '../matter/matterStore.js';
 import { matchPlaybookForMatter, renderPlaybookForPrompt } from '../playbook/playbookMatcher.js';
+import { getProjectProfileForMatter } from '../investigation/projectProfile.js';
 import type { AttentionItem } from './attentionTypes.js';
 import type { ContextUnit } from '../context/ContextUnit.js';
 
@@ -39,10 +40,16 @@ export function buildRichAskAgentPrompt(item: AttentionItem): string {
     parts.push(`【推荐能力】${item.recommendedAgent}（仅供参考，你按实际判断）`);
   }
 
-  // MVP37 召回：这件事命中已学/用户教过的 playbook → 注入"该这么做"的步骤，让 AI 照用户认可的方式处理。
+  // MVP37/38 召回：这件事命中的 playbook（该这么做）+ 所属项目的排查档案（代码库/trace/术语等）。
   if (item.matterId) {
     const matter = getMatterById(matchMatterId(item.matterId) ?? item.matterId);
     if (matter) {
+      const profile = getProjectProfileForMatter(matter);
+      if (profile) {
+        parts.push('');
+        parts.push('【项目背景与做事方法（用户登记）】');
+        parts.push(profile);
+      }
       const pb = matchPlaybookForMatter(matter);
       if (pb) {
         parts.push('');

@@ -704,6 +704,13 @@ body { background: var(--bg); color: var(--text); }
 .playbook__tag { font-size: 10px; padding: 1px 6px; border-radius: 8px; border: 1px solid var(--border); color: var(--text-dim); }
 .playbook__tag--user { background: var(--accent); color: white; border-color: var(--accent); }
 .playbook__tag--ok { color: var(--accent); border-color: var(--accent); }
+/* MVP38 项目排查档案 */
+.sp-profile { margin: 8px 0; padding: 8px; border: 1px dashed var(--border); border-radius: 6px; }
+.sp-profile__head { font-size: 12px; font-weight: 600; }
+.sp-profile__hint { display: block; font-weight: 400; font-size: 11px; color: var(--text-dim); margin: 2px 0 6px; line-height: 1.4; }
+.sp-profile__text { font-size: 12px; white-space: pre-wrap; background: var(--bg-subtle, rgba(127,127,127,0.08)); padding: 6px; border-radius: 4px; margin: 0 0 6px; max-height: 200px; overflow: auto; }
+.sp-profile__empty { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
+.sp-profile__edit { width: 100%; box-sizing: border-box; font: inherit; font-size: 12px; padding: 6px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--text); }
 .card__doc { margin-top: 6px; }
 .btn--doc { background: transparent; color: var(--text-dim); border-color: var(--border); }
 .btn--doc:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }

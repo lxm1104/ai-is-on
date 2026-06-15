@@ -603,6 +603,10 @@ CREATE TABLE IF NOT EXISTS task_playbooks (
 ensureColumn('task_playbooks', 'origin', "TEXT NOT NULL DEFAULT 'distilled'");
 ensureColumn('task_playbooks', 'approved', 'INTEGER NOT NULL DEFAULT 0');
 
+// MVP38 项目排查档案：用户为每个项目(Space)写的额外 context + 做事方法（代码库路径、trace 怎么拿、
+// 术语、常见排查套路）。自主排查/「让 AI 处理」时按 matter.primarySpaceId 召回并注入 prompt。
+ensureColumn('context_spaces', 'investigation_profile', 'TEXT');
+
 // MVP12: context_space_links 加 reason_json，记录这条 link 的命中路径
 // （via='person'|'doc'|'chat_seed' ...）。upsertContextSpaceLinkBestHit cap 5 条 evidence。
 ensureColumn('context_space_links', 'reason_json', 'TEXT');
@@ -2000,7 +2004,15 @@ export type ContextSpaceRow = {
   intent_json?: string;
   work_map_ref_json?: string | null;
   suggestion_policy?: string;
+  investigation_profile?: string | null; // MVP38 项目排查档案（用户写的额外 context + 做事方法）
 };
+
+export function setSpaceInvestigationProfile(id: string, profile: string | null, now: string): boolean {
+  const r = db
+    .prepare(`UPDATE context_spaces SET investigation_profile = ?, updated_at = ? WHERE id = ?`)
+    .run(profile && profile.trim() ? profile.trim() : null, now, id);
+  return r.changes > 0;
+}
 
 export function insertContextSpace(row: ContextSpaceRow) {
   db.prepare(

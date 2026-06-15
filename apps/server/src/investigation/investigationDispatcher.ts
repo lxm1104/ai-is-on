@@ -15,6 +15,7 @@ import { runInvestigation } from './investigationLoop.js';
 import { applyInvestigationResult } from './investigationWriteback.js';
 import { captureInvestigationTrace } from '../playbook/playbookCapture.js';
 import { matchPlaybookForMatter, renderPlaybookForPrompt } from '../playbook/playbookMatcher.js';
+import { getProjectProfileForMatter } from './projectProfile.js';
 
 // deriveDefaultNextAction 的兜底文案——这些太泛，不值得自动排查（要具体的"确认X是否…"才查）。
 const GENERIC_NEXT_ACTIONS = new Set([
@@ -113,6 +114,7 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
       maxRounds: config.investigationMaxRounds,
       priority: config.investigationPriority, // 低频排查公平竞争 gate（默认 true），否则繁忙时被饿死
       playbookHint: matchedPb ? renderPlaybookForPrompt(matchedPb) : undefined,
+      projectProfile: getProjectProfileForMatter(candidate) ?? undefined,
     });
     const toolSummary = result.toolLog.map((l) => `${l.tool}:${l.ok ? l.summary : '失败'}`).join('；');
     applyInvestigationResult({ matterId: candidate.id, conclusion: result.conclusion, toolSummary });

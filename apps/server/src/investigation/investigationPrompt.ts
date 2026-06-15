@@ -73,6 +73,7 @@ export function buildInvestigateUserMessage(opts: {
   round: number;
   maxRounds: number;
   playbookHint?: string; // MVP37 召回：这类任务已学/用户教过的做法，优先照此排查
+  projectProfile?: string; // MVP38 项目排查档案：代码库路径/trace 方法/术语等
 }): string {
   const lines = [
     '<matter>',
@@ -85,6 +86,16 @@ export function buildInvestigateUserMessage(opts: {
       : '',
     '</matter>',
   ];
+  if (opts.projectProfile) {
+    lines.push(
+      '',
+      '<项目背景与排查方法>',
+      '（用户为该项目登记的额外信息与做事方法。你目前只能用上面列出的飞书只读工具；',
+      '若档案提到代码库/trace 等你查不到的来源，就在结论里明确告诉用户去那里查什么。）',
+      opts.projectProfile,
+      '</项目背景与排查方法>'
+    );
+  }
   if (opts.playbookHint) {
     lines.push('', '<已知做法>', opts.playbookHint, '</已知做法>');
   }

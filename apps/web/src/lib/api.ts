@@ -532,7 +532,19 @@ export type ContextSpace = {
   status: string;
   created_at: string;
   updated_at: string;
+  investigation_profile?: string | null; // MVP38 项目排查档案
 };
+
+export async function saveProjectProfile(spaceId: string, profile: string): Promise<string | null> {
+  const r = await fetch(`/api/context-spaces/${encodeURIComponent(spaceId)}/profile`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ profile }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `profile ${r.status}`);
+  return j.profile ?? null;
+}
 
 export type ContextSpaceDetail = {
   space: ContextSpace;

@@ -8,6 +8,7 @@ import {
   reconcileContextSpaces,
   rejectSpaceSuggestion,
   runSpaceSuggestionWorker,
+  saveProjectProfile,
   type ContextSpace,
   type ContextSpaceDetail,
   type SpaceSuggestion,
@@ -195,6 +196,7 @@ function SpaceDetail({
         </span>
       </div>
       {space.description && <div className="sp-detail__desc">{space.description}</div>}
+      <ProjectProfileEditor space={space} onSaved={onReloadDetail} />
       <SuggestionsSection spaceId={space.id} onAfterConfirm={onReloadDetail} />
       <SpaceGroup title="关键承诺" units={commitments} />
       <SpaceGroup title="目标 / 意图" units={goals} />
@@ -203,6 +205,67 @@ function SpaceDetail({
       <SpaceGroup title="近期事件" units={recentEvents} />
       {allUnitCount === 0 && (
         <div className="ctx-panel__empty">这个 Space 还没绑到任何 ContextUnit。点 ↻ 关联 试试。</div>
+      )}
+    </div>
+  );
+}
+
+// MVP38 — 项目排查档案：用户写额外 context + 做事方法，自主排查/「让 AI 处理」会注入。
+function ProjectProfileEditor({ space, onSaved }: { space: ContextSpace; onSaved: () => Promise<void> }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(space.investigation_profile ?? '');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const has = !!(space.investigation_profile && space.investigation_profile.trim());
+
+  async function save() {
+    setBusy(true);
+    setErr(null);
+    try {
+      await saveProjectProfile(space.id, text);
+      setEditing(false);
+      await onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="sp-profile">
+      <div className="sp-profile__head">
+        🧭 排查档案
+        <span className="sp-profile__hint">代码库路径、trace 怎么拿(如 fornax-cli)、术语、常见排查套路——AI 排查这个项目时会读它</span>
+      </div>
+      {!editing ? (
+        <>
+          {has ? (
+            <pre className="sp-profile__text">{space.investigation_profile}</pre>
+          ) : (
+            <div className="sp-profile__empty">还没填。补上后 AI 排查本项目事项时就知道去哪查、怎么查。</div>
+          )}
+          <button type="button" className="btn btn--card" onClick={() => { setText(space.investigation_profile ?? ''); setEditing(true); }}>
+            {has ? '编辑档案' : '＋ 填写档案'}
+          </button>
+        </>
+      ) : (
+        <>
+          <textarea
+            className="sp-profile__edit"
+            rows={6}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder={'例如：\n代码库：/Users/xinming/MyProject/bitable-chatbot\nTrace：用 fornax-cli 拿 trace（见 fornax-eval skill）\n术语：xxx 指 ...\n常见排查：先看 IM 群结论，再 grep 代码 / 拉 trace'}
+          />
+          {err && <p className="card__reply-err">⚠ {err}</p>}
+          <div className="card__reply-actions">
+            <button type="button" className="btn btn--card btn--reply-send" disabled={busy} onClick={() => void save()}>
+              {busy ? '保存中…' : '保存'}
+            </button>
+            <button type="button" className="btn btn--card" disabled={busy} onClick={() => setEditing(false)}>取消</button>
+          </div>
+        </>
       )}
     </div>
   );

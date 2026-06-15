@@ -19,6 +19,23 @@ MVP31 生产验证负例（第 16 轮·会话 A：判定「未完成」→ 正�
 
 ## 迭代记录
 
+### 2026-06-15 第 33 轮：项目排查档案（每个项目的额外 context + 做事方法）
+
+- **用户问**：自主排查要用项目外部信息（如 Chatbot 代码库在 /Users/xinming/MyProject/bitable-chatbot、
+  trace 用 fornax-cli），怎么输入给 AI？每个项目还需要额外 context + 做事方法。
+- **用户拍板**：先只做「项目排查档案」（声明式，零新外部访问；代码库/fornax 只读工具留待后续）。
+- **落地（MVP38）**：档案挂在项目 Space 上（context_spaces 加 investigation_profile 列），用户写一次、系统记住。
+  - 召回 `investigation/projectProfile.ts`：按 matter.primarySpaceId 取所属项目档案。
+  - 注入：自主排查 prompt 加 `<项目背景与排查方法>`（含"你只能用飞书只读工具，查不到的来源就在结论里告诉用户去查"）；
+    「让 AI 处理」(askAgentPrompt) 加「项目背景与做事方法」块。
+  - API：POST /context-spaces/:id/profile；GET detail 已返回 space.investigation_profile。
+  - 前端 SpacesPanel 项目详情加「🧭 排查档案」编辑器（填代码库路径/trace 方法/术语/排查套路）。
+- **验证**：tsc(server+web) ✓；新增 MVP38 4 测（召回/空值/清空/注入），全量见下；
+  **真实 live**：给 Chatbot 项目设了真实档案（代码库 + fornax-cli），读回确认 ✓。
+- 这正面回答了目标的「对不了解的 context 主动让用户提供并记住、不用重复」——项目级 context + 方法现可一次录入、长期复用。
+- **下一步**：用户点头后加 read_codebase（限登记路径只读）/ fornax_trace 只读工具，让 AI 自主去查代码/trace；
+  另：playbook 蒸馏服务、卡片"记住这样处理"。
+
 ### 2026-06-15 第 32 轮：能力二召回注入 + 前端面板 + 排查独立车道 + 真实试运行抓 bug
 
 - **召回注入**：命中的 playbook 步骤注入「让 AI 处理」(askAgentPrompt) 与自主排查(investigationPrompt `<已知做法>`)，
