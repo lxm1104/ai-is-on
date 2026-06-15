@@ -134,14 +134,13 @@ test('T7 resolved 低置信(<0.75) → 不升提案', () => {
   assert.ok(!liveResolveProposal(m.id));
 });
 
-test('T8 progressed → 不升办结提案', () => {
+test('T8 progressed → 不升「办结」提案（改升进展回执，见 T10）', () => {
   const m = mkMatter();
-  const r = applyInvestigationResult({
+  applyInvestigationResult({
     matterId: m.id,
     conclusion: { verdict: 'progressed', confidence: 0.9, factSummary: '有进展', evidence: [] },
   });
-  assert.equal(r.proposalRaised, false);
-  assert.ok(!liveResolveProposal(m.id));
+  assert.ok(!liveResolveProposal(m.id), 'progressed 不升办结卡');
 });
 
 test('T9 幂等：已有在场提案 → 再次 resolved 不重复升', () => {
@@ -152,4 +151,59 @@ test('T9 幂等：已有在场提案 → 再次 resolved 不重复升', () => {
   const after = attn.listLiveAttentionItems(200).filter((x) => x.inputHash === `proposal:matter-resolve:${m.id}`).length;
   assert.equal(before, 1);
   assert.equal(after, 1, '不重复升提案');
+});
+
+// MVP40：进展回执卡（progressed/blocked → P2「AI 已查清进展」卡）
+function liveProgressProposal(matterId: string) {
+  return dbmod.db
+    .prepare(`SELECT 1 FROM attention_items WHERE status='live' AND input_hash = ? LIMIT 1`)
+    .get(`proposal:matter-progress:${matterId}`);
+}
+
+test('T10 progressed ≥0.6 → 升进展回执卡', () => {
+  const m = mkMatter();
+  const r = applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'progressed', confidence: 0.7, factSummary: '已读到完整 PRD', evidence: ['doc xxx'] } });
+  assert.equal(r.proposalRaised, true);
+  assert.ok(liveProgressProposal(m.id));
+  assert.equal(ms.getMatterById(m.id)!.status, 'open', '不自动改 status');
+});
+
+test('T11 blocked ≥0.6 → 升进展回执卡', () => {
+  const m = mkMatter();
+  const r = applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'blocked', confidence: 0.7, factSummary: '确认零进展', evidence: [] } });
+  assert.equal(r.proposalRaised, true);
+  assert.ok(liveProgressProposal(m.id));
+});
+
+test('T12 progressed 低置信(<0.6) → 不升卡', () => {
+  const m = mkMatter();
+  const r = applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'progressed', confidence: 0.5, factSummary: 'x', evidence: [] } });
+  assert.equal(r.proposalRaised, false);
+  assert.ok(!liveProgressProposal(m.id));
+});
+
+test('T13 已有在场办结提案 → 不叠升进展卡（止损）', () => {
+  const m = mkMatter();
+  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'resolved', confidence: 0.9, factSummary: '已完成', evidence: [] } });
+  assert.ok(liveResolveProposal(m.id));
+  const r = applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'progressed', confidence: 0.8, factSummary: '又有进展', evidence: [] } });
+  assert.equal(r.proposalRaised, false, '办结已在场，不叠进展卡');
+  assert.ok(!liveProgressProposal(m.id));
+});
+
+test('T14 升办结时顶掉在场进展卡（办结优先）', () => {
+  const m = mkMatter();
+  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'progressed', confidence: 0.7, factSummary: '进展', evidence: [] } });
+  assert.ok(liveProgressProposal(m.id), '先有进展卡');
+  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'resolved', confidence: 0.9, factSummary: '完成', evidence: [] } });
+  assert.ok(liveResolveProposal(m.id), '办结卡升起');
+  assert.ok(!liveProgressProposal(m.id), '进展卡被顶掉');
+});
+
+test('T15 进展卡幂等：同 matter 不重复升', () => {
+  const m = mkMatter();
+  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'progressed', confidence: 0.7, factSummary: 'a', evidence: [] } });
+  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'blocked', confidence: 0.7, factSummary: 'b', evidence: [] } });
+  const n = attn.listLiveAttentionItems(300).filter((x) => x.inputHash === `proposal:matter-progress:${m.id}`).length;
+  assert.equal(n, 1, '不重复升进展卡');
 });

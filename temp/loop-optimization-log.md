@@ -19,6 +19,24 @@ MVP31 生产验证负例（第 16 轮·会话 A：判定「未完成」→ 正�
 
 ## 迭代记录
 
+### 2026-06-15 第 38 轮：进展回执卡（MVP40）—— 把有意义排查结论变成可认可的完成事件
+
+- **多 agent 工作流选型**（4 视角提案 + 对抗审查，基于真实试运行数据）：选定"进展回执卡"。
+  对抗审查否决了 dismiss 实体压制（relatedEntityIds 存显示名非稳定 id，会误杀紧急新卡，需先做实体规范化）
+  和止损门（杠杆次之，洞见已吸收）；文档物化留下轮。
+- **真实瓶颈**（证据）：25 次排查只有 resolved≥0.75 一条最窄通道升「确认办结」卡，全生命周期**仅 1 次**被用户认可的
+  自主完成。但 8 个 distinct 事项里 3 blocked + 2 progressed 是"AI 已查清进展"的**完整答复**（已读完 PRD/已定位 bug
+  上报/确认零进展），全埋在 currentSummary 没人能按。
+- **落地**：matterResolveProposal.ts 抽参数化内核 `raiseMatterProposal`（resolve 版转调，行为不变保 603 测试）+
+  新增 `raiseMatterProgressProposal`（progressed/blocked 且 conf≥0.6 → P2「AI 已查清进展」卡，blocked 文案中性化）。
+  investigationWriteback resolved 分支后加并列 progress 分支。attentionProjection 加 `proposal:matter-progress:` 动作组
+  「知道了(ack)/办结(matter_resolve)/继续跟进(dismiss)」；cardsService 豁免该前缀的 not_relevant 学习。
+  止损：已有在场办结提案则不叠进展卡；升办结时顶掉在场进展卡（办结优先）。
+- **效果**：可认可的自主完成事件覆盖从仅 resolved（~4%）扩到 resolved+progressed+blocked（~32%，约 8x）；
+  每张卡的 ack/办结/跟进都是当前几乎为零的满意度信号采集。
+- **验证**：tsc 干净（排除并行 readTools）；回写测试 +6（progressed/blocked 升卡、低置信不升、办结优先/止损、幂等），
+  共 16 测；全量见下。只提交自己的文件（matterResolveProposal/investigationWriteback/attentionProjection/cardsService/测试）。
+
 ### 2026-06-15 第 37 轮：IM 代发下线（公司策略禁止）—— 改"AI 起草 + 手动发"
 
 - **用户明确**：IM 代发是公司权限不允许的，其余尽量做。→ MVP34 的一键代发是死路（还误导用户去授权 scope）。

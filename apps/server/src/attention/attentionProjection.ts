@@ -97,6 +97,16 @@ export function defaultAttentionActions(item: AttentionItem): CardAction[] {
     ];
   }
 
+  // MVP40：进展回执卡（自主排查 progressed/blocked 产）——AI 已查清进展，用户「知道了/办结/继续跟进」。
+  // 「继续跟进」走 dismiss 通道但不学 not_relevant 负反馈（cardsService 按前缀豁免）。
+  if (item.inputHash.startsWith('proposal:matter-progress:')) {
+    return [
+      { id: 'ack', label: '知道了', kind: 'ack' },
+      { id: 'matter_resolve', label: '办结', kind: 'matter_resolve' },
+      { id: 'dismiss', label: '继续跟进', kind: 'dismiss' },
+    ];
+  }
+
   // MVP32：核实存疑提案卡（matterVerifyService 产）——用户裁决"重开跟进"还是"确实已完成"。
   // 「确实已完成」走 dismiss 通道但不学 not_relevant 负反馈（cardsService 按前缀白名单豁免）。
   if (item.inputHash.startsWith('proposal:matter-reopen:')) {

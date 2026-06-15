@@ -10,7 +10,7 @@
 import { upsertContextUnit } from '../context/contextStore.js';
 import type { ContextEntityRef } from '../context/ContextUnit.js';
 import { attachMatterContextLink, getMatterById, saveMatter } from '../matter/matterStore.js';
-import { raiseMatterResolveProposal } from '../matter/matterResolveProposal.js';
+import { raiseMatterResolveProposal, raiseMatterProgressProposal } from '../matter/matterResolveProposal.js';
 import { writeAudit } from '../boundary/auditLog.js';
 import { broadcast } from '../ws.js';
 import type { InvestigationConclusion } from './investigationPrompt.js';
@@ -118,15 +118,22 @@ export function applyInvestigationResult(input: {
 
   // MVP39：resolved 高置信 → 把"AI 查到这件事疑似已完成"浮成「确认办结」提案卡（不再埋在摘要里）。
   // 用户一键确认 = 一次"用户认可的自主完成"；不自动改 status（仍归用户裁决）。
+  const proposalMatter = { ...matter, currentSummary: newSummary, nextAction: newNextAction, version: matter.version + 1, updatedAt: now };
   let proposalRaised = false;
   if (c.verdict === 'resolved' && c.confidence >= 0.75) {
-    proposalRaised = raiseMatterResolveProposal(
-      { ...matter, currentSummary: newSummary, nextAction: newNextAction, version: matter.version + 1, updatedAt: now },
-      {
-        why: `AI 自主排查发现这件事疑似已完成：${clip(factLine, 100)}。确认后该事项标记为已解决、相关催办卡自动清除。`,
-        suggestedAction: '确认办结，或忽略保持跟进',
-      }
-    );
+    proposalRaised = raiseMatterResolveProposal(proposalMatter, {
+      why: `AI 自主排查发现这件事疑似已完成：${clip(factLine, 100)}。确认后该事项标记为已解决、相关催办卡自动清除。`,
+      suggestedAction: '确认办结，或忽略保持跟进',
+    });
+  } else if ((c.verdict === 'progressed' || c.verdict === 'blocked') && c.confidence >= 0.6) {
+    // MVP40：progressed/blocked 是 AI 对"跟进进展"的完整答复 → 升「进展回执」卡（不再只埋摘要）。
+    // 把可认可的自主完成事件从仅 resolved（~4%）扩到 ~32%。
+    proposalRaised = raiseMatterProgressProposal(proposalMatter, {
+      verdict: c.verdict,
+      factSummary: factLine,
+      evidence: c.evidence,
+      confidence: c.confidence,
+    });
   }
 
   try {
