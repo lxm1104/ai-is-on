@@ -9,7 +9,6 @@ import {
   postCardCorrection,
   postContextFeedback,
   previewImReply,
-  postImReply,
   postCardLarkDoc,
   type AttentionConversation,
   type AttentionOriginItem,
@@ -125,21 +124,18 @@ export function SignalCardView(props: {
     }
   }
 
-  async function sendReply() {
+  // 公司策略不允许 AI 代发飞书 IM —— AI 只起草，用户复制后自行发送。
+  async function copyReply() {
     if (!replyText.trim()) {
       setReplyErr('回复内容不能为空');
       return;
     }
-    setReplyBusy(true);
-    setReplyErr(null);
     try {
-      await postImReply({ cardId: card.id, text: replyText.trim() });
+      await navigator.clipboard.writeText(replyText.trim());
       setReplySent(true);
       setReplyOpen(false);
-    } catch (e) {
-      setReplyErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setReplyBusy(false);
+    } catch {
+      setReplyErr('复制失败，请手动选中草稿复制');
     }
   }
 
@@ -473,9 +469,9 @@ export function SignalCardView(props: {
               className="btn btn--card btn--reply"
               disabled={replyBusy}
               onClick={() => void openReply()}
-              title="由 AI 代你在飞书发送回复（发送前你会先看到回复给谁）"
+              title="AI 起草一条回复（含回复给谁），你复制后自行在飞书发送（公司策略不允许 AI 代发）"
             >
-              {replyBusy ? '解析中…' : '🤖 代我回复飞书'}
+              {replyBusy ? '解析中…' : '🤖 AI 起草回复'}
             </button>
           ) : (
             <div className="card__reply-panel">
@@ -495,7 +491,7 @@ export function SignalCardView(props: {
                     value={replyText}
                     onChange={(e) => setReplyText(e.target.value)}
                     rows={3}
-                    placeholder="编辑要发送到飞书的回复…"
+                    placeholder="编辑回复草稿…（复制后到飞书手动发送）"
                   />
                 </>
               )}
@@ -505,9 +501,9 @@ export function SignalCardView(props: {
                     type="button"
                     className="btn btn--card btn--reply-send"
                     disabled={replyBusy || !replyText.trim()}
-                    onClick={() => void sendReply()}
+                    onClick={() => void copyReply()}
                   >
-                    {replyBusy ? '发送中…' : '确认发送'}
+                    复制草稿
                   </button>
                 )}
                 <button
@@ -526,7 +522,7 @@ export function SignalCardView(props: {
           )}
         </div>
       )}
-      {replySent && <p className="card__reply-sent">✓ 已通过飞书发送回复</p>}
+      {replySent && <p className="card__reply-sent">✓ 已复制草稿，去飞书粘贴发送即可</p>}
       {/* MVP35：AI 起草并新建飞书文档（内部可逆） */}
       {isAttention && !docResult && (
         <div className="card__doc">

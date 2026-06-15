@@ -118,75 +118,16 @@ test('T3 无可回复 IM 消息 → 抛错', () => {
   assert.throws(() => previewImReply(attnId), /无法定位飞书会话/);
 });
 
-test('T4 confirm=false → 拒绝发送', async () => {
-  const ev = mkImEvent({ chatId: 'oc_c', chatName: 'C群', messageId: 'om_c1' });
-  const attnId = mkAttn({ signalIds: [mkUnitForEvent(ev)] });
-  const { run } = stubCli();
-  await assert.rejects(
-    () => sendImReplyFromCard({ cardId: attnId, text: '好的', confirm: false }, { runLarkCli: run }),
-    /confirm is required/
-  );
-});
-
-test('T5 空内容 → 拒绝发送', async () => {
-  const ev = mkImEvent({ chatId: 'oc_d', chatName: 'D群', messageId: 'om_d1' });
+test('T4 公司策略：sendImReplyFromCard 一律硬禁、绝不真发（起草走 preview，用户手动发）', async () => {
+  const ev = mkImEvent({ chatId: 'oc_e', chatName: 'E群', messageId: 'om_e1' });
   const attnId = mkAttn({ signalIds: [mkUnitForEvent(ev)] });
   const { run, calls } = stubCli();
   await assert.rejects(
-    () => sendImReplyFromCard({ cardId: attnId, text: '   ', confirm: true }, { runLarkCli: run }),
-    /回复内容为空/
+    () => sendImReplyFromCard({ cardId: attnId, text: '收到', confirm: true }, { runLarkCli: run }),
+    /公司策略不允许 AI 代发飞书消息/
   );
-  assert.equal(calls.length, 0, '空内容不得触发任何 lark-cli 调用');
-});
-
-test('T6 正常发送：lark-cli 参数正确 + 回写 action_result + 挂 matter + 卡片 acted', async () => {
-  const ev = mkImEvent({ chatId: 'oc_e', chatName: 'E群', messageId: 'om_e1', actor: '王五', text: '在等你确认' });
-  const unit = mkUnitForEvent(ev);
-  const matter = ms.createMatter({
-    scope: 'work', type: 'follow_up', title: '回复王五', canonicalKey: `k-${randomUUID()}`,
-    createdFromContextUnitId: unit,
-  });
-  const attnId = mkAttn({ signalIds: [unit], matterId: matter.id });
-  const { run, calls } = stubCli();
-
-  const res = await sendImReplyFromCard({ cardId: attnId, text: '收到，今天给你', confirm: true }, { runLarkCli: run });
-
-  // lark-cli 参数：回复指定消息 + 幂等键 + 正文
-  assert.equal(calls.length, 1);
-  const args = calls[0];
-  assert.deepEqual(args.slice(0, 4), ['im', '+messages-reply', '--message-id', 'om_e1']);
-  assert.ok(args.includes('--text') && args[args.indexOf('--text') + 1] === '收到，今天给你');
-  assert.ok(args.includes('--idempotency-key'));
-
-  assert.equal(res.ok, true);
-  assert.equal(res.sentMessageId, 'om_sent_123');
-  assert.equal(res.target.chatId, 'oc_e');
-
-  // 回写：action_result unit 存在
-  const resultUnit = cs.getContextUnitById(res.resultUnitId);
-  assert.ok(resultUnit, 'action_result unit 应落库');
-  assert.equal(resultUnit!.kind, 'action_result');
-
-  // matter 上有证据链接
-  const links = ms.listMatterContextLinks(matter.id);
-  assert.ok(links.some((l) => l.contextUnitId === res.resultUnitId), 'matter 应挂上回复证据');
-
-  // attention 卡片置 acted
-  assert.equal(getAttentionItem(attnId)!.status, 'acted');
-});
-
-test('T7 幂等键稳定：同卡片同文案两次发送 → 相同 idempotency-key（Feishu 端去重）', async () => {
-  const ev = mkImEvent({ chatId: 'oc_f', chatName: 'F群', messageId: 'om_f1' });
-  const unit = mkUnitForEvent(ev);
-  const attnId = mkAttn({ signalIds: [unit] });
-  const a = stubCli();
-  await sendImReplyFromCard({ cardId: attnId, text: '同一句话', confirm: true }, { runLarkCli: a.run });
-  const attnId2 = mkAttn({ signalIds: [unit] });
-  const b = stubCli();
-  await sendImReplyFromCard({ cardId: attnId2, text: '同一句话', confirm: true }, { runLarkCli: b.run });
-  const keyA = a.calls[0][a.calls[0].indexOf('--idempotency-key') + 1];
-  const keyB = b.calls[0][b.calls[0].indexOf('--idempotency-key') + 1];
-  // 不同卡片 → 不同 key（按 sourceRefId+text 派生）；这里验证 key 存在且为 32 位 hex
-  assert.match(keyA, /^[0-9a-f]{32}$/);
-  assert.match(keyB, /^[0-9a-f]{32}$/);
+  assert.equal(calls.length, 0, '绝不调 lark-cli 发送');
+  // 起草通道（preview，解析"回复给谁"+草稿）仍可用——这是 IM 这块保留的价值
+  const { target } = previewImReply(attnId);
+  assert.equal(target.chatId, 'oc_e');
 });
