@@ -5,8 +5,31 @@ import { listInducers } from '../structure/inducerRegistry.js';
 import { getMatterById, listMatterEntities } from '../matter/matterStore.js';
 import { runInvestigation } from '../investigation/investigationLoop.js';
 import { applyInvestigationResult } from '../investigation/investigationWriteback.js';
+import { runInvestigationDispatchTick } from '../investigation/investigationDispatcher.js';
+import { captureInvestigationTrace } from '../playbook/playbookCapture.js';
+import { config } from '../config.js';
 
 export const debugRouter = Router();
+
+// MVP36：查自主排查 dispatcher 状态（确认试运行是否开启）。
+debugRouter.get('/debug/investigation/status', (_req, res) => {
+  res.json({
+    enabled: config.investigationDispatchEnabled,
+    tickMs: config.investigationTickMs,
+    cooldownMs: config.investigationCooldownMs,
+    maxRounds: config.investigationMaxRounds,
+  });
+});
+
+// MVP36：手动立即跑一次 dispatcher tick（不等定时器；试运行验证用）。
+debugRouter.post('/debug/investigation/tick', async (_req, res) => {
+  try {
+    const dispatched = await runInvestigationDispatchTick();
+    res.json({ ok: true, dispatched });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
 
 // MVP36：在真实 matter 上跑一次「自主排查」（硬只读，安全）。手动验证用。
 debugRouter.post('/debug/investigation/run', async (req, res) => {
@@ -36,6 +59,9 @@ debugRouter.post('/debug/investigation/run', async (req, res) => {
     if (body.apply === true) {
       const toolSummary = result.toolLog.map((l) => `${l.tool}:${l.ok ? l.summary : '失败'}`).join('；');
       writeback = applyInvestigationResult({ matterId, conclusion: result.conclusion, toolSummary });
+      try {
+        captureInvestigationTrace(m, result);
+      } catch {}
     }
     res.json({ ok: true, matter: { id: matterId, title: m.title, nextAction: m.nextAction }, ...result, writeback });
   } catch (err) {

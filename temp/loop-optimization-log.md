@@ -19,6 +19,23 @@ MVP31 生产验证负例（第 16 轮·会话 A：判定「未完成」→ 正�
 
 ## 迭代记录
 
+### 2026-06-15 第 30 轮：开启排查试运行 + 能力二地基（操作流程落库）+ 提交
+
+- **用户批准**：开启能力一真实试运行（`INVESTIGATION_DISPATCH_ENABLED=true` 写入 .env）；继续建能力二；提交代码。
+- **开启 dispatcher**：.env 置 true（重启生效，`GET /api/debug/investigation/status` 实测 enabled:true）；
+  新增 `POST /api/debug/investigation/tick`（手动立即跑一次派发，便于观察试运行）。
+- **代码提交**：b435c8d —— 累积 rounds 22-29 + 之前未提交工作（执行腿 MVP34/35、自主排查 MVP36、next_action、
+  负反馈压制等），全量 583 绿时提交（.env 已 gitignore，未提交密钥）。
+- **能力二地基（MVP37，操作流程落库，零放权风险）**：
+  - `playbook/PlaybookTypes.ts`：TaskTrace/TaskPlaybook 类型 + **中粒度 taskTypeKey**（matterType:粗意图，
+    跨不同人/项目累积，避开 canonicalKey 太细→样本永不够的坑）+ coarseIntent（verify/reply/deliver/chase/...）。
+  - `playbook/playbookStore.ts`：task_traces + task_playbooks 两表 CRUD（db.ts 加 CREATE TABLE）。
+  - `playbook/playbookCapture.ts`：把自主排查的 toolLog（已结构化、全保真，比聊天截断数据强）转成有序 TraceStep 落库；
+    接入 dispatcher + 调试路由——每次排查后自动采集"这次怎么查的"。
+- **验证**：tsc ✓；新增 MVP37 4 测（归类键/轨迹存取/playbook upsert/排查→轨迹）；**全量 587/587 全绿**。
+- **下一步（能力二剩余）**：蒸馏（同类轨迹 ≥N → LLM 蒸馏成 playbook，suggest 档）+ 召回匹配（新卡命中 playbook
+  → 注入 buildRichAskAgentPrompt 当推荐步骤）+ 放权升降档（成功/纠正信号驱动，套 correctionWriter 可撤销范式）。
+
 ### 2026-06-15 第 29 轮：能力一收尾 —— 结论回写 + 自主 dispatcher（MVP36 能力一完整）
 
 - **结论回写**（`investigation/investigationWriteback.ts`）：把排查结论**安全**落到 matter——① 事实+证据写成

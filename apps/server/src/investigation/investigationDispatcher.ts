@@ -13,6 +13,7 @@ import { listMatters, listMatterEntities } from '../matter/matterStore.js';
 import type { Matter } from '../matter/matterTypes.js';
 import { runInvestigation } from './investigationLoop.js';
 import { applyInvestigationResult } from './investigationWriteback.js';
+import { captureInvestigationTrace } from '../playbook/playbookCapture.js';
 
 // deriveDefaultNextAction 的兜底文案——这些太泛，不值得自动排查（要具体的"确认X是否…"才查）。
 const GENERIC_NEXT_ACTIONS = new Set([
@@ -106,6 +107,12 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
     });
     const toolSummary = result.toolLog.map((l) => `${l.tool}:${l.ok ? l.summary : '失败'}`).join('；');
     applyInvestigationResult({ matterId: candidate.id, conclusion: result.conclusion, toolSummary });
+    // 能力二：把"这次怎么查的"落成操作轨迹（纯采集，供后续蒸馏 playbook）
+    try {
+      captureInvestigationTrace(candidate, result);
+    } catch (err) {
+      console.warn('[playbook] capture trace failed:', err instanceof Error ? err.message : String(err));
+    }
     console.log(
       `[investigation] 排查 matter=${candidate.id.slice(0, 8)} "${candidate.title.slice(0, 20)}" → ` +
         `${result.conclusion.verdict}(${result.conclusion.confidence.toFixed(2)}) ${result.rounds}轮`

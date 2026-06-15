@@ -565,6 +565,39 @@ ensureColumn('boundary_rules', 'autonomy', "TEXT NOT NULL DEFAULT 'local_with_au
 ensureColumn('boundary_rules', 'reversible', 'INTEGER NOT NULL DEFAULT 1');
 ensureColumn('boundary_rules', 'impact_scope', "TEXT NOT NULL DEFAULT 'self'");
 
+// MVP37 能力二「流程记忆」：操作轨迹（一次任务怎么做的）+ 蒸馏出的 playbook（这类任务标准步骤）。
+// task_traces：从真实处理（排查 toolLog / 执行动作）采集的有序步骤，按 task_type_key 归类，是蒸馏原料。
+// task_playbooks：同类轨迹蒸馏出的可复用流程；tier=suggest(只建议)/semi_auto/auto（渐进放权，先只 suggest）。
+db.exec(`
+CREATE TABLE IF NOT EXISTS task_traces (
+  id TEXT PRIMARY KEY,
+  task_type_key TEXT NOT NULL,
+  matter_id TEXT,
+  source TEXT NOT NULL,                 -- 'investigation' | 'execution' | 'chat'
+  title TEXT NOT NULL,
+  steps_json TEXT NOT NULL,             -- TraceStep[]：{order,kind,tool?,summary,params?}
+  outcome TEXT,                         -- 结论/结果摘要（如 resolved/progressed/已发送）
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_traces_type ON task_traces(task_type_key, created_at);
+CREATE INDEX IF NOT EXISTS idx_task_traces_matter ON task_traces(matter_id);
+
+CREATE TABLE IF NOT EXISTS task_playbooks (
+  id TEXT PRIMARY KEY,
+  task_type_key TEXT NOT NULL UNIQUE,
+  title TEXT NOT NULL,
+  steps_json TEXT NOT NULL,             -- PlaybookStep[]：{order,intent,toolHint?,note}
+  tier TEXT NOT NULL DEFAULT 'suggest', -- 'suggest' | 'semi_auto' | 'auto'
+  trace_count INTEGER NOT NULL DEFAULT 0,
+  success_count INTEGER NOT NULL DEFAULT 0,
+  correction_count INTEGER NOT NULL DEFAULT 0,
+  confidence REAL NOT NULL DEFAULT 0.5,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`);
+
 // MVP12: context_space_links 加 reason_json，记录这条 link 的命中路径
 // （via='person'|'doc'|'chat_seed' ...）。upsertContextSpaceLinkBestHit cap 5 条 evidence。
 ensureColumn('context_space_links', 'reason_json', 'TEXT');
