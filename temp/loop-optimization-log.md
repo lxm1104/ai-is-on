@@ -681,3 +681,21 @@ runtime_status 只在变化时 WS 推送，页面加载/重连晚于 ready 广�
   （im coveredUntil 落后 13min 排水中）。
 - **事故自愈**：把 im 水位拨回 2026-06-11T03:55:40Z（水位回拨=免费补扫能力），等多轮 tick
   排干后周强会话应入库 → triage → reducer/consumer 推进 matter 04ce4f28。
+
+### 2026-06-16 第 43 轮：MVP43 —— signal 集合去重兜底（残留近似重复的真凶）
+
+- **证据**：体检真实库 132 张 live 卡里 **107 张(81%) matterId=null**。按 signal 集合分组发现
+  巨量近似重复：同一信号源 `["a8ddad98"]` 竟 **18 张并存**（"trigger 聚合方案"每 30–90 分换一种
+  措辞重发：待文档化/待沉淀/待落档/待落地…），`["e2a79cc0","40d93bf1"]` 14 张、`["79421b03",…]` 9 张。
+  按 signal 集合精确相等可压掉 69 张。
+- **根因**：churn-guard 的 `findEquivalentLive` 本应按 signal-set 命中丢弃新卡，但历史卡在 MVP41
+  `allLive=2000` 修复前用 12 张快照、超 12 即失明 → 累积；而 MVP41 的 collapse 兜底只按
+  matterId / 归一化标题，这些 null-matter、措辞各异的卡两条路都漏。
+- **修复**：collapse 兜底加 step ③——null-matter、非提案卡按 **signal 集合排序归一化**
+  (`[...].sort().join(',')`，对齐 contentEquivalent；实测库里有同集合反序的 `["6733e0a3","cd30bf36"]`
+  vs `["cd30bf36","6733e0a3"]`，纯 SQL 字符串匹配会漏 → 走 JS 归一化) 只留最新一张。精确集合相等
+  （非部分重叠）保守：仅整组 signal 一致才合并。提案/system 卡免疫。
+- **验证**：mvp41 测试 +3（同 signal 留最新 / 反序也合并 / 提案不被合并）共 7 passing；全量 ✓。
+  真实库一次清理 **132 → 62 张 live（清 70），null-matter 107 → 37**，残留零同 signal 重复。
+  幂等，引擎每 tick 自动兜底，未来漏网即清。
+- 只提交自己的文件（db.ts / mvp41 测试 / log）；未碰并行会话的 readTools.ts / config.ts。

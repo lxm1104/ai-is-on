@@ -2973,7 +2973,41 @@ export function collapseDuplicateLiveCardsByMatter(updatedAt: string): number {
          )`
     )
     .run(updatedAt);
-  return r1.changes + r2.changes;
+  // ③ 无 matterId 的卡按 **signal 集合**（排序归一化，对齐 churn-guard contentEquivalent 的
+  //    [...].sort().join(',')）只留最新一张。LLM 每轮给同一信号源换措辞重发、标题不同又不链
+  //    matter → 归一化标题(②)兜不住（实测同 signal「trigger 聚合方案」18 张并存）。signalId 稳定，
+  //    精确集合相等（非部分重叠）足够保守：仅当整组 signal 一致才合并。
+  const sigRows = db
+    .prepare(
+      `SELECT id, signal_ids_json, created_at FROM attention_items
+       WHERE status='live' AND matter_id IS NULL AND ${notProposal}
+         AND signal_ids_json IS NOT NULL AND signal_ids_json NOT IN ('[]','')`
+    )
+    .all() as Array<{ id: string; signal_ids_json: string; created_at: string }>;
+  const bySig = new Map<string, Array<{ id: string; created_at: string }>>();
+  for (const row of sigRows) {
+    let key: string;
+    try {
+      const arr = JSON.parse(row.signal_ids_json) as unknown;
+      if (!Array.isArray(arr) || arr.length === 0) continue;
+      key = [...arr].sort().join(','); // 排序归一化：同集合不同序也命中
+    } catch {
+      continue;
+    }
+    const list = bySig.get(key) ?? [];
+    list.push({ id: row.id, created_at: row.created_at });
+    bySig.set(key, list);
+  }
+  const supersedeOne = db.prepare(
+    `UPDATE attention_items SET status='superseded', updated_at=? WHERE id=? AND status='live'`
+  );
+  let r3 = 0;
+  for (const list of bySig.values()) {
+    if (list.length <= 1) continue;
+    list.sort((a, b) => b.created_at.localeCompare(a.created_at)); // 最新在前
+    for (const row of list.slice(1)) r3 += supersedeOne.run(updatedAt, row.id).changes;
+  }
+  return r1.changes + r2.changes + r3;
 }
 
 /**
