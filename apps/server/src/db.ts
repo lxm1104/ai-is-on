@@ -2930,17 +2930,25 @@ export function hasLiveMatterProposal(matterId: string): boolean {
     .get(matterId);
 }
 
-/** MVP42：某 matter 最近几次自主排查的 verdict（最新在前），用于止损判定。 */
-export function getRecentInvestigationVerdicts(matterId: string, limit = 3): string[] {
+/**
+ * MVP42：某 matter 最近几次自主排查的结论（最新在前），用于止损判定。
+ * 带 confidence：止损要区分「飞书真查不到」(conf>0 的真 unknown) 与「排查器空转/工具报错」
+ * (conf=0 退化哨兵，investigationPrompt.ts) —— 后者是瞬时失败、该重试，不能算进永久放弃（MVP45）。
+ */
+export function getRecentInvestigationVerdicts(
+  matterId: string,
+  limit = 3
+): Array<{ verdict: string; confidence: number }> {
   return (
     db
       .prepare(
-        `SELECT json_extract(payload_json,'$.verdict') v FROM audit_logs
+        `SELECT json_extract(payload_json,'$.verdict') v, json_extract(payload_json,'$.confidence') c
+         FROM audit_logs
          WHERE action='investigation_written_back' AND json_extract(payload_json,'$.matterId')=?
          ORDER BY created_at DESC LIMIT ?`
       )
-      .all(matterId, limit) as Array<{ v: string }>
-  ).map((r) => r.v);
+      .all(matterId, limit) as Array<{ v: string; c: number | null }>
+  ).map((r) => ({ verdict: r.v, confidence: typeof r.c === 'number' ? r.c : 0 }));
 }
 
 export function collapseDuplicateLiveCardsByMatter(updatedAt: string): number {

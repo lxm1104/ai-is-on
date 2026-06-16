@@ -81,13 +81,26 @@ test('select：非 open/in_progress 不选；无 worthy → null', () => {
 // MVP42：止损门
 import { isStuckOnUnknowns } from '../src/investigation/investigationDispatcher.js';
 
-test('isStuckOnUnknowns：近2次都 unknown → true；有非 unknown → false', () => {
-  assert.equal(isStuckOnUnknowns(['unknown', 'unknown', 'unknown']), true);
-  assert.equal(isStuckOnUnknowns(['unknown', 'unknown']), true);
-  assert.equal(isStuckOnUnknowns(['progressed', 'unknown']), false); // 最新非 unknown
-  assert.equal(isStuckOnUnknowns(['unknown', 'progressed']), false); // 第2次非 unknown
-  assert.equal(isStuckOnUnknowns(['unknown']), false); // 不足 2 次
+const u = (c: number) => ({ verdict: 'unknown', confidence: c });
+const v = (verdict: string, c: number) => ({ verdict, confidence: c });
+
+test('isStuckOnUnknowns：近2次都真 unknown(conf>0) → true；有非 unknown → false', () => {
+  assert.equal(isStuckOnUnknowns([u(0.3), u(0.2), u(0.2)]), true);
+  assert.equal(isStuckOnUnknowns([u(0.3), u(0.2)]), true);
+  assert.equal(isStuckOnUnknowns([v('progressed', 0.8), u(0.3)]), false); // 最新非 unknown
+  assert.equal(isStuckOnUnknowns([u(0.3), v('progressed', 0.8)]), false); // 第2次非 unknown
+  assert.equal(isStuckOnUnknowns([u(0.3)]), false); // 不足 2 次
   assert.equal(isStuckOnUnknowns([]), false);
+});
+
+test('isStuckOnUnknowns：conf=0 退化哨兵(排查器空转/工具报错)不算止损 → 重试', () => {
+  // 实测 2e48e9fb / c70abecf：两次 conf0 退化、从没真查过 → 不该被永久放弃
+  assert.equal(isStuckOnUnknowns([u(0), u(0)]), false);
+  assert.equal(isStuckOnUnknowns([u(0), u(0), u(0)]), false);
+  // 退化 + 1 真 unknown → 真 unknown 不足 2 个 → 重试
+  assert.equal(isStuckOnUnknowns([u(0), u(0), u(0.3)]), false);
+  // 退化夹在真 unknown 中间，仍有 2 个真 unknown → 止损
+  assert.equal(isStuckOnUnknowns([u(0), u(0.3), u(0.3)]), true);
 });
 
 test('select：shouldSkip 命中的事项被跳过（已有提案/查不清）', () => {

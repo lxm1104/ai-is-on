@@ -47,10 +47,18 @@ export function isInvestigationWorthy(input: { title?: string; nextAction?: stri
 
 const PRIO_RANK: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
 
-/** 止损（纯函数）：近 N(默认2) 次排查都是 unknown → 飞书查不清，退避不再空查。 */
-export function isStuckOnUnknowns(recentVerdicts: string[], n = 2): boolean {
-  if (recentVerdicts.length < n) return false;
-  return recentVerdicts.slice(0, n).every((v) => v === 'unknown');
+/**
+ * 止损（纯函数）：近 N(默认2) 次排查都是**真** unknown → 飞书查不清，退避不再空查。
+ * 只数 confidence>0 的真 unknown：conf=0 是排查器空转/工具报错的退化哨兵（瞬时失败），
+ * 不能算进永久放弃（实测 2 个 matter 因两次 conf0 退化被误背刺、从没真查过 → MVP45）。
+ */
+export function isStuckOnUnknowns(
+  recent: Array<{ verdict: string; confidence: number }>,
+  n = 2
+): boolean {
+  const genuine = recent.filter((r) => !(r.verdict === 'unknown' && r.confidence <= 0));
+  if (genuine.length < n) return false;
+  return genuine.slice(0, n).every((r) => r.verdict === 'unknown');
 }
 
 /**

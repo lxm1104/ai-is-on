@@ -717,3 +717,19 @@ runtime_status 只在变化时 WS 推送，页面加载/重连晚于 ready 广�
   open matter（新事项，非 bug）。幂等，引擎每 tick 自动回链。
 - 只提交自己的文件（db.ts / attentionEngine.ts / attentionStore.ts / mvp44 测试 / log）；
   未碰并行会话 readTools.ts / config.ts。
+
+### 2026-06-16 第 45 轮：MVP45 —— 止损门不再被退化型 unknown 误背刺（救回被错弃的 matter）
+
+- **证据**：体检完成漏斗发现 48 次排查里 26 个 unknown（54%）。task_traces 拆解：4/22 是
+  bug 类失败（2 个"排查器未给出有效动作" conf=0 退化空转 + 2 个"文档读取内部错误"工具报错），
+  其余 18 个是飞书真查不到（需外部系统，属并行会话 run_command 领域，不重复）。
+  关键实锤：audit 里 `2e48e9fb`、`c70abecf` 近两次都是 `unknown@0`（conf=0 退化哨兵，
+  investigationPrompt.ts:186），MVP42 止损门只看 verdict 字符串、把"排查器空转"误当"飞书查不清"
+  → 这 2 个 matter 从没真查过就被永久放弃（`2e48e9fb` 历史里其实有 `blocked@0.7` 有效结论）。
+- **修复（MVP45）**：getRecentInvestigationVerdicts 改返回 `{verdict,confidence}`；
+  isStuckOnUnknowns 只数 **conf>0 的真 unknown**——conf=0 退化/工具报错是瞬时失败、该重试，
+  不计入永久放弃。纯函数，保守（夹在真 unknown 中间的退化项不救场）。
+- **验证**：dispatcher 测试 +1（conf0 退化不止损）共 9 passing；tsc ✓；全量 ✓。真实库走查：
+  `2e48e9fb`/`c70abecf` → stuck=false（救回重试），`72136ab6`(0.25/0.15)/`bb858dee`(0.6/0.55)
+  → stuck=true（真查不清，仍正确退避）。被错弃的 matter 重获排查机会 → 可能转 meaningful → 抬 COUNT。
+- 只提交自己的文件（db.ts / investigationDispatcher.ts / mvp36 测试 / log）；未碰 readTools/config。
