@@ -699,3 +699,21 @@ runtime_status 只在变化时 WS 推送，页面加载/重连晚于 ready 广�
   真实库一次清理 **132 → 62 张 live（清 70），null-matter 107 → 37**，残留零同 signal 重复。
   幂等，引擎每 tick 自动兜底，未来漏网即清。
 - 只提交自己的文件（db.ts / mvp41 测试 / log）；未碰并行会话的 readTools.ts / config.ts。
+
+### 2026-06-16 第 44 轮：MVP44 —— 确定性回链兜底（漏链卡进闭环 + 接力去重）
+
+- **证据**：MVP43 清完仍有 37 张 null-matter live 卡。实测 signalIds **就是 context_units.id**，
+  而 matter_context_links 直接连 matter↔context_unit（reducer 按真实证据建、带 confidence）。
+  逐张反查：其中 10 张能经此关联到唯一 open/in_progress matter；1 张（"Coding agent 权限修复/
+  沙箱Excel"）映射到 2 个 open matter（歧义，实测存在 → 必须 exactly-one 守卫，幸亏先验证）。
+- **价值**：① 让 LLM 漏链的卡进入「排查→提案→办结」闭环（直接抬升"AI 自主完成任务数"指标）；
+  ② 回链后多张同 matter 卡触发 collapse 的 matterId 去重接力（抬升满意度）。
+- **修复（MVP44）**：db `backfillMatterIdFromContextLinks`——null-matter 非提案 live 卡，按其
+  signal(context_unit) 经 matter_context_links 找 open matter，**仅当唯一**才写回 matter_id；
+  歧义/仅 resolved/无关联 → 保守保持 null。attentionEngine step 8.4：先回链再 collapse(8.5)。
+- **验证**：新增 mvp44 测试 5 个（唯一回链 / 歧义跳过 / 仅 resolved 跳过 / 提案卡不动 /
+  回链后 collapse 接力去重）；全量 621 passing。真实库一次跑：**回链 10 张(null-matter 37→27)、
+  collapse 接力再去 4 张、live 62→58**；残留可链仅剩 1 张歧义卡（正确跳过），其余 26 张确无
+  open matter（新事项，非 bug）。幂等，引擎每 tick 自动回链。
+- 只提交自己的文件（db.ts / attentionEngine.ts / attentionStore.ts / mvp44 测试 / log）；
+  未碰并行会话 readTools.ts / config.ts。

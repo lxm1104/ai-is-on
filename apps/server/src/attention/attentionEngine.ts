@@ -32,6 +32,7 @@ import {
   insertAttentionItem,
   listLiveAttentionItems,
   collapseDuplicateLiveCardsByMatter,
+  backfillMatterIdFromContextLinks,
   markAttentionItemsSupersededByHash,
   markAttentionItemsSupersededForResolvedMatters,
   markAttentionItemsExpired,
@@ -404,6 +405,13 @@ async function doRunAttentionTick(
       llmItem: it,
       now: persistAt,
     });
+  }
+
+  // 8.4) MVP44 回链兜底：LLM 漏链的 null-matter 卡，按 signal→matter_context_links 关联到唯一
+  //      open matter 写回 matter_id（进闭环 + 让下一步 collapse 按 matterId 去重）。先回链再 collapse。
+  const linked = backfillMatterIdFromContextLinks(persistAt);
+  if (linked > 0) {
+    console.log(`[attention] 回链兜底 ${linked} 张 null-matter 卡 → 已有 matter`);
   }
 
   // 8.5) MVP41 去重兜底：同 matter 的非提案 live 卡只留最新一张（清掉历史并存 + churn-guard 漏网的）。

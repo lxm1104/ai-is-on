@@ -3011,6 +3011,49 @@ export function collapseDuplicateLiveCardsByMatter(updatedAt: string): number {
 }
 
 /**
+ * 确定性回链兜底：把 matterId=null 的 live 卡，按其 signal(=context_unit id) 经
+ * matter_context_links 关联到 **唯一** open/in_progress matter → 写回 matter_id。
+ * 让 LLM 漏链的卡进入「排查→提案→办结」闭环，并触发 collapse 的 matterId 去重接力。
+ * 歧义（signal 映射到 >1 个 open matter，实测存在）保守跳过、保持 null。提案/system 卡不动。
+ * signalIds 实为 context_units.id（实测）；关联线由 reducer 按真实证据(带 confidence)建，非猜测。
+ */
+export function backfillMatterIdFromContextLinks(updatedAt: string): number {
+  const rows = db
+    .prepare(
+      `SELECT id, signal_ids_json FROM attention_items
+       WHERE status='live' AND matter_id IS NULL
+         AND input_hash NOT LIKE 'proposal:%' AND input_hash NOT LIKE 'system:%'
+         AND signal_ids_json IS NOT NULL AND signal_ids_json NOT IN ('[]','')`
+    )
+    .all() as Array<{ id: string; signal_ids_json: string }>;
+  const mattersForUnit = db.prepare(
+    `SELECT DISTINCT mcl.matter_id AS matter_id FROM matter_context_links mcl
+       JOIN matters m ON m.id=mcl.matter_id
+      WHERE mcl.context_unit_id=? AND m.status IN ('open','in_progress')`
+  );
+  const setMatter = db.prepare(
+    `UPDATE attention_items SET matter_id=?, updated_at=? WHERE id=? AND status='live' AND matter_id IS NULL`
+  );
+  let linked = 0;
+  for (const row of rows) {
+    let units: string[];
+    try {
+      const arr = JSON.parse(row.signal_ids_json) as unknown;
+      if (!Array.isArray(arr) || arr.length === 0) continue;
+      units = arr.filter((x): x is string => typeof x === 'string');
+    } catch {
+      continue;
+    }
+    const matched = new Set<string>();
+    for (const u of units) {
+      for (const r of mattersForUnit.all(u) as Array<{ matter_id: string }>) matched.add(r.matter_id);
+    }
+    if (matched.size === 1) linked += setMatter.run([...matched][0], updatedAt, row.id).changes; // 仅唯一才回链
+  }
+  return linked;
+}
+
+/**
  * TTL 兜底：把 created_at < beforeIso 的 live 项标 'expired'。
  * 防 LLM 漏写 supersedeIds 导致跨 hash 的旧 item 永久堆积。
  */
