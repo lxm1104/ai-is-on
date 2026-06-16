@@ -34,6 +34,7 @@ import { CHAT_CONCLUSION_SYSTEM_PROMPT } from '../matter/chatConclusionPrompt.js
 import { MATTER_VERIFY_SYSTEM_PROMPT } from '../matter/matterVerifyPrompt.js';
 import { INVESTIGATE_SYSTEM_PROMPT, renderToolsDoc } from '../investigation/investigationPrompt.js';
 import { PLAYBOOK_DISTILL_SYSTEM_PROMPT } from '../playbook/playbookDistillPrompt.js';
+import { PROJECT_ROUTER_SYSTEM } from '../investigation/projectRouterPrompt.js';
 import { listReadTools } from '../investigation/readTools.js';
 
 export type OpencodeAgentName =
@@ -55,7 +56,8 @@ export type OpencodeAgentName =
   | 'aiisn-chat-conclusion'
   | 'aiisn-matter-verify'
   | 'aiisn-investigate'
-  | 'aiisn-playbook-distill';
+  | 'aiisn-playbook-distill'
+  | 'aiisn-project-router';
 
 type Permission = 'allow' | 'ask' | 'deny';
 type AgentDef = {
@@ -196,6 +198,13 @@ const AGENTS: readonly AgentDef[] = [
     description: 'AI is ON MVP37 流程蒸馏器（同类轨迹 → 标准 playbook 草稿）',
     permission: READ_ONLY,
     prompt: PLAYBOOK_DISTILL_SYSTEM_PROMPT,
+  },
+  {
+    // MVP50 项目归类器：把"这件事属于哪个项目"判清，从而拼对项目档案。纯文本进 JSON 出，全工具 deny。
+    name: 'aiisn-project-router',
+    description: 'AI is ON MVP50 项目归类器（事项 → 候选项目 id，确定性兜底用）',
+    permission: { bash: 'deny', edit: 'deny', write: 'deny', webfetch: 'deny', read: 'deny' },
+    prompt: PROJECT_ROUTER_SYSTEM,
   },
 ];
 

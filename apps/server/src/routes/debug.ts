@@ -9,7 +9,7 @@ import { applyInvestigationResult } from '../investigation/investigationWritebac
 import { runInvestigationDispatchTick } from '../investigation/investigationDispatcher.js';
 import { captureInvestigationTrace } from '../playbook/playbookCapture.js';
 import { matchPlaybookForMatter, renderPlaybookForPrompt } from '../playbook/playbookMatcher.js';
-import { getProjectProfileForMatter } from '../investigation/projectProfile.js';
+import { resolveProjectProfileForMatter } from '../investigation/projectProfile.js';
 import { config } from '../config.js';
 
 export const debugRouter = Router();
@@ -90,7 +90,7 @@ debugRouter.post('/debug/investigation/run', async (req, res) => {
       maxRounds: typeof body.maxRounds === 'number' ? body.maxRounds : 3,
       priority: true, // 手动验证：走 high 队列尽快拿 gate，不被 attention 饿死
       playbookHint: matchedPb ? renderPlaybookForPrompt(matchedPb) : undefined,
-      projectProfile: getProjectProfileForMatter(m) ?? undefined,
+      projectProfile: (await resolveProjectProfileForMatter(m)) ?? undefined,
     });
     let writeback;
     if (body.apply === true) {

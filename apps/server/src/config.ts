@@ -202,6 +202,9 @@ export const config = {
   // run_command 允许触达的根目录（cwd 与路径参数 realpath 后必须落在其中；os.tmpdir() 由代码自动追加）。
   // 默认 ~/MyProject 覆盖 ai-is-on 与 bitable-chatbot 等本地仓库。
   investigationAllowedRoots: envList('INVESTIGATION_ALLOWED_ROOTS', [path.join(os.homedir(), 'MyProject')]),
+  // MVP50 项目路由 AI 兜底：确定性(primarySpaceId/canonical/标题)全落空时，是否打一次轻量 one-shot
+  // 从候选项目里挑一个（按 matterId 缓存）。默认开（用户选了"允许 AI 判断"）；设 false 则只走确定性路由。
+  projectRoutingAiEnabled: envBool('PROJECT_ROUTING_AI_ENABLED', true),
   matterVerifyEnabled: envBool('MATTER_VERIFY_ENABLED', true),
   // mark_done → 核实的延迟。≥ IM collector 一轮（imIntervalMs 默认 3min），
   // 让"刚回的消息"先经 collector → Reducer 挂到 matter_context_links，核实 agent 才看得到。

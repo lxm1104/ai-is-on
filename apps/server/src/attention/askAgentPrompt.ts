@@ -16,7 +16,7 @@ import {
 } from '../db.js';
 import { getMatterById } from '../matter/matterStore.js';
 import { matchPlaybookForMatter, renderPlaybookForPrompt } from '../playbook/playbookMatcher.js';
-import { getProjectProfileForMatter } from '../investigation/projectProfile.js';
+import { getProjectProfileForMatterDeterministic } from '../investigation/projectProfile.js';
 import type { AttentionItem } from './attentionTypes.js';
 import type { ContextUnit } from '../context/ContextUnit.js';
 
@@ -44,7 +44,7 @@ export function buildRichAskAgentPrompt(item: AttentionItem): string {
   if (item.matterId) {
     const matter = getMatterById(matchMatterId(item.matterId) ?? item.matterId);
     if (matter) {
-      const profile = getProjectProfileForMatter(matter);
+      const profile = getProjectProfileForMatterDeterministic(matter);
       if (profile) {
         parts.push('');
         parts.push('【项目背景与做事方法（用户登记）】');

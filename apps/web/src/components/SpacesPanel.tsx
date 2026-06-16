@@ -235,28 +235,31 @@ function ProjectProfileEditor({ space, onSaved }: { space: ContextSpace; onSaved
   return (
     <div className="sp-profile">
       <div className="sp-profile__head">
-        🧭 排查档案
-        <span className="sp-profile__hint">代码库路径、trace 怎么拿(如 fornax-cli)、术语、常见排查套路——AI 排查这个项目时会读它</span>
+        🧭 项目说明 · 做事方法（自然语言）
+        <span className="sp-profile__hint">
+          用一整段自然语言写清这个项目：背景、相关人、代码库/文档链接、术语黑话、常见处理/排查套路。
+          AI 处理本项目的事项时会自动读它（按项目自动匹配，写得越全 AI 越省得从头摸索）。
+        </span>
       </div>
       {!editing ? (
         <>
           {has ? (
             <pre className="sp-profile__text">{space.investigation_profile}</pre>
           ) : (
-            <div className="sp-profile__empty">还没填。补上后 AI 排查本项目事项时就知道去哪查、怎么查。</div>
+            <div className="sp-profile__empty">还没填。把这个项目是什么、怎么处理写成一段自然语言——AI 接手本项目的事项时就照着做，不用每次从零探索。</div>
           )}
           <button type="button" className="btn btn--card" onClick={() => { setText(space.investigation_profile ?? ''); setEditing(true); }}>
-            {has ? '编辑档案' : '＋ 填写档案'}
+            {has ? '编辑项目说明' : '＋ 写项目说明'}
           </button>
         </>
       ) : (
         <>
           <textarea
             className="sp-profile__edit"
-            rows={6}
+            rows={14}
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder={'例如：\n代码库：/Users/xinming/MyProject/bitable-chatbot\nTrace：用 fornax-cli 拿 trace（见 fornax-eval skill）\n术语：xxx 指 ...\n常见排查：先看 IM 群结论，再 grep 代码 / 拉 trace'}
+            placeholder={'用自然语言把这个项目写清楚，例如：\n\n这个项目是什么：……\n相关人：……\n代码库：/Users/xinming/MyProject/bitable-chatbot\n相关文档/链接：……\n术语黑话：xxx 指 ……\nTrace 怎么拿：用 fornax-cli（见 fornax-eval skill）\n常见处理/排查套路：先看 IM 群结论 → 按日志ID查 traceID → fornax 下 trace → grep 代码定位\n上线分支：名称含 release 的分支'}
           />
           {err && <p className="card__reply-err">⚠ {err}</p>}
           <div className="card__reply-actions">
