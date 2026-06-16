@@ -756,3 +756,22 @@ runtime_status 只在变化时 WS 推送，页面加载/重连晚于 ready 广�
   matter 中多个成为净新可认可完成入口。
 - 只改自己的文件（chatConclusionService.ts / matterResolveProposal 复用 / auditLog 加一枚 action / mvp46 测试 /
   log）；未碰并行会话 readTools.ts / config.ts，不涉 IM。
+
+### 2026-06-16 第 47 轮：MVP47 候选「dismiss signal 集合压制」—— 对抗验证后**否决**（不提交）
+
+- **动机**：工作流次选——把负反馈 dismiss 压制从"仅归一化标题精确匹配"加上"signal 集合精确相等"，
+  捕获被 dismiss 后换措辞重生的卡（实测「CLI 开放能力范围」被 dismiss 后换 10+ 措辞重生，
+  历史 join 出 29 张同精确 signal、标题漂移的重生卡）。已实现 + 单测 17 passing + tsc 绿。
+- **对抗验证（3 lens 工作流）否决**：
+  · **误压(medium，真退化)**：isDismissSuppressed 是 matter-blind。同一 signalId(context_unit)在真实库
+    被合法挂到两件不同事——实例 signal cd30bf36 同挂 matter 72136ab6(权限修复上线) 与 3983cceb(沙箱
+    解压报错 bug)。dismiss 其一 → 另一件(不同诉求、同 signal、同 P2)新卡被**误压**。130 张 item 精确
+    signal 集合跨 >1 matter。这是改动**新引入的正确性退化**。
+  · **漏压(high)**：精确集合相等对**当前 live 卡新增压制=0**。真实漂移重生里 signal 集合也每轮变(增删
+    IDs)，26 条 dismiss 两两 EQUAL=0；25.6% 卡 signal 为空、signal 路径完全不覆盖。29 张匹配都已 superseded。
+  · 集成正确性 lens：无缺陷（接线/空集守卫/受保护卡绕过都对）。
+- **决策**：当前数据上"几乎不做事"却"埋了跨 matter 误压的退化"——零收益加风险，**否决、git checkout 还原**。
+  真正修法是 matter/entity 稳定标识做压制锚，但 attention_interactions 无 matter_id 列（26 条里仅 3 条对应
+  卡有 matterId），ROI 低，本轮不做。**教训：signal 集合对"同一事项的重生"不稳定（每轮重排/增删），
+  不能当稳定身份键用于负反馈压制；它只适合「同批/近期精确去重」(collapse/churn-guard 那种)。**
+- 收获：对抗验证工作流拦住了一次本会被裁定者放行（ship:true）但实为净负的改动。无文件改动落库。
