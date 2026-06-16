@@ -12,7 +12,9 @@
  *     （对抗审查 P0-1 实锤：GIT_EXTERNAL_DIFF / GIT_SSH_COMMAND / GIT_CONFIG_* / RIPGREP_CONFIG_PATH /
  *     PAGER / LESSOPEN / LD_PRELOAD / DYLD_* 都能让 git/rg 直接执行任意程序）。
  *  3. 每 CLI 危险面护栏：git（读子命令白名单 + 封 -c/--exec-path/--output 写盘 + branch/tag 删改）、
- *     fornax-cli（读子命令白名单 + 封 auth/config/update + 写动词）、rg（封 --pre/--search-zip 预处理器 RCE）、
+ *     fornax-cli（读子命令白名单 + 封 auth/config/update + 写动词）、
+ *     bytedcli（庞大内部多功能 CLI：顶层只放行 log 只读日志查询家族，挡掉 deploy/release/tce/scm/env… 写/部署族，
+ *       log 下再按读动词 allowlist + 写动词前缀拦截）、rg（封 --pre/--search-zip 预处理器 RCE）、
  *     find/bfs（封 -exec/-delete/-fprint* 等动作谓词）。
  *  4. **路径根限制**：cwd 与所有"看起来是路径"的参数，realpath 解析后必须落在 allowedRoots 内
  *     （封 symlink/.. 逃逸；把"能读哪"从黑名单倒转成白名单 —— 对抗审查 P1-2/P1-3）。叠加敏感文件名黑名单兜底。
@@ -147,6 +149,24 @@ const FORNAX_VALUE_FLAGS = new Set([
   '--byted-jwt-token', '--timeout', '--format', '-o', '--output',
 ]);
 
+// bytedcli（@bytedance-dev/bytedcli）是庞大的内部多功能 CLI——deploy/release/tce/scm/env/tcc/abase… 全是写/部署族。
+// run_command 只放行 **log 只读日志查询家族**（Chatbot 排查"run_log_id→traceID"的键石：先 `bytedcli log search-psm-log`
+// 按关键词解出 trace_id，再喂 fornax-cli）。顶层子命令白名单只含 log，从根上挡掉所有写/部署族；log 下再按
+// 读动词 allowlist + 写动词前缀拦截兜底（即便将来 log 家族新增写子动作）。auth 走 ~/.bytedcli 下的 JWT（靠 HOME，
+// 已在 buildSafeEnv 保留）；BYTEDCLI_* 仅是 base-url 等可选覆盖，有默认值，剔除不影响 log 查询。
+const BYTEDCLI_READ_SUBCMDS = new Set(['log', 'help', 'version']);
+const BYTEDCLI_TERMINAL_SUBCMDS = new Set(['version', 'help']); // 无需子动作
+// log 子动作（verb）按**前缀**判定：写/部署前缀一律拒，其余必须命中只读前缀（覆盖现网全部 log 子命令：
+// search-psm-log / search-prod-instance-log / search-log-matchers / get-logid-log / get-lane-instance-log /
+// get-log-cluster / analysis / footprint / trace-tree），否则按未知拒绝。
+const BYTEDCLI_WRITE_VERB_RE =
+  /^(set|create|delete|remove|deploy|release|publish|update|restart|add|append|import|upload|push|login|logout|run|submit|cancel|retry|edit|new|init|apply|sync|save|draft|stop|start|enable|disable|move|copy|rename|restore|clear|kill|scale|rollback|exec|grant|revoke|reset|put|patch|modify|destroy|terminate|bind|unbind)/i;
+const BYTEDCLI_READ_VERB_RE =
+  /^(get|list|search|query|show|describe|view|detail|count|stat|analysis|footprint|trace|tail|head|cat|find)/i;
+// 会消耗下一个 token 作为值的 bytedcli 全局 flag（出现在 log 子命令之前，需在定位子命令时跳过其值，
+// 防"flag 值伪装成子命令"旁路；-d/--debug、-j/--json 是布尔，不消耗值，无需列入）。
+const BYTEDCLI_VALUE_FLAGS = new Set(['--site', '--auth-site', '--vregion', '--vdc']);
+
 const RG_BLOCK = new Set(['--pre', '--pre-glob', '--hostname-bin', '-z', '--search-zip']);
 const FIND_ACTION_RE = /^-(exec|execdir|ok|okdir|delete|fprint|fprintf|fls|fprint0)$/i;
 
@@ -204,6 +224,19 @@ function guardFornax(args: string[]): void {
   if (!FORNAX_READ_VERB_RE.test(verb)) throw new Error(`run_command 拒绝：fornax-cli ${sub} ${verb} 非已知只读子动作`);
 }
 
+function guardBytedcli(args: string[]): void {
+  const i = locateSubcommand(args, BYTEDCLI_VALUE_FLAGS);
+  const sub = i >= 0 ? args[i] : undefined;
+  if (!sub) throw new Error('run_command 拒绝：未见 bytedcli 子命令');
+  if (!BYTEDCLI_READ_SUBCMDS.has(sub))
+    throw new Error(`run_command 拒绝：bytedcli ${sub} 非只读日志查询子命令（只放行 log；deploy/release/tce/scm/env 等一律拒）`);
+  if (BYTEDCLI_TERMINAL_SUBCMDS.has(sub)) return; // version/help 无子动作
+  const verb = firstNonDashAfter(args, i);
+  if (!verb) throw new Error(`run_command 拒绝：bytedcli ${sub} 缺只读子动作（search-psm-log/get-logid-log/...）`);
+  if (BYTEDCLI_WRITE_VERB_RE.test(verb)) throw new Error(`run_command 拒绝：bytedcli ${sub} ${verb} 是写/部署动词`);
+  if (!BYTEDCLI_READ_VERB_RE.test(verb)) throw new Error(`run_command 拒绝：bytedcli ${sub} ${verb} 非已知只读子动作`);
+}
+
 function guardRg(args: string[]): void {
   for (const a of args) {
     const head = a.split('=')[0];
@@ -236,6 +269,7 @@ export function assertSafeCommand(cmd: string, args: string[], cwd?: string): vo
   // 每 CLI 护栏
   if (cmd === 'git') guardGit(args);
   else if (cmd === 'fornax-cli') guardFornax(args);
+  else if (cmd === 'bytedcli') guardBytedcli(args);
   else if (cmd === 'rg') guardRg(args);
   else if (cmd === 'find') guardFind(args);
 
@@ -388,8 +422,12 @@ export async function runLocalReadCommand(params: Record<string, unknown>): Prom
 export const RUN_COMMAND_DESCRIPTION =
   '跑一条本地**只读**命令（用于查代码库 / 拿 trace 等飞书之外的来源）。常用：' +
   'rg/grep 在代码库搜关键字、git log/show/diff/blame 看改动、cat/head/jq 看文件、' +
-  'fornax-cli trace/span/prompt 的 get/list 拿 trace 详情。只读：写/删/发布/凭证类命令会被拒绝。';
+  'fornax-cli trace/span/prompt 的 get/list 拿 trace 详情、' +
+  'bytedcli log search-psm-log 把"日志ID(run_log_id)"解成 traceID（fornax 直接查不到，必须先用它解出再喂 fornax-cli）。' +
+  '只读：写/删/发布/凭证/部署类命令会被拒绝。';
 export const RUN_COMMAND_PARAMS_HINT =
-  '{ cmd:"rg|git|fornax-cli|grep|cat|jq|find|ls|head|tail|wc|file|stat", args:[...], cwd?:"<绝对路径，查代码库时填项目根>" } ' +
+  '{ cmd:"rg|git|fornax-cli|bytedcli|grep|cat|jq|find|ls|head|tail|wc|file|stat", args:[...], cwd?:"<绝对路径，查代码库时填项目根>" } ' +
   '——例：{cmd:"rg",args:["-n","keyword","src"],cwd:"<repo>"}；{cmd:"git",args:["-C","<repo>","log","-5","--oneline"]}；' +
-  '{cmd:"fornax-cli",args:["trace","get","--id","<traceId>"]}。命令在 cwd 下执行，路径不能越出允许目录。';
+  '{cmd:"fornax-cli",args:["trace","get","--id","<traceId>"]}；' +
+  '{cmd:"bytedcli",args:["log","search-psm-log","--psm","bitable.ai.chatbot","--keyword","<run_log_id>","--start","<UTC-Z>","--end","<UTC-Z>","--output","console"]}（输出里 grep trace_id=<32hex>）。' +
+  '命令在 cwd 下执行，路径不能越出允许目录。';

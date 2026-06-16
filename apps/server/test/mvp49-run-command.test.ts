@@ -26,6 +26,13 @@ test('S1 安全只读命令放行', () => {
   assert.doesNotThrow(() => assertSafeCommand('git', ['config', '--get', 'user.email']));
   assert.doesNotThrow(() => assertSafeCommand('fornax-cli', ['trace', 'get', '--id', 'abc123']));
   assert.doesNotThrow(() => assertSafeCommand('fornax-cli', ['workspace', 'list']));
+  // bytedcli log 只读日志查询家族（run_log_id→traceID 键石）
+  assert.doesNotThrow(() =>
+    assertSafeCommand('bytedcli', ['log', 'search-psm-log', '--psm', 'bitable.ai.chatbot', '--keyword', '7651949715958746082', '--start', '2026-06-16T08:00:00Z', '--end', '2026-06-16T15:00:00Z', '--max-logs', '200', '--output', 'console']));
+  assert.doesNotThrow(() =>
+    assertSafeCommand('bytedcli', ['--site', 'i18n-tt', '--vregion', 'Singapore-Central', 'log', 'get-logid-log', '<LOGID>', '--psm', 'pipo.example.api']));
+  assert.doesNotThrow(() => assertSafeCommand('bytedcli', ['log', 'trace-tree', '--log-id', 'abc']));
+  assert.doesNotThrow(() => assertSafeCommand('bytedcli', ['log', 'analysis', 'performance', '--psm', 'x', '--method', 'm']));
   assert.doesNotThrow(() => assertSafeCommand('cat', ['package.json']));
   assert.doesNotThrow(() => assertSafeCommand('ls', ['-1']));
 });
@@ -127,6 +134,31 @@ test('NEW-3 fornax -o 下载目录限根内：根内放行、越界/敏感拒绝
   // -o 越出允许目录 / 指向敏感目录 → 拒
   assert.throws(() => assertSafeCommand('fornax-cli', ['trace', 'get', '--id', 'x', '-o', '/etc']), /越出允许目录|拒绝/);
   assert.throws(() => assertSafeCommand('fornax-cli', ['trace', 'get', '--id', 'x', '--output=' + `${HOME}/.ssh`]), /敏感|越出|拒绝/);
+});
+
+// ---- bytedcli：只放行 log 只读日志查询家族，写/部署族一律拒 ----
+
+test('BYTED-1 bytedcli 非 log 顶层族（deploy/release/tce/scm/env...）一律拒', () => {
+  assert.throws(() => assertSafeCommand('bytedcli', ['tce', 'deploy', '--psm', 'x']), /只读日志查询子命令|拒绝/);
+  assert.throws(() => assertSafeCommand('bytedcli', ['scm', 'create-version']), /只读日志查询子命令|拒绝/);
+  assert.throws(() => assertSafeCommand('bytedcli', ['env', 'deploy']), /只读日志查询子命令|拒绝/);
+  assert.throws(() => assertSafeCommand('bytedcli', ['tcc', 'set']), /只读日志查询子命令|拒绝/);
+  assert.throws(() => assertSafeCommand('bytedcli', ['abase', 'put']), /只读日志查询子命令|拒绝/);
+  assert.throws(() => assertSafeCommand('bytedcli', ['auth', 'login']), /只读日志查询子命令|拒绝/);
+  // 全局 value flag 的值不得被误当顶层子命令而旁路（NEW-1 同款防线）
+  assert.throws(() => assertSafeCommand('bytedcli', ['--vregion', 'China-North', 'tce', 'deploy']), /只读日志查询子命令|拒绝/);
+  assert.throws(() => assertSafeCommand('bytedcli', ['--site', 'cn', 'deploy', 'app']), /只读日志查询子命令|拒绝/);
+});
+
+test('BYTED-2 log 家族下的写/部署动词被拒（前缀判定，防 log 家族将来新增写子动作）', () => {
+  assert.throws(() => assertSafeCommand('bytedcli', ['log', 'delete-matcher', '--id', '1']), /写\/部署动词|拒绝/);
+  assert.throws(() => assertSafeCommand('bytedcli', ['log', 'set-retention', '--days', '7']), /写\/部署动词|拒绝/);
+  assert.throws(() => assertSafeCommand('bytedcli', ['log', 'create-cluster']), /写\/部署动词|拒绝/);
+  assert.throws(() => assertSafeCommand('bytedcli', ['log', 'update-config']), /写\/部署动词|拒绝/);
+  // 未知（既非读也非写前缀）也拒
+  assert.throws(() => assertSafeCommand('bytedcli', ['log', 'frobnicate']), /非已知只读子动作|拒绝/);
+  // 缺子动作
+  assert.throws(() => assertSafeCommand('bytedcli', ['log']), /缺只读子动作|拒绝/);
 });
 
 // ---- 被剔除的 git 子命令（带裸位置参数即可写） ----

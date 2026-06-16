@@ -192,8 +192,10 @@ export const config = {
   // 自主排查可用的本地只读 CLI 白名单（逗号分隔，可配，不写死命令）。run_command 只放行这些可执行文件。
   // 安全模型见 investigation/runCommand.ts：argv 直 spawn 无 shell + 环境最小化 + 每 CLI 写面护栏 + 路径根限制。
   // 注意：**不含 lark-cli** —— 飞书读走专用硬只读工具（readTools.ts），不在这里重开 lark 写口子。
+  // bytedcli 是庞大内部多功能 CLI，但 run_command 的 guardBytedcli 只放行 `log` 只读日志查询家族
+  //（Chatbot 排查"run_log_id→traceID"的键石），deploy/release/tce/scm/env 等写/部署族一律拒。
   investigationReadClis: (process.env.INVESTIGATION_READ_CLIS ||
-    'fornax-cli,git,grep,rg,cat,head,tail,ls,find,wc,jq,file,stat')
+    'fornax-cli,bytedcli,git,grep,rg,cat,head,tail,ls,find,wc,jq,file,stat')
     .split(',').map((s) => s.trim()).filter(Boolean),
   // run_command 总开关（kill-switch）。用户已授权本地只读取数，默认开；设 false 则该工具从排查工具集移除。
   investigationRunCommandEnabled: envBool('INVESTIGATION_RUN_COMMAND_ENABLED', true),
