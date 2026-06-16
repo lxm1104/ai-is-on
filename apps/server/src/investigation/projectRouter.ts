@@ -36,10 +36,19 @@ export type RoutableMatter = {
   currentSummary?: string;
 };
 
-// 标题 bigram Jaccard 阈值（保守）；name/alias 作为子串出现时给一个更高的"包含命中"分。
-const TITLE_SIM_THRESHOLD = 0.34;
-const CONTAIN_HIT_SCORE = 0.6;
-const MIN_CONTAIN_LEN = 4; // 仅"足够独特"的名字才做子串包含匹配，避免短/通用名误命中
+// 标题路由很容易误判（标题里顺带提了个项目名 ≠ 这件事属于该项目），故极保守：
+// (a) 仅当**独特**的项目名/别名作为子串**唯一**出现在标题里才采纳（多个命中=歧义→交给 AI 兜底）；
+// (b) 否则要求**很强**的整体标题相似（短/通用/顺带提及达不到，自然落到 AI 用全上下文判）。
+const STRONG_SIM_FLOOR = 0.6; // 无包含命中时的整体相似门槛
+const SIM_MARGIN = 0.1; // 多候选时领先第二名的最小差
+
+/** 名字是否"足够独特"，可信其子串出现：≥4 个 CJK 字 或 ≥8 个英数字。短/通用名（test/报错/Chatbot）不可信。 */
+export function isDistinctiveName(name: string): boolean {
+  const n = name.trim();
+  const cjk = (n.match(/[一-鿿]/g) || []).length;
+  const alnum = (n.match(/[a-zA-Z0-9]/g) || []).length;
+  return cjk >= 4 || alnum >= 8;
+}
 
 function parseAliases(space: ContextSpaceRow): string[] {
   try {
@@ -81,26 +90,29 @@ export function resolveProjectSpaceDeterministic(matter: RoutableMatter): Projec
     if (sid) return { spaceId: sid, basis: 'canonical' };
   }
 
-  // ③ 标题包含/相似：与各 active project space 的 name + 别名比，要求唯一胜出
+  // ③ 标题路由（极保守，见上方常量注释）
   const title = (matter.title || '').trim();
   if (title) {
     const titleLower = title.toLowerCase();
     const spaces = listContextSpaces({ status: 'active' }).filter((s) => s.type === 'project');
+    // (a) 独特名/别名作为子串出现：唯一命中才采纳；≥2 命中=歧义 → 不采纳（交给 AI 用全上下文判）
+    const contained = spaces.filter((s) =>
+      [s.name, ...parseAliases(s)].some(
+        (c) => isDistinctiveName(c) && titleLower.includes(c.trim().toLowerCase())
+      )
+    );
+    if (contained.length === 1) return { spaceId: contained[0].id, basis: 'title' };
+    if (contained.length >= 2) return null;
+    // (b) 无包含命中：要求很强的整体标题相似（短/顺带提及的项目名达不到，自然落到 AI 兜底）
     const scored = spaces
       .map((s) => {
         const cands = [s.name, ...parseAliases(s)].filter(Boolean);
-        let score = 0;
-        for (const c of cands) {
-          const contain = c.length >= MIN_CONTAIN_LEN && titleLower.includes(c.toLowerCase());
-          const sim = contain ? Math.max(CONTAIN_HIT_SCORE, titleSimilarity(title, c)) : titleSimilarity(title, c);
-          if (sim > score) score = sim;
-        }
-        return { sid: s.id, score };
+        const sim = cands.reduce((m, c) => Math.max(m, titleSimilarity(title, c)), 0);
+        return { sid: s.id, sim };
       })
-      .filter((x) => x.score >= TITLE_SIM_THRESHOLD)
-      .sort((a, b) => b.score - a.score);
-    // 唯一胜出（或明显领先）才采纳，宁缺毋错
-    if (scored.length === 1 || (scored.length >= 2 && scored[0].score - scored[1].score >= 0.1)) {
+      .filter((x) => x.sim >= STRONG_SIM_FLOOR)
+      .sort((a, b) => b.sim - a.sim);
+    if (scored.length === 1 || (scored.length >= 2 && scored[0].sim - scored[1].sim >= SIM_MARGIN)) {
       return { spaceId: scored[0].sid, basis: 'title' };
     }
   }

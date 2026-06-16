@@ -76,6 +76,41 @@ test('确定性：完全不相关标题 → null（宁缺毋错）', () => {
   assert.equal(r, null);
 });
 
+test('isDistinctiveName：长/独特名可信，短/通用名不可信', () => {
+  for (const n of ['Chatbot灰度内测', 'OrderPipeline', '端到端项目X独特名', '订单履约系统']) {
+    assert.equal(router.isDistinctiveName(n), true, `${n} 应判为独特`);
+  }
+  for (const n of ['Chatbot', 'test', '测试', '报错', 'API', 'app']) {
+    assert.equal(router.isDistinctiveName(n), false, `${n} 应判为不独特`);
+  }
+});
+
+test('确定性③防误路由：短项目名(Chatbot)在不相关标题里"顺带出现" → 不路由（核心修复）', () => {
+  // Chatbot 7 个英数字 <8 → 不独特 → 不可信其子串。这件事其实属于"订单链路"，只是顺带提了 Chatbot。
+  mkProjectSpace('Chatbot', '代码库 /repo/chatbot —— 不该被这条事项拼进去');
+  const r = router.resolveProjectSpaceDeterministic({
+    title: '订单链路里 Chatbot 调用超时排查 trace',
+    primarySpaceId: null,
+  });
+  assert.equal(r, null, '短名顺带提及不得确定性路由（应交给 AI 兜底用全上下文判）');
+});
+
+test('确定性③防误路由：标题同时含两个独特项目名 → 歧义不采纳（null）', () => {
+  mkProjectSpace('歧义项目甲独特名', 'A');
+  mkProjectSpace('歧义项目乙独特名', 'B');
+  const r = router.resolveProjectSpaceDeterministic({
+    title: '把 歧义项目甲独特名 的能力集成进 歧义项目乙独特名',
+    primarySpaceId: null,
+  });
+  assert.equal(r, null, '两个独特名都命中 → 歧义，宁缺毋错');
+});
+
+test('确定性③防误路由：通用短名(测试) 即便出现也不路由', () => {
+  mkProjectSpace('测试', 'profile of 测试 项目');
+  const r = router.resolveProjectSpaceDeterministic({ title: '测试 一下这个新功能能不能跑', primarySpaceId: null });
+  assert.notEqual(r?.basis, 'title');
+});
+
 // ---- AI 兜底：注入 judge ----
 
 test('AI 兜底：确定性命中(primary)时绝不调用 judge', async () => {
