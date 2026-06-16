@@ -775,3 +775,17 @@ runtime_status 只在变化时 WS 推送，页面加载/重连晚于 ready 广�
   卡有 matterId），ROI 低，本轮不做。**教训：signal 集合对"同一事项的重生"不稳定（每轮重排/增删），
   不能当稳定身份键用于负反馈压制；它只适合「同批/近期精确去重」(collapse/churn-guard 那种)。**
 - 收获：对抗验证工作流拦住了一次本会被裁定者放行（ship:true）但实为净负的改动。无文件改动落库。
+
+### 2026-06-16 第 48 轮：MVP48 —— 排查 worthiness 扩到「IM-可查悬置状态」（拓宽 COUNT 头号瓶颈：覆盖）
+
+- **证据**：完成漏斗头号瓶颈是排查覆盖——67 个 active matter 仅 12 个被排查过，55 个从未排查。逐条看：
+  这 55 个的 nextAction 几乎全是泛兜底（"跟进进展并确认结果"等，在 GENERIC 集合→isInvestigationWorthy
+  排除），标题也多不含查证词 → 被 worthiness 门永久排除。但其中"评测集已发送但接收方不确定""暂停功能
+  全量时间待确认""双日会待办未闭环""trigger 方案待确认"这类，**状态就在飞书 IM 里、现在就能查清**。
+- **修复（MVP48）**：WORTHY_RE 补 `待确认|待回复|未回复|未闭环|不确定`。刻意**不含**「待验证/修复/环境/yaml」
+  等代码/系统类（留给并行会话的 run_command 外部取数）。这 5 个词经逐一核对**不出现在任何泛兜底 nextAction**
+  里，故不会经 nextAction 误触发；命中只来自描述了"悬而未决可查状态"的标题。查不到也有 MVP45 止损退避兜底。
+- **验证**：真实库走查——扩词新增 6 个未排查 matter 命中（4 个明确 IM-可查 + 2 个边界技术待确认），**0 个**
+  代码/系统类误纳。dispatcher 测试 +2（新词标题 worthy / 泛兜底不误触发 + 「待验证」负例仍 not-worthy）共
+  11 passing；tsc ✓；全量 ✓。预期：这些 matter 进入排查 → 查到 progressed/blocked/resolved → 升完成提案卡 → 抬 COUNT。
+- 只改自己的文件（investigationDispatcher.ts / mvp36 测试 / log）；未碰并行会话 readTools.ts/config.ts。

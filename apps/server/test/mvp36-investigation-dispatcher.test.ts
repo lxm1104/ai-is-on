@@ -50,6 +50,26 @@ test('isInvestigationWorthy：泛兜底+无查证标题/过短/空 → false', (
   assert.equal(isInvestigationWorthy({ nextAction: '把排期草案发给 Yufan' }), false); // 纯发送，非查证
 });
 
+test('isInvestigationWorthy：MVP48 IM-可查悬置状态(标题命中)→ true，即便 nextAction 泛兜底', () => {
+  // 这些状态就在飞书 IM 里、现在能查清
+  assert.equal(isInvestigationWorthy({ title: '评测集已发送但接收方不确定', nextAction: '向相关方澄清阻塞点并推动解除' }), true);
+  assert.equal(isInvestigationWorthy({ title: '多维表格智能体暂停功能全量时间待确认', nextAction: '跟进进展并确认结果' }), true);
+  assert.equal(isInvestigationWorthy({ title: '双日会你的待办未闭环', nextAction: '跟进进展并确认结果' }), true);
+  assert.equal(isInvestigationWorthy({ title: '方案待回复', nextAction: '参与讨论并推动形成结论' }), true);
+});
+
+test('isInvestigationWorthy：泛兜底文案不被新扩词误触发；代码/系统类不扩', () => {
+  // 7 个泛兜底 nextAction 均不含 待确认/待回复/未回复/未闭环/不确定 → 仍 false（无查证标题时）
+  for (const na of [
+    '跟进进展并确认结果', '推进交付并向对方确认收到', '向相关方澄清阻塞点并推动解除',
+    '完成评审并反馈意见', '确认决策结论并同步相关方', '协调相关方对齐时间与分工', '参与讨论并推动形成结论',
+  ]) {
+    assert.equal(isInvestigationWorthy({ title: '帮王爽优化数据查询', nextAction: na }), false, na);
+  }
+  // 「待验证」是代码/系统类，刻意不纳入（留给外部取数能力）→ 标题仅含待验证不 worthy
+  assert.equal(isInvestigationWorthy({ title: 'BOE yaml 配置替换待验证', nextAction: '跟进进展并确认结果' }), false);
+});
+
 test('select：worthy + 非冷却中 → 按优先级 → 最久未动 取 top-1', () => {
   const matters = [
     mkMatter({ id: 'a', priority: 'P2', nextAction: '确认评测集是否已发给鲁升纲', updatedAt: '2026-06-12T00:00:00Z' }),
