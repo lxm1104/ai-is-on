@@ -789,3 +789,39 @@ runtime_status 只在变化时 WS 推送，页面加载/重连晚于 ready 广�
   代码/系统类误纳。dispatcher 测试 +2（新词标题 worthy / 泛兜底不误触发 + 「待验证」负例仍 not-worthy）共
   11 passing；tsc ✓；全量 ✓。预期：这些 matter 进入排查 → 查到 progressed/blocked/resolved → 升完成提案卡 → 抬 COUNT。
 - 只改自己的文件（investigationDispatcher.ts / mvp36 测试 / log）；未碰并行会话 readTools.ts/config.ts。
+
+### 2026-06-16 第 49 轮：MVP49 —— run_command 本地只读命令工具（自主排查从"只能读飞书"扩到"能查代码库/拿 trace"）
+
+- **背景/价值**：这是 /loop 多轮一直挂在"并行会话 run_command 领域"的那块缺口（第 45 轮还把 18 个查不清的
+  matter 归到此）。它让自主排查能跑 fornax-cli（按 traceID 拿 trace）、git/rg/grep（查代码库），首次把
+  "日志ID→traceID→fornax 下 trace→grep 代码库定位根因"这类 Chatbot 优化日常**整条**自动化 —— 直接服务北极星
+  COUNT/满意度，且是**通用机制**：CLI 白名单 + 允许根 + 项目排查档案全可配，任何用户/项目都能加自己的做法，
+  不写死 Chatbot。
+- **现状证据**：工作树里有半成品（run_command 进了 ReadToolName 但没进 TOOLS → tsc 红；config 加了
+  investigationReadClis 含 lark-cli）。补全 + 硬化。
+- **安全（autonomous AI 跑本地命令，按对抗审查迭代 4 轮）**：新 `investigation/runCommand.ts`，纯函数
+  `assertSafeCommand` + 受控 spawn。① argv 直 spawn `shell:false`；② **环境最小化** buildSafeEnv（只下传
+  PATH/HOME/locale/proxy/CA，封死 GIT_EXTERNAL_DIFF/GIT_SSH_COMMAND/GIT_CONFIG_*/RIPGREP_CONFIG_PATH/
+  LD_PRELOAD/DYLD_* 等"无 shell 也能 RCE"的注入键，强钉 GIT_PAGER=cat）；③ 每 CLI 写面护栏（git 读子命令
+  白名单 + 封 -c/--exec-path/--output/-O 分页器执行、剔除 branch/tag/remote/reflog；fornax 读子命令白名单 +
+  前缀式写动词拦截 + 封 auth/config/update；rg 封 --pre/--search-zip；find 封 -exec/-delete/-fprint*）；
+  ④ **路径根限制** realpath(cwd+每个路径参数) 必须落在 allowedRoots（默认 ~/MyProject+tmp，封 symlink/.. 逃逸）
+  + 敏感文件名黑名单；⑤ 超时 30s + 输出截断 16KB + 子进程收割。lark-cli **移出** run_command 白名单（飞书读仍走
+  专用硬只读工具，不重开 lark 写口）。
+- **对抗审查抓到并已修的真洞（4 轮）**：P0-1 env 注入（GIT_EXTERNAL_DIFF/RIPGREP_CONFIG_PATH 等）；P0-2 rg
+  --pre RCE；P0-3 git --output 写盘；P0-4 fornax config set/auth/update/写动词；**NEW-1**（critical）`-C log
+  branch x` 用 flag 值伪装子命令放过写 → locateSubcommand 跳过取值 flag 的值；**NEW-2** 连字符写动词
+  update-item/cancel-job（锚定正则漏）→ 前缀判定；**NEW-O**（critical）`git grep -O<cmd>` 分页器 argv 级 RCE
+  （实锤建出 /tmp/PWNED）→ 整类封 -O/--open-files-in-pager。第 4 轮穷举复测：无残留 exec/写洞。
+- **接线**：ReadTool 加可选 `exec` 执行器（run_command 走本地 spawn，不走 lark build/assertReadOnly）；
+  listReadTools 按 kill-switch 过滤；investigationPrompt 的 `<项目背景与排查方法>` 改成"你可用 run_command
+  跑本地只读命令按档案路径/方法查代码库/trace"。config 4 旋钮（白名单/kill-switch/超时/允许根）。
+- **验证**：mvp49 测试 16 个全过（穷举全部 P0/P1/NEW 攻击向量 + 真 spawn）；tsc ✓；全量 ✓ exit 0；
+  **真端到端**（走 runReadTool）：fornax workspace list（auth+网络）真出数据、rg 真 grep bitable-chatbot 代码库、
+  git -C 真出 commit；fornax config set / rg --pre / git grep -O 真被拒（ok:false，无 PWNED 文件）。
+  run_command 已进物化 agent prompt（aiisn-investigate），模型现已可见可用。
+- **协调**：只提交自己的显式路径（runCommand.ts 新增 / readTools.ts / config.ts / investigationPrompt.ts /
+  mvp49 测试 / log）；未碰并行会话的 titleHygiene.ts、chatConclusion(MVP46)、生成的 .opencode agent、tsbuildinfo。
+  此提交清掉工作树里挂了多轮的 run_command 半成品，解阻塞 /loop 会话。
+- **已知限界（v1）**：investigationLoop 把每条 finding 截到 600 字，大 trace 深析受限 → 配套用法是
+  fornax `-o` 下到根内文件再 jq/rg 精取（fornax↔jq/rg 的网络效应）。dispatcher 默认仍关，opt-in。

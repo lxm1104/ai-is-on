@@ -11,12 +11,19 @@
  * 这层也顺带绕开了"并发 opencode 进程爆炸"——排查不开 opencode turn，走后端读 + gated one-shot 判断。
  */
 import { runLarkCliJson } from '../util/larkCli.js';
+import { config } from '../config.js';
+import {
+  runLocalReadCommand,
+  RUN_COMMAND_DESCRIPTION,
+  RUN_COMMAND_PARAMS_HINT,
+} from './runCommand.js';
 
 export type ReadToolName =
   | 'search_im_messages'
   | 'read_chat_messages'
   | 'read_doc'
-  | 'list_my_tasks';
+  | 'list_my_tasks'
+  | 'run_command';
 
 export type ReadToolParams = Record<string, unknown>;
 
@@ -85,6 +92,11 @@ type ReadTool = {
   /** 构造 lark-cli 读命令 args。两步类工具（如 read_doc）在 run 内自行处理，build 返回主命令。 */
   build: (params: ReadToolParams) => string[];
   summarize: (data: unknown) => string;
+  /**
+   * 非 lark-cli 类工具的自定义执行器（如 run_command 走本地 spawn）。提供时 runReadTool 用它，
+   * 跳过 build/assertReadOnly/lark runJson 那条路。安全边界由执行器自身负责。
+   */
+  exec?: (params: ReadToolParams) => Promise<{ data: unknown; summary: string }>;
 };
 
 const TOOLS: Record<ReadToolName, ReadTool> = {
@@ -140,6 +152,18 @@ const TOOLS: Record<ReadToolName, ReadTool> = {
     },
     summarize: (d) => `已读取文档正文（${typeof d === 'string' ? d.length : JSON.stringify(d ?? '').length} 字符）`,
   },
+  // MVP49：本地只读命令（fornax-cli 拿 trace / git·rg·grep 查代码库）。不走 lark-cli，走 exec。
+  // 硬只读边界全在 runCommand.ts（环境最小化 + 每 CLI 写面护栏 + 路径根限制）。
+  run_command: {
+    name: 'run_command',
+    description: RUN_COMMAND_DESCRIPTION,
+    paramsHint: RUN_COMMAND_PARAMS_HINT,
+    build: () => {
+      throw new Error('run_command 不走 lark-cli build 路径');
+    },
+    summarize: (d) => (d && typeof d === 'object' && 'summary' in d ? String((d as { summary: unknown }).summary) : 'run_command 已执行'),
+    exec: runLocalReadCommand,
+  },
 };
 
 function countItems(d: unknown): number {
@@ -153,8 +177,15 @@ function countItems(d: unknown): number {
   return 0;
 }
 
+/** run_command 是否启用（kill-switch + 必须有至少一个白名单 CLI）。 */
+function runCommandEnabled(): boolean {
+  return config.investigationRunCommandEnabled && config.investigationReadClis.length > 0;
+}
+
 export function listReadTools(): Array<{ name: ReadToolName; description: string; paramsHint: string }> {
-  return Object.values(TOOLS).map((t) => ({ name: t.name, description: t.description, paramsHint: t.paramsHint }));
+  return Object.values(TOOLS)
+    .filter((t) => t.name !== 'run_command' || runCommandEnabled())
+    .map((t) => ({ name: t.name, description: t.description, paramsHint: t.paramsHint }));
 }
 
 /** 执行一个白名单只读工具。任何写命令在 assertReadOnly 处抛错，绝不发出。 */
@@ -165,8 +196,16 @@ export async function runReadTool(
 ): Promise<ReadToolResult> {
   const tool = TOOLS[name];
   if (!tool) return { tool: name, ok: false, summary: '', error: `未知只读工具 ${name}` };
-  const runJson = deps.runJson ?? runLarkCliJson;
+  // run_command 被 kill-switch 关闭时，即便模型请求也拒绝执行。
+  if (name === 'run_command' && !runCommandEnabled())
+    return { tool: name, ok: false, summary: '', error: 'run_command 已禁用' };
   try {
+    if (tool.exec) {
+      // 自定义执行器（run_command 本地 spawn）——安全边界在执行器内部。
+      const { data, summary } = await tool.exec(params);
+      return { tool: name, ok: true, data, summary };
+    }
+    const runJson = deps.runJson ?? runLarkCliJson;
     const args = tool.build(params);
     assertReadOnly(args); // 硬只读护栏：写命令到不了 runLarkCli
     const data = await runJson(args);

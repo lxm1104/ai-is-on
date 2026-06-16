@@ -90,8 +90,10 @@ export function buildInvestigateUserMessage(opts: {
     lines.push(
       '',
       '<项目背景与排查方法>',
-      '（用户为该项目登记的额外信息与做事方法。你目前只能用上面列出的飞书只读工具；',
-      '若档案提到代码库/trace 等你查不到的来源，就在结论里明确告诉用户去那里查什么。）',
+      '（用户为该项目登记的额外信息与做事方法。除飞书只读工具外，你还能用 run_command 跑本地**只读**命令：',
+      '按档案给出的代码库路径用 rg/grep/git 查代码、用 fornax-cli 按 traceID 拿 trace 详情，再据此定位。',
+      '只读：写/删/发布/凭证类命令会被拒绝；命令在你指定的 cwd 下执行、不能越出允许目录。',
+      '若档案提到的来源连 run_command 也够不到，再在结论里告诉用户去哪查什么。）',
       opts.projectProfile,
       '</项目背景与排查方法>'
     );

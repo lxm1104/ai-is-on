@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -187,6 +188,20 @@ export const config = {
   investigationPriority: envBool('INVESTIGATION_PRIORITY', true),
   investigationCooldownMs: envInt('INVESTIGATION_COOLDOWN_MS', 21_600_000), // 同 matter 6h 内不重查
   investigationMaxRounds: envInt('INVESTIGATION_MAX_ROUNDS', 3),
+  // ---------- MVP49 run_command 本地只读命令工具 ----------
+  // 自主排查可用的本地只读 CLI 白名单（逗号分隔，可配，不写死命令）。run_command 只放行这些可执行文件。
+  // 安全模型见 investigation/runCommand.ts：argv 直 spawn 无 shell + 环境最小化 + 每 CLI 写面护栏 + 路径根限制。
+  // 注意：**不含 lark-cli** —— 飞书读走专用硬只读工具（readTools.ts），不在这里重开 lark 写口子。
+  investigationReadClis: (process.env.INVESTIGATION_READ_CLIS ||
+    'fornax-cli,git,grep,rg,cat,head,tail,ls,find,wc,jq,file,stat')
+    .split(',').map((s) => s.trim()).filter(Boolean),
+  // run_command 总开关（kill-switch）。用户已授权本地只读取数，默认开；设 false 则该工具从排查工具集移除。
+  investigationRunCommandEnabled: envBool('INVESTIGATION_RUN_COMMAND_ENABLED', true),
+  // 单条本地命令硬超时（防 find / 大 repo grep 挂死占资源）。
+  investigationCommandTimeoutMs: envInt('INVESTIGATION_COMMAND_TIMEOUT_MS', 30_000),
+  // run_command 允许触达的根目录（cwd 与路径参数 realpath 后必须落在其中；os.tmpdir() 由代码自动追加）。
+  // 默认 ~/MyProject 覆盖 ai-is-on 与 bitable-chatbot 等本地仓库。
+  investigationAllowedRoots: envList('INVESTIGATION_ALLOWED_ROOTS', [path.join(os.homedir(), 'MyProject')]),
   matterVerifyEnabled: envBool('MATTER_VERIFY_ENABLED', true),
   // mark_done → 核实的延迟。≥ IM collector 一轮（imIntervalMs 默认 3min），
   // 让"刚回的消息"先经 collector → Reducer 挂到 matter_context_links，核实 agent 才看得到。
