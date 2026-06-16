@@ -31,6 +31,7 @@ import {
 import {
   insertAttentionItem,
   listLiveAttentionItems,
+  collapseDuplicateLiveCardsByMatter,
   markAttentionItemsSupersededByHash,
   markAttentionItemsSupersededForResolvedMatters,
   markAttentionItemsExpired,
@@ -260,7 +261,10 @@ async function doRunAttentionTick(
   //      churn guard（2026-06-10）：turbo 无 thinking 模式倾向每轮全量重发（实测 1h 内 29 条 superseded，
   //      看板 created_at 全被重置、用户状态丢失）。若新卡与被替代旧卡**等价**
   //      （同 priority + 同 matterId 或同 signal 集合），视为「保留」：不灭旧卡、不发新卡。
-  const liveIds = new Set(currentLive.map((x) => x.id));
+  // MVP41：churn-guard 必须看**全部** live 卡，不能用瘦身 packet 的 currentLive(cap 12)——
+  // 否则 live 数超 12 时对其余卡失明，同 matter 卡每轮重生、海量并存（实测单 matter 24 张、全库 243）。
+  const allLive = listLiveAttentionItems(2000);
+  const liveIds = new Set(allLive.map((x) => x.id));
   let llmDrivenSupersededCount = 0;
   let keptAsEquivalentCount = 0;
   let itemsToPersist: typeof llmItems = [];
@@ -269,7 +273,7 @@ async function doRunAttentionTick(
   // 用户动作、matter resolve、看门狗恢复才能动它们。LLM 点名替代与防抖等价机制一律无权染指
   // —— 2026-06-12 实测首张办结提案升起 20 分钟即被「优先级升级替代」误杀（同 matter 的
   // P0 催办卡与 P1 提案卡被判定等价）。
-  const liveById = new Map(currentLive.map((x) => [x.id, x]));
+  const liveById = new Map(allLive.map((x) => [x.id, x]));
   const isProtectedCard = (x: { inputHash: string }) =>
     x.inputHash.startsWith('proposal:') || x.inputHash.startsWith('system:');
 
@@ -290,11 +294,11 @@ async function doRunAttentionTick(
   // 等价（含 priority）→「保留旧卡」；仅内容等价但 priority 变了 →「升级」：
   // 自动替掉旧卡（即使模型忘了声明 supersedeIds —— 2026-06-11 实测 P2→P1 升级产生跨优先级双卡）。
   const findEquivalentLive = (it: (typeof llmItems)[number]) =>
-    currentLive.find(
+    allLive.find(
       (old) => !isProtectedCard(old) && old.priority === it.priority && contentEquivalent(old, it)
     );
   const findPriorityShiftedLive = (it: (typeof llmItems)[number]) =>
-    currentLive.filter(
+    allLive.filter(
       (old) => !isProtectedCard(old) && old.priority !== it.priority && contentEquivalent(old, it)
     );
 
@@ -400,6 +404,12 @@ async function doRunAttentionTick(
       llmItem: it,
       now: persistAt,
     });
+  }
+
+  // 8.5) MVP41 去重兜底：同 matter 的非提案 live 卡只留最新一张（清掉历史并存 + churn-guard 漏网的）。
+  const collapsed = collapseDuplicateLiveCardsByMatter(persistAt);
+  if (collapsed > 0) {
+    console.log(`[attention] 去重兜底 collapse ${collapsed} 张同 matter 重复 live 卡`);
   }
 
   // 9) 写 run 完成行（items_emitted 记的是真正落库的，不含 supersede-only）

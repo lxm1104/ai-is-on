@@ -12,6 +12,7 @@ import {
   updateAttentionItemStatus as dbUpdateAttentionItemStatus,
   updateAttentionItemPriority as dbUpdateAttentionItemPriority,
   markAttentionItemsSupersededByHash as dbMarkSupersededByHash,
+  collapseDuplicateLiveCardsByMatter as dbCollapseDuplicateLiveCardsByMatter,
   markAttentionSupersededForResolvedMatters as dbMarkSupersededForResolvedMatters,
   markAttentionItemsExpired as dbMarkExpired,
   insertAttentionEngineRun as dbInsertEngineRun,
@@ -198,6 +199,11 @@ export function markAttentionItemsSupersededByHash(
   now: string
 ): number {
   return dbMarkSupersededByHash(inputHash, now);
+}
+
+/** MVP41：同 matter 的非提案 live 卡只留最新一张，其余 superseded（去重兜底）。 */
+export function collapseDuplicateLiveCardsByMatter(now: string): number {
+  return dbCollapseDuplicateLiveCardsByMatter(now);
 }
 
 /**

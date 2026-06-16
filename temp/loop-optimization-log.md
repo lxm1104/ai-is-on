@@ -19,6 +19,22 @@ MVP31 生产验证负例（第 16 轮·会话 A：判定「未完成」→ 正�
 
 ## 迭代记录
 
+### 2026-06-16 第 39 轮：看板去重崩溃修复（MVP41）—— 243 张 live 卡 → 131，单事项 24→2
+
+- **体检发现灾难**：当前 **243 张 live 卡**（UI 截到 100），单 matter 最多 **24 张**并存、单实体近 2 天 48 张。
+  收件箱完全不可用——这是当前最大满意度杀手。
+- **根因（证据优先）**：attentionEngine.ts:112 `currentLive = listLiveAttentionItems(12)` —— churn-guard 去重
+  **只看最近 12 张 live 卡**（这个 12 本是给 LLM packet 瘦身用的，被去重逻辑误复用）。live 数一超 12，去重对
+  其余卡失明 → 每个 attention tick 给同 matter 新生一张（LLM 每轮换措辞 + 偶尔不链 matter）→ 恶性循环到 243。
+- **修复**：① churn-guard 分离——`allLive=listLiveAttentionItems(2000)` 做去重（看全量），`currentLive(12)` 仅喂 prompt；
+  ② `collapseDuplicateLiveCardsByMatter` 确定性兜底（每轮 tick 末调）：同 matter 非提案 live 卡只留最新一张 +
+  无 matterId 卡按归一化标题（对齐 titlesEquivalent）只留最新；提案/系统卡排除（独立生命周期）。
+- **验证**：tsc 干净；新增 MVP41 4 测（同 matter 留最新/不同 matter 各留/提案不 collapse/归一化标题去重），
+  全量 **611/611**；**真实数据清理 243→131、单 matter 24→2**（那 2 = 催办+进展提案，合理）；浏览器已刷新。
+- **残留**：LLM 换措辞的近似重复（"提供熔断trace给孔恩培" vs "熔断trace待提供给孔恩培"，~3 phrasing）需更深的
+  matter-linking/模糊匹配，留后。allLive 修复已防未来精确重复堆积。
+- 只提交自己的文件（db/attentionStore/attentionEngine/测试），避开并行会话 readTools/config。
+
 ### 2026-06-15 第 38 轮：进展回执卡（MVP40）—— 把有意义排查结论变成可认可的完成事件
 
 - **多 agent 工作流选型**（4 视角提案 + 对抗审查，基于真实试运行数据）：选定"进展回执卡"。

@@ -2915,6 +2915,45 @@ export function markAttentionItemsSupersededByHash(
 }
 
 /**
+ * MVP41：去重兜底——同一 matter 的非提案 live 卡只保留**最新一张**，其余标 superseded。
+ * 防 churn-guard 因 currentLive 截断（只看 12 张）漏判同 matter 旧卡，导致同事项卡海量并存
+ * （实测单 matter 24 张 live、全库 243 张）。提案/系统卡（proposal:* / system:*）有独立生命周期，排除。
+ * 返回清理掉的卡数。
+ */
+export function collapseDuplicateLiveCardsByMatter(updatedAt: string): number {
+  const notProposal = `input_hash NOT LIKE 'proposal:%' AND input_hash NOT LIKE 'system:%'`;
+  // ① 同 matter（非提案）只留最新一张。
+  const r1 = db
+    .prepare(
+      `UPDATE attention_items SET status='superseded', updated_at=?
+       WHERE status='live' AND matter_id IS NOT NULL AND ${notProposal}
+         AND id NOT IN (
+           SELECT id FROM (
+             SELECT id, ROW_NUMBER() OVER (PARTITION BY matter_id ORDER BY created_at DESC) rn
+             FROM attention_items WHERE status='live' AND matter_id IS NOT NULL AND ${notProposal}
+           ) WHERE rn=1
+         )`
+    )
+    .run(updatedAt);
+  // ② 无 matterId 的卡按**归一化标题**（去空格+小写，对齐 titlesEquivalent）只留最新一张——
+  //    LLM 常给同一件事每轮换措辞但偶尔不链 matter（实测「丘晓骁图片预览…」7 张并存）。
+  const normTitle = `lower(replace(replace(replace(replace(title,' ',''),char(12288),''),char(9),''),char(10),''))`;
+  const r2 = db
+    .prepare(
+      `UPDATE attention_items SET status='superseded', updated_at=?
+       WHERE status='live' AND matter_id IS NULL AND ${notProposal}
+         AND id NOT IN (
+           SELECT id FROM (
+             SELECT id, ROW_NUMBER() OVER (PARTITION BY ${normTitle} ORDER BY created_at DESC) rn
+             FROM attention_items WHERE status='live' AND matter_id IS NULL AND ${notProposal}
+           ) WHERE rn=1
+         )`
+    )
+    .run(updatedAt);
+  return r1.changes + r2.changes;
+}
+
+/**
  * TTL 兜底：把 created_at < beforeIso 的 live 项标 'expired'。
  * 防 LLM 漏写 supersedeIds 导致跨 hash 的旧 item 永久堆积。
  */
