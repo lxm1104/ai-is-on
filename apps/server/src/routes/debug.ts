@@ -8,6 +8,8 @@ import { runInvestigation } from '../investigation/investigationLoop.js';
 import { applyInvestigationResult } from '../investigation/investigationWriteback.js';
 import { runInvestigationDispatchTick } from '../investigation/investigationDispatcher.js';
 import { captureInvestigationTrace } from '../playbook/playbookCapture.js';
+import { matchPlaybookForMatter, renderPlaybookForPrompt } from '../playbook/playbookMatcher.js';
+import { getProjectProfileForMatter } from '../investigation/projectProfile.js';
 import { config } from '../config.js';
 
 export const debugRouter = Router();
@@ -76,6 +78,9 @@ debugRouter.post('/debug/investigation/run', async (req, res) => {
     .filter((x): x is { type: string; name: string; role: string } => x !== null)
     .slice(0, 8);
   try {
+    // 与 investigationDispatcher 真实派发路径对齐：注入项目排查档案 + 已学做法，
+    // 否则手动验证看不到 run_command 该往哪查（项目档案里才有代码库路径/trace 方法）。
+    const matchedPb = matchPlaybookForMatter(m);
     const result = await runInvestigation({
       matterTitle: m.title,
       matterType: m.type,
@@ -84,6 +89,8 @@ debugRouter.post('/debug/investigation/run', async (req, res) => {
       entities,
       maxRounds: typeof body.maxRounds === 'number' ? body.maxRounds : 3,
       priority: true, // 手动验证：走 high 队列尽快拿 gate，不被 attention 饿死
+      playbookHint: matchedPb ? renderPlaybookForPrompt(matchedPb) : undefined,
+      projectProfile: getProjectProfileForMatter(m) ?? undefined,
     });
     let writeback;
     if (body.apply === true) {
