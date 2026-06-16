@@ -58,6 +58,9 @@ export type InvestigationDeps = {
 
 const DEFAULT_MAX_ROUNDS = 3;
 const FINDING_TRUNC = 600;
+// run_command 回的是 trace / 代码内容，是定位根因的实质材料 —— 给更大预算才看得到东西
+// （600 字对 trace/代码片段太小）。仍有界（命令层 stdout 已 cap 16KB），模型可再用 rg/jq 精取。
+const RUN_COMMAND_FINDING_TRUNC = 2400;
 
 function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) + ' …' : s;
@@ -140,9 +143,18 @@ export async function runInvestigation(
       }
       const res = await runTool(call.tool as ReadToolName, call.params);
       toolLog.push({ round, tool: call.tool, params: call.params, ok: res.ok, summary: res.summary, error: res.error });
+      // run_command：把实质 stdout（trace/代码内容）按更大预算回喂，而非截 JSON 包壳；其它工具沿用 600。
+      let detail: string;
+      if (call.tool === 'run_command' && res.data && typeof res.data === 'object') {
+        const d = res.data as { stdout?: unknown; code?: unknown };
+        const out = typeof d.stdout === 'string' ? d.stdout : '';
+        detail = truncate(out, RUN_COMMAND_FINDING_TRUNC) || `(exit ${String(d.code)}，无输出)`;
+      } else {
+        detail = truncate(JSON.stringify(res.data ?? ''), FINDING_TRUNC);
+      }
       findings.push(
         res.ok
-          ? `${call.tool}(${shortParams(call.params)}) → ${res.summary}｜${truncate(JSON.stringify(res.data ?? ''), FINDING_TRUNC)}`
+          ? `${call.tool}(${shortParams(call.params)}) → ${res.summary}｜${detail}`
           : `${call.tool}(${shortParams(call.params)}) 查询失败：${res.error}`
       );
     }

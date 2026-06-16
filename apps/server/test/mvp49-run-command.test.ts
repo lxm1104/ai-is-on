@@ -4,13 +4,14 @@
  * 重点：穷举对抗审查（adversarial review）实锤出的 RCE/写盘/外泄向量，断言 assertSafeCommand 一律 throw；
  * 安全命令放行；并跑几条真 spawn 验证读路径通、写/越界路径被 runReadTool 兜成 ok:false。
  *
- * Run: npx tsx --test apps/server/test/mvp46-run-command.test.ts
+ * Run: npx tsx --test apps/server/test/mvp49-run-command.test.ts
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import { assertSafeCommand, buildSafeEnv } from '../src/investigation/runCommand.js';
 import { listReadTools, runReadTool } from '../src/investigation/readTools.js';
+import { runInvestigation } from '../src/investigation/investigationLoop.js';
 
 const HOME = os.homedir();
 const CHATBOT = `${HOME}/MyProject/bitable-chatbot`;
@@ -185,4 +186,29 @@ test('S6 真 spawn：越界路径 ok:false', async () => {
   const r = await runReadTool('run_command', { cmd: 'cat', args: ['/etc/passwd'] });
   assert.equal(r.ok, false);
   assert.match(r.error || '', /越出允许目录|拒绝/);
+});
+
+test('S7 循环把 run_command 的 stdout 按更大预算回喂（>600 字，trace/代码可见）', async () => {
+  const bigStdout = 'X'.repeat(2000); // 大于旧 600 截断
+  const judgeCalls: string[] = [];
+  // 注入 judge：第 1 轮请求 run_command，第 2 轮基于 findings 下结论。
+  let round = 0;
+  const judge = async (userMessage: string) => {
+    judgeCalls.push(userMessage);
+    round += 1;
+    if (round === 1)
+      return JSON.stringify({ action: 'investigate', toolCalls: [{ tool: 'run_command', params: { cmd: 'rg', args: ['x', 'src'] } }] });
+    return JSON.stringify({ action: 'conclude', conclusion: { verdict: 'progressed', confidence: 0.6, factSummary: '看到内容', evidence: [] } });
+  };
+  // 注入 runTool：返回带大 stdout 的 run_command 结果（不真 spawn）。
+  const runTool = async () => ({ tool: 'run_command' as const, ok: true, data: { cmd: 'rg', code: 0, stdout: bigStdout }, summary: 'run_command' });
+  await runInvestigation(
+    { matterTitle: 't', matterType: 'task', currentSummary: '', nextAction: '查', entities: [], maxRounds: 2 },
+    { judge, runTool }
+  );
+  // 第 2 轮 prompt 里应带回 >600 字的 stdout（旧逻辑会截到 600）。
+  const secondPrompt = judgeCalls[1] || '';
+  const xRun = (secondPrompt.match(/X+/g) || []).sort((a, b) => b.length - a.length)[0] || '';
+  assert.ok(xRun.length > 600, `run_command stdout 应按更大预算回喂，实测最长连续=${xRun.length}`);
+  assert.ok(xRun.length <= 2400, '仍应有界（≤2400）');
 });
