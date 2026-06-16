@@ -733,3 +733,26 @@ runtime_status 只在变化时 WS 推送，页面加载/重连晚于 ready 广�
   `2e48e9fb`/`c70abecf` → stuck=false（救回重试），`72136ab6`(0.25/0.15)/`bb858dee`(0.6/0.55)
   → stuck=true（真查不清，仍正确退避）。被错弃的 matter 重获排查机会 → 可能转 meaningful → 抬 COUNT。
 - 只提交自己的文件（db.ts / investigationDispatcher.ts / mvp36 测试 / log）；未碰 readTools/config。
+
+### 2026-06-16 第 46 轮：MVP46 —— ask_agent 对话结论桥接进完成闭环（最高频通道首次计入 COUNT）
+
+- **选型（ultracode 多 agent 工作流）**：4 探针取证 → 3 策略师独立排序 → 1 评委综合，三方**完全收敛**到
+  同一动作。关键证据：chatConclusionService.ts 是 ask_agent 聊天结论回流 matter 的唯一通道，但
+  `verdict!=='resolved'||conf<0.75` 时整段 return，把 progressed/blocked/no_change 全静默丢弃。
+  而 ask_agent 是用量最高的通道（attention_interactions 实测 23 次/24 topic 全有 assistant 产出），
+  其有意义结论几乎 100% 不计入完成；matter 侧来自 chat topic 的写入=0（用户在 matter 详情页看不到
+  AI 在聊天里做了什么）。这与 MVP40 investigationWriteback 对同类 verdict 已升进展回执卡的行为**不对称**。
+- **修复（MVP46）**：把决策核心抽成可单测纯函数 applyChatConclusion（不含 LLM）：
+  · resolved≥0.75 → raiseMatterResolveProposal；progressed/blocked≥0.6 → raiseMatterProgressProposal
+    （全复用 MVP40 共享 helper 的幂等/办结>进展让位门）；no_change/低置信 → skip。
+  · 升卡前确定性回写：upsertContextUnit(action_result, origin=chat:${topicId}) + attachMatterContextLink
+    (evidence) + currentSummary 并入「［AI 对话］…」（区别于排查的「［AI 排查］」）+ audit
+    chat_conclusion_written_back（独立 action，不污染 MVP45 排查止损的 verdict 历史）。
+  · **反射式回执护栏**（评委强调，区别于纯接线）：仅 matter 活跃 + 无在场办结提案 + 无被 dismiss 的提案史
+    才升卡——不给用户刚在右侧聊天亲眼看完、或已亲手关掉的事重复发卡。
+- **验证**：新增 mvp46 测试 8 个（progressed/blocked 升卡+回写+证据链+audit、resolved 办结、no_change/低置信
+  skip、幂等不叠卡、dismiss 抑制、办结优先 has_live_resolve）；tsc ✓；全量 ✓。预期把 ask_agent 路径的
+  可认可完成触发面从 ~4%(仅 resolved) 扩到 ~32%(+progressed/blocked)，6 个有 ask_agent 产出的 active
+  matter 中多个成为净新可认可完成入口。
+- 只改自己的文件（chatConclusionService.ts / matterResolveProposal 复用 / auditLog 加一枚 action / mvp46 测试 /
+  log）；未碰并行会话 readTools.ts / config.ts，不涉 IM。
