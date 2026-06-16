@@ -8,7 +8,7 @@
  * 选件/worthiness 为纯函数 → 可单测。调度部分薄。
  */
 import { config } from '../config.js';
-import { getContextEntityById } from '../db.js';
+import { getContextEntityById, hasLiveMatterProposal, getRecentInvestigationVerdicts } from '../db.js';
 import { listMatters, listMatterEntities } from '../matter/matterStore.js';
 import type { Matter } from '../matter/matterTypes.js';
 import { runInvestigation } from './investigationLoop.js';
@@ -47,19 +47,28 @@ export function isInvestigationWorthy(input: { title?: string; nextAction?: stri
 
 const PRIO_RANK: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
 
+/** 止损（纯函数）：近 N(默认2) 次排查都是 unknown → 飞书查不清，退避不再空查。 */
+export function isStuckOnUnknowns(recentVerdicts: string[], n = 2): boolean {
+  if (recentVerdicts.length < n) return false;
+  return recentVerdicts.slice(0, n).every((v) => v === 'unknown');
+}
+
 /**
- * 从候选 matter 里挑最该查的一件（纯函数）：worthy + 不在冷却 → 按 优先级↑ 再 最久未动↑ 排，取 top-1。
- * @param isCoolingDown 给定 matterId 是否在冷却期内
+ * 从候选 matter 里挑最该查的一件（纯函数）：worthy + 不在冷却 + 不该止损 → 按 优先级↑ 再 最久未动↑ 取 top-1。
+ * @param isCoolingDown 在冷却期内
+ * @param shouldSkip 止损：已有 live 提案(结论已交用户) 或 连续 unknown(查不清) → 跳过，把配额导向新事项
  */
 export function selectInvestigationCandidate(
   matters: Matter[],
-  isCoolingDown: (matterId: string) => boolean
+  isCoolingDown: (matterId: string) => boolean,
+  shouldSkip: (matterId: string) => boolean = () => false
 ): Matter | null {
   const pool = matters.filter(
     (m) =>
       (m.status === 'open' || m.status === 'in_progress') &&
       isInvestigationWorthy({ title: m.title, nextAction: m.nextAction }) &&
-      !isCoolingDown(m.id)
+      !isCoolingDown(m.id) &&
+      !shouldSkip(m.id)
   );
   if (pool.length === 0) return null;
   pool.sort((a, b) => {
@@ -97,7 +106,9 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
   const now = Date.now();
   const candidate = selectInvestigationCandidate(
     listMatters({ statuses: ['open', 'in_progress'], limit: 200 }),
-    (id) => isCoolingDown(id, now)
+    (id) => isCoolingDown(id, now),
+    // 止损：已有 live 提案（结论已交用户）或近 2 次都 unknown（飞书查不清）→ 跳过，省配额给新事项。
+    (id) => hasLiveMatterProposal(id) || isStuckOnUnknowns(getRecentInvestigationVerdicts(id, 3))
   );
   if (!candidate) return false;
 

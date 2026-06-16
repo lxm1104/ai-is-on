@@ -19,6 +19,17 @@ MVP31 生产验证负例（第 16 轮·会话 A：判定「未完成」→ 正�
 
 ## 迭代记录
 
+### 2026-06-16 第 40 轮：自主排查止损门（MVP42）—— 不在查不清/已结论的事项上空转
+
+- **依据**（工作流 #3 洞见）：实测 dispatcher 65% tick 在重查老事项；两个"对XX承诺"事项各 5 连 unknown 零收敛、
+  纯烧 LLM；已升 live 提案的事项仍被空查。配额没导向新事项。
+- **修复**：selectInvestigationCandidate 加 shouldSkip 止损——① 已有 live 办结/进展提案（结论已交用户裁决）
+  → 跳过；② 近 2 次排查都 unknown（飞书查不清）→ 退避。纯函数 isStuckOnUnknowns + db helper
+  hasLiveMatterProposal / getRecentInvestigationVerdicts。腾出的 tick 自然落到从没查过的 worthy 事项。
+- **效果**：减少无效空转 + 噪音回写（同事项反复 unknown），把配额导向能查清→出提案的新事项 → 间接抬两个指标。
+- **验证**：tsc 干净；dispatcher 测试 +2（止损纯函数 / shouldSkip 跳过），全量见下。
+- 只提交自己的文件（db/investigationDispatcher/测试）。
+
 ### 2026-06-16 第 39 轮：看板去重崩溃修复（MVP41）—— 243 张 live 卡 → 131，单事项 24→2
 
 - **体检发现灾难**：当前 **243 张 live 卡**（UI 截到 100），单 matter 最多 **24 张**并存、单实体近 2 天 48 张。

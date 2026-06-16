@@ -2920,6 +2920,29 @@ export function markAttentionItemsSupersededByHash(
  * （实测单 matter 24 张 live、全库 243 张）。提案/系统卡（proposal:* / system:*）有独立生命周期，排除。
  * 返回清理掉的卡数。
  */
+/** MVP42：该 matter 是否已有 live 的办结/进展提案卡（结论已交用户裁决 → 排查不必重查）。 */
+export function hasLiveMatterProposal(matterId: string): boolean {
+  return !!db
+    .prepare(
+      `SELECT 1 FROM attention_items WHERE status='live' AND matter_id=?
+         AND (input_hash LIKE 'proposal:matter-resolve:%' OR input_hash LIKE 'proposal:matter-progress:%') LIMIT 1`
+    )
+    .get(matterId);
+}
+
+/** MVP42：某 matter 最近几次自主排查的 verdict（最新在前），用于止损判定。 */
+export function getRecentInvestigationVerdicts(matterId: string, limit = 3): string[] {
+  return (
+    db
+      .prepare(
+        `SELECT json_extract(payload_json,'$.verdict') v FROM audit_logs
+         WHERE action='investigation_written_back' AND json_extract(payload_json,'$.matterId')=?
+         ORDER BY created_at DESC LIMIT ?`
+      )
+      .all(matterId, limit) as Array<{ v: string }>
+  ).map((r) => r.v);
+}
+
 export function collapseDuplicateLiveCardsByMatter(updatedAt: string): number {
   const notProposal = `input_hash NOT LIKE 'proposal:%' AND input_hash NOT LIKE 'system:%'`;
   // ① 同 matter（非提案）只留最新一张。

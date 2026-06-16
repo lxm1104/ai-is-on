@@ -77,3 +77,24 @@ test('select：非 open/in_progress 不选；无 worthy → null', () => {
   ];
   assert.equal(selectInvestigationCandidate(matters, () => false), null);
 });
+
+// MVP42：止损门
+import { isStuckOnUnknowns } from '../src/investigation/investigationDispatcher.js';
+
+test('isStuckOnUnknowns：近2次都 unknown → true；有非 unknown → false', () => {
+  assert.equal(isStuckOnUnknowns(['unknown', 'unknown', 'unknown']), true);
+  assert.equal(isStuckOnUnknowns(['unknown', 'unknown']), true);
+  assert.equal(isStuckOnUnknowns(['progressed', 'unknown']), false); // 最新非 unknown
+  assert.equal(isStuckOnUnknowns(['unknown', 'progressed']), false); // 第2次非 unknown
+  assert.equal(isStuckOnUnknowns(['unknown']), false); // 不足 2 次
+  assert.equal(isStuckOnUnknowns([]), false);
+});
+
+test('select：shouldSkip 命中的事项被跳过（已有提案/查不清）', () => {
+  const matters = [
+    mkMatter({ id: 'skip', priority: 'P0', nextAction: '确认是否已完成' }), // 高优但 shouldSkip
+    mkMatter({ id: 'keep', priority: 'P2', nextAction: '核实是否已收到' }),
+  ];
+  const pick = selectInvestigationCandidate(matters, () => false, (id) => id === 'skip');
+  assert.equal(pick?.id, 'keep', '止损跳过 skip，选 keep（即便 keep 优先级更低）');
+});
