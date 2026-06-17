@@ -158,20 +158,20 @@ export async function maybeDistillForSpace(spaceId: string | null, deps: Distill
 
 export type AnalyzeDeps = { judge?: (system: string, user: string) => Promise<string> };
 
-async function defaultAnalyzeJudge(system: string, user: string): Promise<string> {
-  const r = await runOneShot(user, { agentName: 'aiisn-problem-class-analyze', systemPrompt: system, lane: 'investigation' });
+async function defaultAnalyzeJudge(system: string, user: string, priority: boolean): Promise<string> {
+  const r = await runOneShot(user, { agentName: 'aiisn-problem-class-analyze', systemPrompt: system, lane: 'investigation', priority });
   return r.text;
 }
 
-/** 对一个问题类做系统性分析，写入「待审阅」结论。返回是否产出。用户手点 / 自动触发都走它。 */
-export async function analyzeClass(classId: string, deps: AnalyzeDeps = {}): Promise<boolean> {
+/** 对一个问题类做系统性分析，写入「待审阅」结论。返回是否产出。用户手点(priority)/自动触发都走它。 */
+export async function analyzeClass(classId: string, deps: AnalyzeDeps = {}, opts: { priority?: boolean } = {}): Promise<boolean> {
   if (!config.problemClassEnabled) return false;
   const cls = getProblemClass(classId);
   if (!cls) return false;
   const members = getClassMembersForAnalysis(classId);
   if (members.length < 1) return false;
   const profile = cls.spaceId ? getContextSpace(cls.spaceId)?.investigation_profile ?? null : null;
-  const judge = deps.judge ?? defaultAnalyzeJudge;
+  const judge = deps.judge ?? ((s: string, u: string) => defaultAnalyzeJudge(s, u, opts.priority ?? false));
   let parsed;
   try {
     const text = await judge(

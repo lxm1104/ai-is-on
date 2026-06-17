@@ -51,7 +51,7 @@ problemClassesRouter.post('/problem-classes/:id/status', (req, res) => {
 // MVP56：手动触发对某类的系统性分析（结论待审阅，不自动执行）
 problemClassesRouter.post('/problem-classes/:id/analyze', async (req, res) => {
   try {
-    const ok = await analyzeClass(req.params.id);
+    const ok = await analyzeClass(req.params.id, {}, { priority: true }); // 用户手点 → 抢 high 道，别被后台挤死
     const item = listLedger().find((c) => c.id === req.params.id);
     if (!item) return res.status(404).json({ error: 'class not found' });
     res.json({ ok, class: item });
