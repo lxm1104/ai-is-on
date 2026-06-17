@@ -271,13 +271,19 @@ export type ImReplyTarget = {
   replyToText?: string;
 };
 
+export type ImReplyContext = {
+  threadConclusion?: string;
+  threadOpenQuestion?: string;
+  counterpartLedger?: string;
+};
+
 export async function previewImReply(
   cardId: string
-): Promise<{ target: ImReplyTarget; suggestedText: string }> {
+): Promise<{ target: ImReplyTarget; suggestedText: string; context?: ImReplyContext }> {
   const r = await fetch(`/api/cards/${encodeURIComponent(cardId)}/im-reply/preview`);
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || `im-reply preview ${r.status}`);
-  return { target: j.target, suggestedText: j.suggestedText ?? '' };
+  return { target: j.target, suggestedText: j.suggestedText ?? '', context: j.context };
 }
 
 export async function postImReply(input: {

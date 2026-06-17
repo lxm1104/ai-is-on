@@ -27,23 +27,29 @@ export type MeetingLedger = {
 
 const EMPTY: MeetingLedger = { iOwe: [], owedToMe: [], related: [] };
 
-export function gatherMeetingLedger(meetingUnitId: string, limit = 12): MeetingLedger {
+function getSelfEntityId(): string {
   const selfRaw = getSetting('self_person_entity_id') ?? '';
-  const self = selfRaw ? resolveAliased(selfRaw) : '';
+  return selfRaw ? resolveAliased(selfRaw) : '';
+}
 
-  // 参会人 entity ids（会议 unit 关联的实体，去掉自己）
-  const attRows = db
-    .prepare(`SELECT DISTINCT entity_id FROM context_unit_entities WHERE context_unit_id = ?`)
-    .all(meetingUnitId) as Array<{ entity_id: string }>;
-  const attendeeIds = new Set<string>();
-  for (const r of attRows) {
-    const id = resolveAliased(r.entity_id);
-    if (id && id !== self) attendeeIds.add(id);
+/**
+ * 台账核心：给定一组「对方」entity ids，找与其共担的 open/in_progress matter，
+ * 按 owner 分 我欠对方 / 对方欠我 / 相关跟进。MVP61 会前(参会人) 与 MVP62 被@(回复对象) 共用。
+ */
+export function gatherLedgerForEntityIds(
+  counterpartIds: Set<string>,
+  opts: { excludeUnitId?: string; excludeMatterId?: string; limit?: number } = {}
+): MeetingLedger {
+  const self = getSelfEntityId();
+  const ids = new Set<string>();
+  for (const raw of counterpartIds) {
+    const id = resolveAliased(raw);
+    if (id && id !== self) ids.add(id);
   }
-  if (attendeeIds.size === 0) return EMPTY;
+  if (ids.size === 0) return EMPTY;
 
-  // 与任一参会人共担的 open/in_progress matter（排除会议自身派生的 matter）
-  const placeholders = Array.from(attendeeIds).map(() => '?').join(',');
+  const limit = opts.limit ?? 12;
+  const placeholders = Array.from(ids).map(() => '?').join(',');
   const rows = db
     .prepare(
       `SELECT DISTINCT m.id AS id, m.title AS title, m.owner_entity_id AS owner,
@@ -52,12 +58,17 @@ export function gatherMeetingLedger(meetingUnitId: string, limit = 12): MeetingL
        FROM matters m
        JOIN matter_entities me ON me.matter_id = m.id
        WHERE m.status IN ('open','in_progress')
-         AND m.created_from_context_unit_id != ?
+         AND (? IS NULL OR m.created_from_context_unit_id != ?)
+         AND (? IS NULL OR m.id != ?)
          AND me.entity_id IN (${placeholders})
        ORDER BY m.priority ASC, m.updated_at DESC
        LIMIT ?`
     )
-    .all(meetingUnitId, ...Array.from(attendeeIds), limit) as Array<{
+    .all(
+      opts.excludeUnitId ?? null, opts.excludeUnitId ?? null,
+      opts.excludeMatterId ?? null, opts.excludeMatterId ?? null,
+      ...Array.from(ids), limit
+    ) as Array<{
     id: string; title: string; owner: string | null;
     summary: string; next_action: string | null; priority: string; updated_at: string;
   }>;
@@ -73,10 +84,31 @@ export function gatherMeetingLedger(meetingUnitId: string, limit = 12): MeetingL
     };
     const owner = r.owner ? resolveAliased(r.owner) : '';
     if (owner && owner === self) ledger.iOwe.push(item);
-    else if (owner && attendeeIds.has(owner)) ledger.owedToMe.push(item);
+    else if (owner && ids.has(owner)) ledger.owedToMe.push(item);
     else ledger.related.push(item);
   }
   return ledger;
+}
+
+export function gatherMeetingLedger(meetingUnitId: string, limit = 12): MeetingLedger {
+  // 参会人 entity ids（会议 unit 关联的实体）
+  const attRows = db
+    .prepare(`SELECT DISTINCT entity_id FROM context_unit_entities WHERE context_unit_id = ?`)
+    .all(meetingUnitId) as Array<{ entity_id: string }>;
+  const ids = new Set<string>(attRows.map((r) => r.entity_id));
+  return gatherLedgerForEntityIds(ids, { excludeUnitId: meetingUnitId, limit });
+}
+
+/**
+ * MVP62：给定一个 matter（被@消息派生/关联的事项），拉齐与「同对方」的其它未了往来当回复脉络。
+ * counterpart = 该 matter 关联的所有 entity（去自己），再找其它共担 open matter。
+ */
+export function gatherCounterpartLedgerForMatter(matterId: string, limit = 8): MeetingLedger {
+  const rows = db
+    .prepare(`SELECT DISTINCT entity_id FROM matter_entities WHERE matter_id = ?`)
+    .all(matterId) as Array<{ entity_id: string }>;
+  const ids = new Set<string>(rows.map((r) => r.entity_id));
+  return gatherLedgerForEntityIds(ids, { excludeMatterId: matterId, limit });
 }
 
 export function isLedgerEmpty(l: MeetingLedger): boolean {

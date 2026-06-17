@@ -16,6 +16,7 @@ import {
   type AttentionOriginItem,
   type AttentionSignalDetail,
   type ImReplyTarget,
+  type ImReplyContext,
   type LarkTaskCreateResult,
   type CorrectionApplyResult,
 } from '../lib/api';
@@ -116,6 +117,7 @@ export function SignalCardView(props: {
   const [replyBusy, setReplyBusy] = useState(false);
   const [replyErr, setReplyErr] = useState<string | null>(null);
   const [replySent, setReplySent] = useState(false);
+  const [replyContext, setReplyContext] = useState<ImReplyContext | null>(null);
 
   // MVP14 Step 4 attention feedback state
   const isAttention = card.source === 'agent' && card.sourceKind === 'agent_run';
@@ -124,9 +126,10 @@ export function SignalCardView(props: {
     setReplyBusy(true);
     setReplyErr(null);
     try {
-      const { target, suggestedText } = await previewImReply(card.id);
+      const { target, suggestedText, context } = await previewImReply(card.id);
       setReplyTarget(target);
       setReplyText(suggestedText || card.draftReply || '');
+      setReplyContext(context ?? null);
       setReplyOpen(true);
     } catch (e) {
       // 非 IM 卡 / 会话不唯一 → 展示原因，不开编辑框
@@ -513,6 +516,19 @@ export function SignalCardView(props: {
                   </p>
                   {replyTarget?.replyToText && (
                     <p className="card__reply-quote">「{replyTarget.replyToText}」</p>
+                  )}
+                  {replyContext && (
+                    <div className="card__reply-context">
+                      {replyContext.threadConclusion && (
+                        <p className="card__reply-context-line">📌 上次结论：{replyContext.threadConclusion}</p>
+                      )}
+                      {replyContext.threadOpenQuestion && (
+                        <p className="card__reply-context-line">❓ 待答：{replyContext.threadOpenQuestion}</p>
+                      )}
+                      {replyContext.counterpartLedger && (
+                        <pre className="card__reply-context-ledger">{replyContext.counterpartLedger}</pre>
+                      )}
+                    </div>
                   )}
                   <textarea
                     className="card__reply-text"

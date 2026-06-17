@@ -32,6 +32,7 @@ import { projectAttentionItemToCard } from '../attention/attentionProjection.js'
 import { recordAttentionInteraction } from '../attention/attentionInteractions.js';
 import { rowToCard } from '../cards/cardsService.js';
 import { attachMatterContextLink, getMatterById } from '../matter/matterStore.js';
+import { gatherCounterpartLedgerForMatter, renderLedgerBlock, isLedgerEmpty } from '../agents/meetingLedger.js';
 import { enqueueAttentionTickSoon } from '../attention/attentionEngine.js';
 import { broadcast } from '../ws.js';
 import type { SignalCard } from '../claude/protocol.js';
@@ -204,11 +205,27 @@ export function resolveImReplyTarget(source: ImReplySource): ImReplyTarget {
 export function previewImReply(cardId: string): {
   target: ImReplyTarget;
   suggestedText: string;
+  /** MVP62 预装脉络：回复对象的未了往来（上次结论/待答 + 与同对方的其它开放事项）。 */
+  context?: { threadConclusion?: string; threadOpenQuestion?: string; counterpartLedger?: string };
 } {
   const source = resolveSource(cardId);
   const target = resolveImReplyTarget(source);
   const suggestedText = (source.draftReply || source.suggestedAction || '').trim();
-  return { target, suggestedText };
+
+  // MVP62：被@需回复时，把「这条线索的上次结论/待答 + 与同对方的其它未了事项」预装给用户，
+  // 让回复有据可依、不从 0 翻聊天记录（复用已有 matter 结论，省 token）。
+  let context: { threadConclusion?: string; threadOpenQuestion?: string; counterpartLedger?: string } | undefined;
+  if (source.matterId) {
+    const m = getMatterById(source.matterId);
+    const threadConclusion = m?.currentSummary?.trim() || undefined;
+    const threadOpenQuestion = m?.nextAction?.trim() || undefined;
+    const ledger = gatherCounterpartLedgerForMatter(source.matterId);
+    const counterpartLedger = isLedgerEmpty(ledger) ? undefined : renderLedgerBlock(ledger);
+    if (threadConclusion || threadOpenQuestion || counterpartLedger) {
+      context = { threadConclusion, threadOpenQuestion, counterpartLedger };
+    }
+  }
+  return { target, suggestedText, context };
 }
 
 // ---- 执行发送（confirm 门控）----

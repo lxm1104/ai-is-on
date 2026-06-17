@@ -109,3 +109,23 @@ test('MVP61：owner 不明 → 落「相关跟进」，不误判归属', () => {
   assert.equal(l.owedToMe.length, 0);
   assert.equal(l.related.length, 1, 'owner 非 self 非参会人 → 相关跟进');
 });
+
+// MVP62 被@预装脉络：gatherCounterpartLedgerForMatter —— 给定线索 matter，拉齐与同对方的其它未了往来
+test('MVP62：counterpart 台账 = 与同对方的其它 open matter（排除线索自身）', async () => {
+  resetDb();
+  const { gatherCounterpartLedgerForMatter } = await import('../src/agents/meetingLedger.js');
+  const self = mkEntity('刘昕明');
+  const zhang = mkEntity('张三');
+  db.setSetting('self_person_entity_id', self);
+
+  // 线索本身（被@的那条）：与张三相关、owner=自己
+  const thread = mkMatter({ title: '回复张三的评审请求', owner: self, attendee: zhang, next: '答复评审意见' });
+  // 与同对方(张三)的其它未了：张三欠我的联调
+  mkMatter({ title: '张三的接口联调', owner: zhang, attendee: zhang, summary: '上周说本周给', next: '催联调时间' });
+
+  const l = gatherCounterpartLedgerForMatter(thread.id);
+  // 线索自身被排除，只剩与张三的其它事项
+  assert.equal(l.iOwe.length, 0, '线索自身(我欠)被 excludeMatterId 排除');
+  assert.equal(l.owedToMe.length, 1, '张三欠我的联调进脉络');
+  assert.equal(l.owedToMe[0].title, '张三的接口联调');
+})
