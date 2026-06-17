@@ -24,7 +24,10 @@ export const PROBLEM_CLASS_DISTILL_SYSTEM = `你是「问题归类器」。系�
 只输出一个合法 JSON（无多余文字、无 Markdown）：
 { "assignments": [ { "matterId": "<id>", "classId": "<已有类id>" } 或
                    { "matterId": "<id>", "newClass": { "label": "...", "rootCause": "..." } } 或
-                   { "matterId": "<id>", "reject": true, "reason": "..." } ] }`;
+                   { "matterId": "<id>", "reject": true, "reason": "..." } ] }
+
+**JSON 合法性铁律（极重要）**：label / rootCause / reason 等字段值内**禁止出现英文双引号 "**——
+需要引用时一律用中文引号「」或『』。整段必须能被 JSON.parse 直接解析，不要有任何未转义的引号。`;
 
 export type ClassAssignment = {
   matterId: string;
@@ -62,51 +65,94 @@ export function buildProblemClassMessage(input: {
   return lines.join('\n');
 }
 
+/** 把一个对象强转成合法 assignment（候选内校验）；非法返回 null。 */
+function coerceAssignment(o: Record<string, unknown>, validMatterIds: Set<string>, validClassIds: Set<string>): ClassAssignment | null {
+  const matterId = typeof o.matterId === 'string' ? o.matterId : '';
+  if (!validMatterIds.has(matterId)) return null;
+  if (o.reject === true) return { matterId, reject: true, reason: typeof o.reason === 'string' ? o.reason : undefined };
+  if (typeof o.classId === 'string' && validClassIds.has(o.classId)) return { matterId, classId: o.classId };
+  const nc = o.newClass as Record<string, unknown> | undefined;
+  if (nc && typeof nc.label === 'string' && typeof nc.rootCause === 'string' && nc.label.trim() && nc.rootCause.trim()) {
+    return { matterId, newClass: { label: nc.label.trim().slice(0, 40), rootCause: nc.rootCause.trim().slice(0, 400) } };
+  }
+  return null;
+}
+
+/**
+ * 兜底：用括号配平从 assignments 数组里逐个抠出 {...} 对象（应对截断/局部坏 JSON）。
+ * 即便整体 JSON 不合法/被截断，也能把已完整的 assignment 救回来。
+ */
+function salvageAssignmentObjects(text: string): string[] {
+  const ai = text.indexOf('"assignments"');
+  const from = text.indexOf('[', ai >= 0 ? ai : 0);
+  if (from < 0) return [];
+  const s = text.slice(from + 1);
+  const out: string[] = [];
+  let depth = 0, start = -1, inStr = false, esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === '{') { if (depth === 0) start = i; depth++; }
+    else if (ch === '}') { depth--; if (depth === 0 && start >= 0) { out.push(s.slice(start, i + 1)); start = -1; } }
+    else if (ch === ']' && depth === 0) break;
+  }
+  return out;
+}
+
 /** 解析归类输出；只保留 matterId 在候选集合、classId 在已有集合内的项。导出供单测。 */
 export function parseProblemClassOutput(
   text: string,
   validMatterIds: Set<string>,
   validClassIds: Set<string>
 ): ClassAssignment[] {
+  // 主路径：整体 JSON（直解 / jsonrepair / 抠最外层大括号）
   let obj: unknown = null;
-  try {
-    obj = JSON.parse(text);
-  } catch {
+  for (const cand of [text, (() => { try { return jsonrepair(text); } catch { return ''; } })(), text.match(/\{[\s\S]*\}/)?.[0] ?? '']) {
+    if (!cand) continue;
     try {
-      obj = JSON.parse(jsonrepair(text));
+      obj = JSON.parse(cand);
+      break;
     } catch {
-      const m = text.match(/\{[\s\S]*\}/);
-      if (m) {
-        try {
-          obj = JSON.parse(jsonrepair(m[0]));
-        } catch {
-          obj = null;
-        }
-      }
+      try {
+        obj = JSON.parse(jsonrepair(cand));
+        break;
+      } catch {}
     }
   }
-  if (!obj || typeof obj !== 'object') return [];
-  const arr = (obj as { assignments?: unknown }).assignments;
-  if (!Array.isArray(arr)) return [];
   const out: ClassAssignment[] = [];
-  for (const raw of arr) {
-    const o = (raw ?? {}) as Record<string, unknown>;
-    const matterId = typeof o.matterId === 'string' ? o.matterId : '';
-    if (!validMatterIds.has(matterId)) continue;
-    if (o.reject === true) {
-      out.push({ matterId, reject: true, reason: typeof o.reason === 'string' ? o.reason : undefined });
-      continue;
+  const arr = obj && typeof obj === 'object' ? (obj as { assignments?: unknown }).assignments : null;
+  if (Array.isArray(arr)) {
+    for (const raw of arr) {
+      const a = coerceAssignment((raw ?? {}) as Record<string, unknown>, validMatterIds, validClassIds);
+      if (a) out.push(a);
     }
-    if (typeof o.classId === 'string' && validClassIds.has(o.classId)) {
-      out.push({ matterId, classId: o.classId });
-      continue;
+  }
+  // 兜底：主路径没救出任何项 → 逐对象配平抠取（截断/局部坏 JSON 也能救回完整的）
+  if (out.length === 0) {
+    const seen = new Set<string>();
+    for (const objStr of salvageAssignmentObjects(text)) {
+      let parsed: unknown = null;
+      try {
+        parsed = JSON.parse(objStr);
+      } catch {
+        try {
+          parsed = JSON.parse(jsonrepair(objStr));
+        } catch {
+          continue;
+        }
+      }
+      const a = coerceAssignment((parsed ?? {}) as Record<string, unknown>, validMatterIds, validClassIds);
+      if (a && !seen.has(a.matterId)) {
+        seen.add(a.matterId);
+        out.push(a);
+      }
     }
-    const nc = o.newClass as Record<string, unknown> | undefined;
-    if (nc && typeof nc.label === 'string' && typeof nc.rootCause === 'string' && nc.label.trim() && nc.rootCause.trim()) {
-      out.push({ matterId, newClass: { label: nc.label.trim().slice(0, 40), rootCause: nc.rootCause.trim().slice(0, 400) } });
-      continue;
-    }
-    // 无法识别的赋值 → 跳过（保守，不乱归）
   }
   return out;
 }
