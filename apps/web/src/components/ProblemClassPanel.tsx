@@ -109,8 +109,8 @@ export function ProblemClassPanel() {
                       <div className="sp-profile__text" style={{ whiteSpace: 'pre-wrap' }}>{c.rootCause}</div>
                       {c.members.length > 0 && (
                         <ol className="playbook__steps">
-                          {c.members.slice(0, 4).map((m) => (
-                            <li key={m.matterId}>{m.diagnosticText.slice(0, 80)}</li>
+                          {c.members.slice(0, 6).map((m) => (
+                            <MemberTraceRow key={m.matterId} member={m} />
                           ))}
                         </ol>
                       )}
@@ -129,5 +129,56 @@ export function ProblemClassPanel() {
         </div>
       )}
     </div>
+  );
+}
+
+// MVP53b：台账下钻——点成员展开它那一次自主排查的工具链（直接打 matter-keyed 端点，不经 api.ts）
+type TraceStepLite = { order: number; kind: string; tool?: string; summary: string; params?: Record<string, unknown> };
+type TraceLite = { outcome: string | null; steps: TraceStepLite[] } | null;
+
+function MemberTraceRow({ member }: { member: { matterId: string; diagnosticText: string } }) {
+  const [open, setOpen] = useState(false);
+  const [trace, setTrace] = useState<TraceLite | undefined>(undefined); // undefined=未拉取
+  async function toggle() {
+    const next = !open;
+    setOpen(next);
+    if (next && trace === undefined) {
+      try {
+        const r = await fetch(`/api/matters/${encodeURIComponent(member.matterId)}/investigation-trace`);
+        const j = await r.json();
+        setTrace(j.trace ?? null);
+      } catch {
+        setTrace(null);
+      }
+    }
+  }
+  return (
+    <li style={{ marginBottom: 4 }}>
+      <button
+        type="button"
+        onClick={() => void toggle()}
+        style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', textAlign: 'left', padding: 0, font: 'inherit' }}
+      >
+        {open ? '▾' : '▸'} {member.diagnosticText.slice(0, 80)}
+      </button>
+      {open && trace !== undefined && (
+        <div style={{ fontSize: 12, marginTop: 4, paddingLeft: 12, opacity: 0.9 }}>
+          {trace === null ? (
+            <span style={{ opacity: 0.6 }}>（这条没有自主排查的工具链记录）</span>
+          ) : (
+            <>
+              {trace.outcome && <div style={{ marginBottom: 4, opacity: 0.8 }}>结论：{trace.outcome}</div>}
+              <ol style={{ margin: 0, paddingLeft: 16 }}>
+                {trace.steps.map((s) => (
+                  <li key={s.order}>
+                    <code>{s.tool ?? s.kind}</code> → {s.summary}
+                  </li>
+                ))}
+              </ol>
+            </>
+          )}
+        </div>
+      )}
+    </li>
   );
 }

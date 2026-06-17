@@ -17,3 +17,11 @@ investigationTraceRouter.get('/cards/:cardId/investigation-trace', (req, res) =>
   if (!trace) return res.json({ trace: null });
   res.json({ trace: { outcome: trace.outcome, steps: trace.steps, createdAt: trace.createdAt } });
 });
+
+// MVP53b：按 matterId 直接取轨迹（问题类台账下钻：每个成员 case 怎么查的）
+investigationTraceRouter.get('/matters/:matterId/investigation-trace', (req, res) => {
+  const matterId = matchMatterId(req.params.matterId) ?? req.params.matterId;
+  const trace = getLatestInvestigationTraceForMatter(matterId);
+  if (!trace) return res.json({ trace: null });
+  res.json({ trace: { outcome: trace.outcome, steps: trace.steps, createdAt: trace.createdAt } });
+});
