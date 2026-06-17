@@ -19,8 +19,57 @@ import { setSetting } from '../db.js';
 
 const LOOKBACK_MS = 24 * 3600_000;
 
+/**
+ * MVP60：日报带实证——把过去 24h「AI 自主排查实际查清的结论」(investigation_written_back /
+ * matter_auto_resolved 审计行) 汇成一段，让日报不只是低优信号合并，而是「AI 今天替你查清了什么」的回执。
+ * 纯本地、只读、按事项去重(自主办结 > 一般查清，取最新一条)。
+ */
+type AiFinding = { matterId: string; verdict: string; fact: string; autoResolved: boolean; title: string; status: string };
+function collectAiFindings(cutoff: string): AiFinding[] {
+  const rows = db
+    .prepare(
+      `SELECT a.action, a.reason, a.payload_json, m.title AS title, m.status AS status
+       FROM audit_logs a
+       JOIN matters m ON m.id = json_extract(a.payload_json, '$.matterId')
+       WHERE a.action IN ('investigation_written_back','matter_auto_resolved')
+         AND a.created_at > ?
+       ORDER BY a.created_at DESC
+       LIMIT 60`
+    )
+    .all(cutoff) as Array<{ action: string; reason: string; payload_json: string | null; title: string; status: string }>;
+  const byMatter = new Map<string, AiFinding>();
+  for (const r of rows) {
+    let p: any = {};
+    try { p = r.payload_json ? JSON.parse(r.payload_json) : {}; } catch { p = {}; }
+    const matterId = p.matterId as string | undefined;
+    if (!matterId) continue;
+    const autoResolved = r.action === 'matter_auto_resolved';
+    // factSummary 直接在 matter_auto_resolved 的 payload；investigation_written_back 取 reason「：」后的事实句
+    const fact = (p.factSummary as string) || r.reason.split('：').slice(1).join('：') || r.reason;
+    const finding: AiFinding = {
+      matterId, verdict: (p.verdict as string) || (autoResolved ? 'resolved' : 'unknown'),
+      fact: fact.trim(), autoResolved, title: r.title, status: r.status,
+    };
+    const prev = byMatter.get(matterId);
+    // 同一事项：自主办结优先；否则保留最新(rows 已按时间倒序，先到的即最新)
+    if (!prev || (autoResolved && !prev.autoResolved)) byMatter.set(matterId, finding);
+  }
+  return Array.from(byMatter.values());
+}
+
+function verdictLabel(v: string, autoResolved: boolean): string {
+  if (autoResolved) return '✅ 已自主办结';
+  switch (v) {
+    case 'resolved': return '✅ 疑似已完成';
+    case 'progressed': return '🔵 有进展';
+    case 'blocked': return '⛔ 受阻';
+    default: return '🔍 已查';
+  }
+}
+
 export const dailyDigestHandler: AgentHandler = async ({ trigger, agentRunId }) => {
   const cutoff = new Date(Date.now() - LOOKBACK_MS).toISOString();
+  const aiFindings = collectAiFindings(cutoff);
   const rows = db
     .prepare(
       `SELECT id, priority, source, title, summary, status, created_at
@@ -41,22 +90,36 @@ export const dailyDigestHandler: AgentHandler = async ({ trigger, agentRunId }) 
     created_at: string;
   }>;
 
-  if (rows.length === 0) {
+  // MVP60：低优信号 + AI 实证 任一非空才出日报；两者皆空才跳过(否则会漏掉「AI 当天查清」回执)。
+  if (rows.length === 0 && aiFindings.length === 0) {
     return {
-      summary: 'daily_digest skipped (no low-priority cards in last 24h)',
+      summary: 'daily_digest skipped (no low-priority cards or AI findings in last 24h)',
       proposalIds: [],
       cardIds: [],
     };
   }
 
   // Build digest body
+  const lines: string[] = [];
+
+  // MVP60：AI 实证段置顶——日报先说「AI 今天替你查清了什么」(待你过目)，再列低优信号。
+  if (aiFindings.length > 0) {
+    lines.push(`🔍 AI 当天自主查清 ${aiFindings.length} 件（待你过目）：`, '');
+    for (const f of aiFindings.slice(0, 12)) {
+      lines.push(`- ${verdictLabel(f.verdict, f.autoResolved)}｜${f.title}`);
+      if (f.fact) lines.push(`  ${f.fact.slice(0, 140)}`);
+    }
+    if (aiFindings.length > 12) lines.push(`  …还有 ${aiFindings.length - 12} 件`);
+    if (rows.length > 0) lines.push('');
+  }
+
   const bySource = new Map<string, typeof rows>();
   for (const r of rows) {
     const arr = bySource.get(r.source) ?? [];
     arr.push(r);
     bySource.set(r.source, arr);
   }
-  const lines: string[] = [`过去 24h 收到 ${rows.length} 条低优先级信号，已自动合并：`, ''];
+  if (rows.length > 0) lines.push(`过去 24h 收到 ${rows.length} 条低优先级信号，已自动合并：`, '');
   for (const [src, items] of bySource) {
     lines.push(`【${labelSource(src)}】`);
     for (const it of items.slice(0, 8)) {
@@ -71,7 +134,9 @@ export const dailyDigestHandler: AgentHandler = async ({ trigger, agentRunId }) 
     id: proposalId,
     agent_run_id: agentRunId,
     proposal_type: 'daily_digest',
-    title: `日报：过去 24h · ${rows.length} 条低优先级`,
+    title: aiFindings.length > 0
+      ? `日报：AI 查清 ${aiFindings.length} 件 · ${rows.length} 条低优先级`
+      : `日报：过去 24h · ${rows.length} 条低优先级`,
     body: lines.join('\n'),
     reversible: 1,
     impact_scope: 'self',
@@ -80,6 +145,7 @@ export const dailyDigestHandler: AgentHandler = async ({ trigger, agentRunId }) 
     payload_json: JSON.stringify({
       priority: 'P3',
       cardCount: rows.length,
+      aiFindingCount: aiFindings.length,
       triggerId: trigger.id,
       sources: Array.from(bySource.keys()),
     }),
@@ -124,10 +190,10 @@ export const dailyDigestHandler: AgentHandler = async ({ trigger, agentRunId }) 
   setSetting('last_digest_at', now);
 
   return {
-    summary: `daily_digest: ${rows.length} cards merged${card ? '' : ' [boundary-blocked]'}`,
+    summary: `daily_digest: ${rows.length} cards merged, ${aiFindings.length} AI findings${card ? '' : ' [boundary-blocked]'}`,
     proposalIds: [proposalId],
     cardIds: card ? [card.id] : [],
-    data: { cardCount: rows.length, sources: Array.from(bySource.keys()) },
+    data: { cardCount: rows.length, aiFindingCount: aiFindings.length, sources: Array.from(bySource.keys()) },
   };
 };
 
