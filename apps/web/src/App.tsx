@@ -10,6 +10,7 @@ import { ProjectProposalsPanel } from './components/ProjectProposalsPanel';
 import { RulesPanel } from './components/RulesPanel';
 import { PlaybookPanel } from './components/PlaybookPanel';
 import { ProblemClassPanel } from './components/ProblemClassPanel';
+import { CliWhitelistPanel } from './components/CliWhitelistPanel';
 import { TonePanel } from './components/TonePanel';
 import { WorkMapPanel } from './components/WorkMapPanel';
 import { MyCollaboratorsPanel } from './components/MyCollaboratorsPanel';
@@ -528,6 +529,7 @@ export function App() {
             <RulesPanel />
             <PlaybookPanel />
             <ProblemClassPanel />
+            <CliWhitelistPanel />
             <MatterPanel refreshSignal={matterTick} />
             <ContextPanel />
           </SettingsDrawer>

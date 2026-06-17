@@ -27,6 +27,7 @@ import { existsSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { config } from '../config.js';
+import { getInvestigationReadClis } from './readClisSettings.js';
 
 // ---------------------------------------------------------------------------
 // 1) 环境最小化：只下传安全键 + 钉死中和已知注入向量。
@@ -170,6 +171,12 @@ const BYTEDCLI_VALUE_FLAGS = new Set(['--site', '--auth-site', '--vregion', '--v
 const RG_BLOCK = new Set(['--pre', '--pre-glob', '--hostname-bin', '-z', '--search-zip']);
 const FIND_ACTION_RE = /^-(exec|execdir|ok|okdir|delete|fprint|fprintf|fls|fprint0)$/i;
 
+// 通用危险参数（对**所有** CLI 生效，含用户自加的 custom CLI）：exec / 预处理器类长 flag——
+// 没有任何只读命令的正常用法需要它们，但 fd/ugrep 等"类只读"工具靠它们执行任意程序（fd --exec、
+// ugrep --pre）。这是 per-CLI 护栏之外的兜底层（fd 的短 flag -x/-X 无法通用拦，故 fd 类直接进 DENY）。
+const COMMON_DANGEROUS_FLAG_RE =
+  /^(--exec|--exec-batch|--exec-dir|-exec|-execdir|-ok|-okdir|--pre|--pre-glob|--hostname-bin|--search-zip)(=.*)?$/i;
+
 /**
  * 定位子命令 = **跳过全局 flag 及其值后**遇到的第一个非 dash token，及其下标。
  * 关键：valueFlags 里的分离形取值 flag 会连同它的值一起跳过，从根上消灭"flag 值伪装成子命令"的旁路。
@@ -250,28 +257,46 @@ function guardFind(args: string[]): void {
   }
 }
 
+/** 对所有 CLI 生效的通用 exec/预处理器 flag 兜底（防 custom CLI 借 --exec/--pre 执行任意程序）。 */
+function guardCommonDangerousFlags(args: string[]): void {
+  for (const a of args) {
+    if (COMMON_DANGEROUS_FLAG_RE.test(a))
+      throw new Error(`run_command 拒绝：危险参数 ${a}（exec/预处理器类，可执行任意程序）`);
+  }
+}
+
 // ---------------------------------------------------------------------------
-// 主校验：纯函数，违规即 throw。
+// 主校验：违规即 throw。
+// 注：白名单成员现走 getInvestigationReadClis()（运行时可改，用户在前端增删 → settings 表），
+// 故本函数不再是"纯函数"——但行为仍确定（无 override 时回落 config 默认，与旧版一致），且不改入参。
 // ---------------------------------------------------------------------------
 
 /** 硬只读 + 安全校验。throw 即代表这条命令不该执行。导出供单测穷举攻击向量。 */
 export function assertSafeCommand(cmd: string, args: string[], cwd?: string): void {
   if (!cmd || typeof cmd !== 'string') throw new Error('run_command 拒绝：缺 cmd');
   if (/[\\/]/.test(cmd)) throw new Error(`run_command 拒绝：cmd 不能含路径分隔符（${cmd}）`);
-  if (!config.investigationReadClis.includes(cmd))
-    throw new Error(`run_command 拒绝：${cmd} 不在只读 CLI 白名单（${config.investigationReadClis.join(',')}）`);
+  // 白名单走运行时来源（用户在前端可改 → settings 表；未改回落 config 默认）。
+  // getInvestigationReadClis() 已对 DENY 黑名单/非法格式兜底过滤，故能进到这里的有效项一定安全。
+  const whitelist = getInvestigationReadClis();
+  if (!whitelist.includes(cmd))
+    throw new Error(`run_command 拒绝：${cmd} 不在只读 CLI 白名单（${whitelist.join(',')}）`);
   if (!Array.isArray(args)) throw new Error('run_command 拒绝：args 必须是数组');
   for (const a of args) {
     if (typeof a !== 'string') throw new Error('run_command 拒绝：args 必须全为字符串');
     if (a.includes('\0') || a.includes('\n')) throw new Error('run_command 拒绝：参数含换行/NUL');
   }
 
-  // 每 CLI 护栏
-  if (cmd === 'git') guardGit(args);
-  else if (cmd === 'fornax-cli') guardFornax(args);
-  else if (cmd === 'bytedcli') guardBytedcli(args);
-  else if (cmd === 'rg') guardRg(args);
-  else if (cmd === 'find') guardFind(args);
+  // 通用兜底护栏：exec/预处理器类 flag 对所有 CLI（含 custom）一律拒。
+  guardCommonDangerousFlags(args);
+
+  // 每 CLI 护栏。按**小写**分发：有效白名单已规整为小写，且大小写不应绕过专项护栏
+  // （macOS 大小写不敏感文件系统下 spawn('GIT') 真会跑 git —— 必须让 guardGit 照样命中）。
+  const lc = cmd.toLowerCase();
+  if (lc === 'git') guardGit(args);
+  else if (lc === 'fornax-cli') guardFornax(args);
+  else if (lc === 'bytedcli') guardBytedcli(args);
+  else if (lc === 'rg') guardRg(args);
+  else if (lc === 'find') guardFind(args);
 
   // 路径根限制 + 敏感文件兜底
   const roots = resolveRoots();

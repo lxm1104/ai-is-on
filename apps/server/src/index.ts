@@ -34,6 +34,7 @@ import { graphRouter } from './routes/graph.js';
 import { projectsRouter } from './routes/projects.js';
 import { toneProfileRouter } from './routes/toneProfile.js';
 import { mattersRouter } from './routes/matters.js';
+import { settingsRouter } from './routes/settings.js';
 import { runGraphInducer } from './structure/derived/graphInducer.js';
 import { startCollectorScheduler, stopCollectorScheduler } from './collectors/scheduler.js';
 import {
@@ -88,6 +89,7 @@ app.use('/api', graphRouter);
 app.use('/api', projectsRouter);
 app.use('/api', toneProfileRouter);
 app.use('/api', mattersRouter);
+app.use('/api', settingsRouter);
 
 const server = http.createServer(app);
 attachWebSocket(server);

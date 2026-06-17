@@ -17,6 +17,7 @@ import {
   RUN_COMMAND_DESCRIPTION,
   RUN_COMMAND_PARAMS_HINT,
 } from './runCommand.js';
+import { getInvestigationReadClis } from './readClisSettings.js';
 
 export type ReadToolName =
   | 'search_im_messages'
@@ -177,9 +178,9 @@ function countItems(d: unknown): number {
   return 0;
 }
 
-/** run_command 是否启用（kill-switch + 必须有至少一个白名单 CLI）。 */
+/** run_command 是否启用（kill-switch + 必须有至少一个白名单 CLI；白名单走运行时来源，用户可改）。 */
 function runCommandEnabled(): boolean {
-  return config.investigationRunCommandEnabled && config.investigationReadClis.length > 0;
+  return config.investigationRunCommandEnabled && getInvestigationReadClis().length > 0;
 }
 
 export function listReadTools(): Array<{ name: ReadToolName; description: string; paramsHint: string }> {

@@ -752,6 +752,7 @@ body { background: var(--bg); color: var(--text); }
 .playbook__tag { font-size: 10px; padding: 1px 6px; border-radius: 8px; border: 1px solid var(--border); color: var(--text-dim); }
 .playbook__tag--user { background: var(--accent); color: white; border-color: var(--accent); }
 .playbook__tag--ok { color: var(--accent); border-color: var(--accent); }
+.playbook__tag--warn { color: var(--warn); border-color: var(--warn); }
 /* MVP38 项目排查档案 */
 .sp-profile { margin: 8px 0; padding: 8px; border: 1px dashed var(--border); border-radius: 6px; }
 .sp-profile__head { font-size: 12px; font-weight: 600; }
