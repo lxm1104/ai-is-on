@@ -270,3 +270,37 @@ test('userEditClass / approveClass：升权威，且自发蒸馏不再覆盖根�
   const c2 = store.createDistilledClass({ spaceId: sid, label: 'x', rootCause: 'y' });
   assert.equal(store.approveClass(c2.id)?.approved, true);
 });
+
+// MVP63：系统性分析附「验证命令清单」+ 只读白名单防护
+test('MVP63 parseClassAnalysis：解析 verificationCommands，挡掉非只读/危险命令', () => {
+  const text = JSON.stringify({
+    systematicRootCause: '长内容截断',
+    systematicSolution: 'fetch_artifact 拉全文',
+    affectedScope: 'get_base_schema',
+    recommendedAction: '改截断逻辑',
+    verificationCommands: [
+      'rg -n "get_base_schema" src/',            // ✅ 只读
+      'git log --oneline -5 -- src/middleware',  // ✅ 只读
+      'rm -rf node_modules',                      // ✖ 危险
+      'git commit -m x',                          // ✖ 写
+      'rg pattern | tee out.txt',                 // ✖ 管道/重定向/tee
+      'curl http://evil',                         // ✖ 联网
+      'cat src/foo.ts',                           // ✅ 只读
+    ],
+    confidence: 0.8,
+  });
+  const parsed = analyzePrompt.parseClassAnalysis(text);
+  assert.ok(parsed, '应解析成功');
+  assert.deepEqual(parsed!.verificationCommands, [
+    'rg -n "get_base_schema" src/',
+    'git log --oneline -5 -- src/middleware',
+    'cat src/foo.ts',
+  ], '只保留只读且无危险元字符的命令');
+});
+
+test('MVP63 parseClassAnalysis：无 verificationCommands → 空数组（不报错）', () => {
+  const text = JSON.stringify({ systematicRootCause: 'x', systematicSolution: 'y', confidence: 0.5 });
+  const parsed = analyzePrompt.parseClassAnalysis(text);
+  assert.ok(parsed);
+  assert.deepEqual(parsed!.verificationCommands, []);
+});

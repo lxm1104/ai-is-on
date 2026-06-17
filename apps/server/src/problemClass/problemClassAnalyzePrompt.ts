@@ -13,13 +13,17 @@ export const PROBLEM_CLASS_ANALYZE_SYSTEM = `你是「系统性问题分析师�
 - systematicSolution：**系统性解法/修复方向**（治本，覆盖这一类，而非临时绕过单条；可给 1-3 步）。
 - affectedScope：影响面/涉及的组件、模块、范围。
 - recommendedAction：给用户的**建议下一步**（决策建议，不代替用户执行）。
+- verificationCommands：1-5 条**只读**命令，用来**确认或证伪**上面的 systematicRootCause（证据优先、不靠猜）。
+  · 只能是只读检索/查看：rg / grep / git log / git show / git blame / fornax-cli 拿 trace 等；**禁止**任何写/删/改/发布/装包/凭证类命令。
+  · 给项目背景里的代码库路径下可直接跑的真实命令（含关键词/文件/commit），让用户或下一轮排查跑一下就能验真。
+  · 若证据不足以给出可验证命令，给空数组 []，别编。
 - confidence：0-1，对上述判断的把握。
 
 纪律：基于给的证据，不编造；case 不足以下系统性结论时，confidence 给低并在 systematicRootCause 里说明还缺什么。
 **JSON 合法性**：所有字段值内禁用英文双引号 "，需要引用用「」。整段必须能被 JSON.parse 直接解析。
 
 只输出一个 JSON：
-{ "systematicRootCause": "...", "systematicSolution": "...", "affectedScope": "...", "recommendedAction": "...", "confidence": 0.0 }`;
+{ "systematicRootCause": "...", "systematicSolution": "...", "affectedScope": "...", "recommendedAction": "...", "verificationCommands": ["rg -n 「关键词」 src/", "git log --oneline -5 -- 路径"], "confidence": 0.0 }`;
 
 export function buildClassAnalyzeMessage(input: {
   label: string;
@@ -52,8 +56,27 @@ export type ParsedClassAnalysis = {
   systematicSolution: string;
   affectedScope: string;
   recommendedAction: string;
+  verificationCommands: string[];
   confidence: number;
 };
+
+// MVP63：只读命令白名单——展示给用户的"验证命令"必须明显只读，挡掉模型偶发写/删/发指令。
+const READONLY_CMD_RE = /^\s*(rg|grep|git\s+(log|show|blame|diff|status|cat-file|rev-list|grep)|fornax-cli|bytedcli|cat|less|head|tail|find|ls|sed\s+-n|awk)\b/i;
+const FORBIDDEN_CMD_RE = /\b(rm|mv|cp|chmod|chown|kill|curl|wget|ssh|scp|npm|pnpm|yarn|pip|push|commit|reset|checkout|merge|rebase|apply|clean|sudo|tee|>>?|\||&&|;)\b|[`$()]/;
+function sanitizeVerificationCommands(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const out: string[] = [];
+  for (const item of v) {
+    if (typeof item !== 'string') continue;
+    const cmd = item.trim();
+    if (!cmd || cmd.length > 200) continue;
+    if (!READONLY_CMD_RE.test(cmd)) continue; // 必须以只读命令开头
+    if (FORBIDDEN_CMD_RE.test(cmd)) continue; // 含写/删/管道/重定向/命令替换等 → 丢弃
+    out.push(cmd);
+    if (out.length >= 5) break;
+  }
+  return out;
+}
 
 function clamp01(v: unknown): number {
   const n = typeof v === 'number' ? v : Number(v);
@@ -90,6 +113,7 @@ export function parseClassAnalysis(text: string): ParsedClassAnalysis | null {
     systematicSolution: solution.slice(0, 800),
     affectedScope: str(o.affectedScope).slice(0, 300),
     recommendedAction: str(o.recommendedAction).slice(0, 400),
+    verificationCommands: sanitizeVerificationCommands(o.verificationCommands),
     confidence: clamp01(o.confidence),
   };
 }

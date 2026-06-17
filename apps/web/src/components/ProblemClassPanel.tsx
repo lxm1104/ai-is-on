@@ -8,7 +8,7 @@ import { fetchProblemClasses, editProblemClass, approveProblemClass, type Proble
  */
 // MVP54/56：台账 GET 还返回 status/aiResolvedHint/analysis（api.ts 的 ProblemClass 暂未加，这里本地扩展）
 type ProblemClassStatus = 'open' | 'fixing' | 'resolved';
-type ClassAnalysis = { systematicRootCause: string; systematicSolution: string; affectedScope: string; recommendedAction: string; confidence: number };
+type ClassAnalysis = { systematicRootCause: string; systematicSolution: string; affectedScope: string; recommendedAction: string; verificationCommands?: string[]; confidence: number };
 type LedgerClass = ProblemClass & {
   status?: ProblemClassStatus;
   aiResolvedHint?: boolean;
@@ -187,6 +187,14 @@ export function ProblemClassPanel() {
                           <div><strong>系统性解法：</strong>{c.analysis.systematicSolution}</div>
                           {c.analysis.affectedScope && <div><strong>影响面：</strong>{c.analysis.affectedScope}</div>}
                           {c.analysis.recommendedAction && <div><strong>建议下一步：</strong>{c.analysis.recommendedAction}</div>}
+                          {c.analysis.verificationCommands && c.analysis.verificationCommands.length > 0 && (
+                            <div style={{ marginTop: 4 }}>
+                              <strong>✅ 验证命令（只读，自行跑验真）：</strong>
+                              {c.analysis.verificationCommands.map((cmd, i) => (
+                                <pre key={i} className="card__reply-context-ledger" style={{ margin: '2px 0' }}>{cmd}</pre>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       )}
                       <div className="card__reply-actions">

@@ -17,6 +17,7 @@ export type ClassAnalysis = {
   systematicSolution: string; // 系统性解法/修复方向
   affectedScope: string; // 影响面/涉及组件/范围
   recommendedAction: string; // 建议的下一步（给用户决策，不自动执行）
+  verificationCommands?: string[]; // MVP63：确认/证伪该根因的**只读**命令清单(rg/grep/git log/git show/fornax-cli)，给用户(或下一轮排查)跑
   confidence: number;
 };
 

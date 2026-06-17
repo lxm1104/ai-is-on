@@ -92,6 +92,8 @@ export function buildInvestigateUserMessage(opts: {
       '<项目背景与排查方法>',
       '（用户为该项目登记的额外信息与做事方法。除飞书只读工具外，你还能用 run_command 跑本地**只读**命令：',
       '按档案给出的代码库路径用 rg/grep/git 查代码、用 fornax-cli 按 traceID 拿 trace 详情，再据此定位。',
+      '代码类 badcase 若已有 traceID/日志ID：尽量追到底——① fornax-cli 拿 trace 定位报错组件/栈；',
+      '② rg 在代码库定位到具体 file:line；③ git log/blame 找引入它的 commit 或 release。把 file:line 与 commit 写进 evidence（证据优先，别停在泛泛"疑似某模块"）。',
       '只读：写/删/发布/凭证类命令会被拒绝；命令在你指定的 cwd 下执行、不能越出允许目录。',
       '若档案提到的来源连 run_command 也够不到，再在结论里告诉用户去哪查什么。）',
       opts.projectProfile,
