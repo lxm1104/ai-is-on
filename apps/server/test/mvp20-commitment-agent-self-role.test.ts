@@ -22,6 +22,8 @@ const db = await import('../src/db.js');
 const { trackCommitmentHandler } = await import(
   '../src/agents/commitmentAgent.js'
 );
+const ms = await import('../src/matter/matterStore.js');
+const { raiseMatterProgressProposal } = await import('../src/matter/matterResolveProposal.js');
 import type { ContextUnit } from '../src/context/ContextUnit.js';
 import type { AgentContextPacket } from '../src/context/agentContextAssembler.js';
 import type { TriggerRow } from '../src/db.js';
@@ -390,4 +392,32 @@ test('M5.3 调权顺序：graphContext.projectPhase=overdue + selfRole=requester
   assert.equal(out.cardIds.length, 1);
   const card = db.db.prepare(`SELECT priority FROM cards WHERE id=?`).get(out.cardIds[0]) as { priority: string };
   assert.ok(['P2', 'P3'].includes(card.priority), `unit 级 selfRole 应覆盖项目级 projectPhase 升档，实际 ${card.priority}`);
+});
+
+test('MVP59：AI 已对关联事项升进展/办结提案 → 承诺到期提醒去重(不机械催)', async () => {
+  resetDb();
+  const selfId = mkEntity('person', '刘昕明');
+  db.setSetting('self_person_entity_id', selfId);
+  const unit = mkCommitmentUnit({
+    title: '给王爽发月报',
+    entities: [{ entityId: selfId, entityName: '刘昕明', entityType: 'person', role: 'actor' }],
+    actionability: 'act',
+    dueAtMs: Date.now() + 3600_000,
+  });
+  // 关联一个 open matter，AI 自主排查已对它升了「进展回执」提案
+  const m = ms.createMatter({
+    scope: 'work', type: 'follow_up', title: '给王爽发月报',
+    canonicalKey: 'k-' + randomUUID(), createdFromContextUnitId: unit.id,
+    currentSummary: '', nextAction: '确认是否已发',
+  });
+  raiseMatterProgressProposal(m, { verdict: 'progressed', factSummary: '查到 6/13 已发初版', evidence: [], confidence: 0.7 });
+
+  const r = await trackCommitmentHandler({
+    trigger: mkTrigger({ commitmentTitle: '给王爽发月报', dueAt: new Date(Date.now() + 3600_000).toISOString() }),
+    unit,
+    packet: mkPacket(),
+    agentRunId: 'test-run',
+  });
+  assert.equal(r.data?.skipped, 'ai_proposal_live', 'AI 已升提案 → 跳过机械催办');
+  assert.equal(r.cardIds.length, 0, '不再出机械提醒卡');
 });

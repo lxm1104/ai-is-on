@@ -3,6 +3,7 @@ import {
   type ActionProposalRow,
   getSetting,
   insertActionProposal,
+  hasLiveMatterProposal,
 } from '../db.js';
 import { createCardFromProposal } from '../cards/cardsService.js';
 import { recommendHandling } from '../context/agentContextAssembler.js';
@@ -67,6 +68,17 @@ export const trackCommitmentHandler: AgentHandler = async ({
         proposalIds: [],
         cardIds: [],
         data: { skipped: 'matter_resolved', matterId: done.id, matterStatus: done.status },
+      };
+    }
+    // MVP59：到期前"带证据再决定催不催"——若 AI 自主排查已对该事项升了「进展回执/确认办结」提案
+    // （evidence-based），就别再机械催了：那张提案卡已经把真实进展摆给用户，机械提醒只会重复打扰。
+    const aiSurfaced = linked.find((m) => hasLiveMatterProposal(m.id));
+    if (aiSurfaced) {
+      return {
+        summary: `commitment skipped (AI 已升进展/办结提案 matter ${aiSurfaced.id}，不再机械催)`,
+        proposalIds: [],
+        cardIds: [],
+        data: { skipped: 'ai_proposal_live', matterId: aiSurfaced.id },
       };
     }
   }
