@@ -139,6 +139,12 @@ export function applyInvestigationResult(input: {
     if (resolved) {
       autoResolved = true;
       raiseMatterAutoResolvedReceipt(resolved, { factSummary: factLine, evidence: c.evidence, confidence: c.confidence });
+      // 独立审计：便于在 Rules & Audit 面板按动作复查"AI 主动办了哪些"（区别于一般查清 investigation_written_back）。
+      writeAudit({
+        action: 'matter_auto_resolved',
+        reason: `AI 自主办结（置信 ${c.confidence.toFixed(2)}）：${clip(factLine, 100)}`,
+        payload: { matterId: matter.id, confidence: c.confidence, factSummary: factLine, evidence: c.evidence.slice(0, 3) },
+      });
       // 与用户「已处理」同等待遇：排一次二档核实——若稍后查到矛盾证据，会浮「核实存疑」reopen 卡（该卡已豁免 resolved-sweep）。
       scheduleMatterResolveVerification({ matterId: matter.id, userNote: 'AI 自主办结（高置信），二档核实' });
     } else {

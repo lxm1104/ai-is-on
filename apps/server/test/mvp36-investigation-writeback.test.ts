@@ -227,6 +227,9 @@ test('MVP55 自主办结：resolved 高置信(≥0.85) → matter 办结 + autoR
   assert.equal(ms.getMatterById(m.id)?.status, 'resolved'); // 真办结了
   const card = autoResolvedCard(m.id);
   assert.ok(card && card.title.startsWith('✅ AI 已主动办结')); // 透明回执卡在场
+  // 独立审计：Rules & Audit 可按 matter_auto_resolved 复查"AI 主动办了哪些"
+  const audited = db.prepare(`SELECT 1 FROM audit_logs WHERE action='matter_auto_resolved' AND reason LIKE ? LIMIT 1`).get('%已确认对方收到评测集%');
+  assert.ok(audited, '应写入 matter_auto_resolved 审计');
 });
 
 test('MVP55 自主办结：中置信(0.75≤c<0.85) → 不自动办，仍走「确认办结」提案', () => {
