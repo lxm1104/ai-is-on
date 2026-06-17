@@ -8,6 +8,10 @@
 
 export type ProblemClassOrigin = 'distilled' | 'user';
 export type MemberStatus = 'pending' | 'assigned' | 'rejected';
+export type ProblemClassStatus = 'open' | 'fixing' | 'resolved'; // MVP54：根因类的修复生命周期
+
+// 成员诊断文本里出现这些 → AI 疑似已查到该类被修复（台账上提示用户可标已修复）
+export const RESOLVED_HINT_RE = /已修复|已上线|已合入|合入\s*release|fixed|修复方案已|已发版|已部署/i;
 
 export type ProblemClassMember = {
   matterId: string;
@@ -32,6 +36,7 @@ export type ProblemClass = {
   approved: boolean;
   memberCount: number;
   systemic: boolean;
+  status: ProblemClassStatus;
   createdAt: string;
   updatedAt: string;
 };

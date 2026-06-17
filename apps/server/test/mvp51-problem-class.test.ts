@@ -160,6 +160,27 @@ test('backfillMembersFromMatters：空库不崩、返回数', () => {
   assert.equal(typeof n, 'number');
 });
 
+test('MVP54 setProblemClassStatus：open→fixing→resolved', () => {
+  const c = store.createDistilledClass({ spaceId: 'sp-st', label: 'x', rootCause: 'y' });
+  assert.equal(store.getProblemClass(c.id)?.status, 'open'); // 默认
+  assert.equal(store.setProblemClassStatus(c.id, 'fixing')?.status, 'fixing');
+  assert.equal(store.setProblemClassStatus(c.id, 'resolved')?.status, 'resolved');
+});
+
+test('MVP54 listLedger.aiResolvedHint：成员诊断含"已修复"且 open → 提示；resolved 后不提示', () => {
+  const sid = 'sp-hint-' + randomUUID().slice(0, 6);
+  const c = store.createDistilledClass({ spaceId: sid, label: 'middleware', rootCause: 'suppress 未返回' });
+  const mid = 'm-' + randomUUID();
+  store.upsertMember({ matterId: mid, spaceId: sid, symptomBucket: '报错', diagnosticText: 'middleware bug 已修复，合入 release-2026.6.3', evidence: [], confidence: 0.8 });
+  store.setMemberAssigned(mid, c.id);
+  store.refreshClass(c.id);
+  const led1 = store.listLedger(sid).find((x) => x.id === c.id);
+  assert.equal(led1?.aiResolvedHint, true);
+  store.setProblemClassStatus(c.id, 'resolved');
+  const led2 = store.listLedger(sid).find((x) => x.id === c.id);
+  assert.equal(led2?.aiResolvedHint, false, 'resolved 后不再提示');
+});
+
 test('userEditClass / approveClass：升权威，且自发蒸馏不再覆盖根因', () => {
   const sid = 'space-auth-' + randomUUID().slice(0, 6);
   const c = store.createDistilledClass({ spaceId: sid, label: '旧标签', rootCause: '蒸馏给的根因' });

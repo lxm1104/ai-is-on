@@ -6,9 +6,11 @@ import { randomUUID } from 'node:crypto';
 import { db } from '../db.js';
 import {
   isAuthoritativeClass,
+  RESOLVED_HINT_RE,
   type ProblemClass,
   type ProblemClassMember,
   type ProblemClassOrigin,
+  type ProblemClassStatus,
   type MemberStatus,
 } from './problemClassTypes.js';
 
@@ -42,6 +44,12 @@ CREATE TABLE IF NOT EXISTS problem_classes (
 );
 CREATE INDEX IF NOT EXISTS idx_pc_space ON problem_classes (space_id);
 `);
+// MVP54：修复生命周期列（对已存在的表幂等加列）
+try {
+  db.exec(`ALTER TABLE problem_classes ADD COLUMN status TEXT NOT NULL DEFAULT 'open'`);
+} catch {
+  // 列已存在
+}
 
 type MemberRow = {
   matter_id: string;
@@ -170,6 +178,7 @@ type ClassRow = {
   approved: number;
   member_count: number;
   systemic: number;
+  status: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -183,6 +192,7 @@ function rowToClass(r: ClassRow): ProblemClass {
     approved: r.approved === 1,
     memberCount: r.member_count,
     systemic: r.systemic === 1,
+    status: (r.status as ProblemClassStatus) ?? 'open',
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -215,12 +225,13 @@ export function createDistilledClass(input: { spaceId: string | null; label: str
     approved: 0,
     member_count: 0,
     systemic: 0,
+    status: 'open',
     created_at: now,
     updated_at: now,
   };
   db.prepare(
-    `INSERT INTO problem_classes (id, space_id, label, root_cause, origin, approved, member_count, systemic, created_at, updated_at)
-     VALUES (@id,@space_id,@label,@root_cause,@origin,@approved,@member_count,@systemic,@created_at,@updated_at)`
+    `INSERT INTO problem_classes (id, space_id, label, root_cause, origin, approved, member_count, systemic, status, created_at, updated_at)
+     VALUES (@id,@space_id,@label,@root_cause,@origin,@approved,@member_count,@systemic,@status,@created_at,@updated_at)`
   ).run(row);
   return rowToClass(row);
 }
@@ -272,13 +283,32 @@ export function approveClass(id: string, now = new Date().toISOString()): Proble
   return getProblemClass(id);
 }
 
-/** 台账视图：每个类 + 它的成员摘要。 */
-export function listLedger(spaceId?: string | null): Array<ProblemClass & { members: Array<{ matterId: string; diagnosticText: string }> }> {
+/** MVP54：设置一个问题类的修复状态（open/fixing/resolved）。 */
+export function setProblemClassStatus(id: string, status: ProblemClassStatus, now = new Date().toISOString()): ProblemClass | null {
+  if (!getProblemClass(id)) return null;
+  db.prepare(`UPDATE problem_classes SET status=?, updated_at=? WHERE id=?`).run(status, now, id);
+  return getProblemClass(id);
+}
+
+/** 台账视图：每个类 + 它的成员摘要 + AI 疑似已修复提示（成员诊断文本里出现"已修复/合入 release"等）。 */
+export function listLedger(
+  spaceId?: string | null
+): Array<ProblemClass & { members: Array<{ matterId: string; diagnosticText: string }>; aiResolvedHint: boolean }> {
   const classes = spaceId === undefined ? listAllClasses() : listClassesForSpace(spaceId);
   return classes.map((c) => {
     const members = (db
       .prepare(`SELECT matter_id, diagnostic_text FROM problem_class_members WHERE class_id=? AND status='assigned' ORDER BY created_at DESC LIMIT 8`)
       .all(c.id) as Array<{ matter_id: string; diagnostic_text: string }>).map((m) => ({ matterId: m.matter_id, diagnosticText: m.diagnostic_text }));
-    return { ...c, members };
+    // AI 疑似已修复：任一成员的诊断/排查轨迹结论里出现"已修复/合入 release"等（仅 open 时提示）
+    const traceOutcomes = (db
+      .prepare(
+        `SELECT outcome FROM task_traces WHERE source='investigation' AND outcome IS NOT NULL
+           AND matter_id IN (SELECT matter_id FROM problem_class_members WHERE class_id=? AND status='assigned')`
+      )
+      .all(c.id) as Array<{ outcome: string }>).map((r) => r.outcome);
+    const aiResolvedHint =
+      c.status === 'open' &&
+      (members.some((m) => RESOLVED_HINT_RE.test(m.diagnosticText)) || traceOutcomes.some((o) => RESOLVED_HINT_RE.test(o)));
+    return { ...c, members, aiResolvedHint };
   });
 }

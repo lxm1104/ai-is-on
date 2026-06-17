@@ -6,9 +6,14 @@ import { fetchProblemClasses, editProblemClass, approveProblemClass, type Proble
  * - 列出每个问题类：标签、根因、成员数、是否系统性、来源（自学/你校正）
  * - 编辑标签/根因 → 升权威版（自发蒸馏不再覆盖）；批准草稿
  */
+// MVP54：台账 GET 还返回 status + aiResolvedHint（api.ts 的 ProblemClass 暂未加这两字段，这里本地扩展）
+type ProblemClassStatus = 'open' | 'fixing' | 'resolved';
+type LedgerClass = ProblemClass & { status?: ProblemClassStatus; aiResolvedHint?: boolean };
+const STATUS_LABEL: Record<ProblemClassStatus, string> = { open: '待修复', fixing: '修复中', resolved: '已修复' };
+
 export function ProblemClassPanel() {
   const [open, setOpen] = useState(false);
-  const [items, setItems] = useState<ProblemClass[]>([]);
+  const [items, setItems] = useState<LedgerClass[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editId, setEditId] = useState<string | null>(null);
@@ -19,13 +24,31 @@ export function ProblemClassPanel() {
     setLoading(true);
     setError(null);
     try {
-      const list = await fetchProblemClasses();
-      list.sort((a, b) => Number(b.systemic) - Number(a.systemic) || b.memberCount - a.memberCount);
+      const list = (await fetchProblemClasses()) as LedgerClass[];
+      const rank = (c: LedgerClass) => (c.status === 'resolved' ? 0 : 1); // 已修复沉底
+      list.sort((a, b) => rank(b) - rank(a) || Number(b.systemic) - Number(a.systemic) || b.memberCount - a.memberCount);
       setItems(list);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function setStatus(id: string, status: ProblemClassStatus) {
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/problem-classes/${encodeURIComponent(id)}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      if (!r.ok) throw new Error(`status ${r.status}`);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
     }
   }
   useEffect(() => {
@@ -88,9 +111,15 @@ export function ProblemClassPanel() {
               {items.map((c) => (
                 <li key={c.id} className="playbook__item">
                   <div className="playbook__row">
+                    <span className="playbook__tag" style={{ opacity: c.status === 'resolved' ? 0.6 : 1 }}>
+                      {STATUS_LABEL[c.status ?? 'open']}
+                    </span>
                     {c.systemic && <span className="playbook__tag playbook__tag--ok">系统性</span>}
                     <span className="playbook__tag">成员 {c.memberCount}</span>
                     <span className={`playbook__tag playbook__tag--${c.origin}`}>{c.origin === 'user' ? '你校正' : c.approved ? '已批准' : '自学'}</span>
+                    {c.aiResolvedHint && (
+                      <span className="playbook__tag playbook__tag--ok" title="AI 排查里出现了'已修复/合入 release'等">🔧 AI 疑似已修复</span>
+                    )}
                   </div>
                   {editId === c.id ? (
                     <div className="playbook__form">
@@ -118,6 +147,15 @@ export function ProblemClassPanel() {
                         <button type="button" className="btn btn--card" disabled={busy} onClick={() => startEdit(c)}>校正根因</button>
                         {!c.approved && c.origin !== 'user' && (
                           <button type="button" className="btn btn--card btn--reply-send" disabled={busy} onClick={() => void doApprove(c.id)}>批准</button>
+                        )}
+                        {(c.status ?? 'open') === 'open' && (
+                          <button type="button" className="btn btn--card" disabled={busy} onClick={() => void setStatus(c.id, 'fixing')}>标记修复中</button>
+                        )}
+                        {(c.status ?? 'open') !== 'resolved' && (
+                          <button type="button" className="btn btn--card btn--reply-send" disabled={busy} onClick={() => void setStatus(c.id, 'resolved')}>标记已修复</button>
+                        )}
+                        {(c.status ?? 'open') === 'resolved' && (
+                          <button type="button" className="btn btn--card" disabled={busy} onClick={() => void setStatus(c.id, 'open')}>重开</button>
                         )}
                       </div>
                     </>

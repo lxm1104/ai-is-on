@@ -4,7 +4,8 @@
  * POST /api/problem-classes/backfill     —— 从已有 matters 回填诊断成员并蒸馏一轮（首次填充/手动）
  */
 import { Router } from 'express';
-import { listLedger, listAllClasses, userEditClass, approveClass } from '../problemClass/problemClassStore.js';
+import { listLedger, listAllClasses, userEditClass, approveClass, setProblemClassStatus } from '../problemClass/problemClassStore.js';
+import type { ProblemClassStatus } from '../problemClass/problemClassTypes.js';
 import { backfillMembersFromMatters, distillAllPending } from '../problemClass/problemClassService.js';
 import { writeAudit } from '../boundary/auditLog.js';
 
@@ -31,6 +32,19 @@ problemClassesRouter.post('/problem-classes/:id/approve', (req, res) => {
   const cls = approveClass(req.params.id);
   if (!cls) return res.status(404).json({ error: 'class not found' });
   writeAudit({ action: 'problem_class_approved', reason: `用户批准问题类「${cls.label}」`, payload: { id: cls.id } });
+  res.json({ class: cls });
+});
+
+// MVP54：设置修复状态（open/fixing/resolved）——把台账从"看见"延伸到"跟踪修复"
+problemClassesRouter.post('/problem-classes/:id/status', (req, res) => {
+  const status = (req.body ?? {}).status as ProblemClassStatus;
+  if (status !== 'open' && status !== 'fixing' && status !== 'resolved') {
+    return res.status(400).json({ error: 'status must be open|fixing|resolved' });
+  }
+  const cls = setProblemClassStatus(req.params.id, status);
+  if (!cls) return res.status(404).json({ error: 'class not found' });
+  // 复用 problem_class_edited 审计动作（避免动并行会话在改的 auditLog.ts）
+  writeAudit({ action: 'problem_class_edited', reason: `问题类「${cls.label}」状态 → ${status}`, payload: { id: cls.id, status } });
   res.json({ class: cls });
 });
 
