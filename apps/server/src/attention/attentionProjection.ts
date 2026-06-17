@@ -116,6 +116,14 @@ export function defaultAttentionActions(item: AttentionItem): CardAction[] {
     ];
   }
 
+  // MVP55：AI 已主动办结回执 —— 透明 + 可逆。「知道了」收下，「重开」一键撤销自动办结。
+  if (item.inputHash.startsWith('proposal:matter-autoresolved:')) {
+    return [
+      { id: 'ack', label: '知道了', kind: 'ack' },
+      { id: 'matter_reopen', label: '重开', kind: 'matter_reopen' },
+    ];
+  }
+
   const actions: CardAction[] = [];
 
   // MVP32：绑定 Matter 的卡片头部给「已处理」——用户在系统外办完事的一键闭环

@@ -15,6 +15,8 @@
 import { broadcast } from '../ws.js';
 import { deleteMatterContextLinksForPair } from '../db.js';
 import { getContextUnitById } from '../context/contextStore.js';
+// MVP55：重开事项时对称撤销"问题类自动级联"（problemClassStore 仅依赖 db，无循环）
+import { getClassIdForMatter, getProblemClass, setProblemClassStatus } from '../problemClass/problemClassStore.js';
 import {
   type Matter,
   type MatterContextEffect,
@@ -88,7 +90,18 @@ export function userDropMatter(matterId: string, reason = '用户放弃此事项
 export function userReopenMatter(matterId: string, reason = '用户重开此事项', now?: string): Matter | null {
   const m = getMatterById(matterId);
   if (!m) return null;
-  return applyStatus(m, 'in_progress', 'reopen', reason, nowIso(now));
+  const reopened = applyStatus(m, 'in_progress', 'reopen', reason, nowIso(now));
+  // MVP55：重开属于某问题类的事项 → 若该类已被"全部成员办结"自动标记为已修复，对称恢复为 open，
+  // 避免台账谎报"已修复"（自动级联必须可逆，否则违背"内部可逆"承诺）。
+  if (reopened) {
+    try {
+      const classId = getClassIdForMatter(matterId);
+      if (classId && getProblemClass(classId)?.status === 'resolved') setProblemClassStatus(classId, 'open');
+    } catch {
+      // problem-class 模块异常不应阻断重开
+    }
+  }
+  return reopened;
 }
 
 export type MergeResult = { source: Matter; target: Matter };

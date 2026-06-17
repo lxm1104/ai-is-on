@@ -21,6 +21,9 @@ const prompt = await import('../src/problemClass/problemClassDistillPrompt.js');
 const store = await import('../src/problemClass/problemClassStore.js');
 const svc = await import('../src/problemClass/problemClassService.js');
 const { config } = await import('../src/config.js');
+const ms = await import('../src/matter/matterStore.js');
+const cs = await import('../src/context/contextStore.js');
+const { userReopenMatter } = await import('../src/matter/matterActions.js');
 
 // ---- 纯函数 ----
 
@@ -165,6 +168,29 @@ test('MVP54 setProblemClassStatus：open→fixing→resolved', () => {
   assert.equal(store.getProblemClass(c.id)?.status, 'open'); // 默认
   assert.equal(store.setProblemClassStatus(c.id, 'fixing')?.status, 'fixing');
   assert.equal(store.setProblemClassStatus(c.id, 'resolved')?.status, 'resolved');
+});
+
+test('MVP55 syncClassStatusForResolvedMatter：成员 matter 全办结 → 类自动标记已修复（缺一不标）', () => {
+  const sid = 'sp-sync-' + randomUUID().slice(0, 6);
+  const c = store.createDistilledClass({ spaceId: sid, label: '同类 bug', rootCause: '同一根因' });
+  function mkResolvedMatter(resolved: boolean): string {
+    const unit = cs.upsertContextUnit({ kind: 'commitment', title: 't', content: 'c', scope: 'work', origin: { kind: 'manual', refId: 'r-' + randomUUID() }, silent: true }).unit;
+    const m = ms.createMatter({ scope: 'work', type: 'follow_up', title: '事项' + randomUUID().slice(0, 4), canonicalKey: 'k-' + randomUUID(), createdFromContextUnitId: unit.id, currentSummary: 's', nextAction: 'n' });
+    store.upsertMember({ matterId: m.id, spaceId: sid, symptomBucket: '报错', diagnosticText: 'bug 根因', evidence: [], confidence: 0.8 });
+    store.setMemberAssigned(m.id, c.id);
+    if (resolved) ms.saveMatter({ ...ms.getMatterById(m.id)!, status: 'resolved' as never });
+    return m.id;
+  }
+  const m1 = mkResolvedMatter(true);
+  const m2 = mkResolvedMatter(false); // 还没办结
+  svc.syncClassStatusForResolvedMatter(m1);
+  assert.notEqual(store.getProblemClass(c.id)?.status, 'resolved', '还有成员未办结 → 类不标记已修复');
+  ms.saveMatter({ ...ms.getMatterById(m2)!, status: 'resolved' as never });
+  svc.syncClassStatusForResolvedMatter(m2);
+  assert.equal(store.getProblemClass(c.id)?.status, 'resolved', '全部成员办结 → 类自动标记已修复');
+  // MVP55 对称可逆：重开任一成员 matter → 类自动恢复 open（否则台账谎报已修复）
+  userReopenMatter(m1, '测试重开');
+  assert.equal(store.getProblemClass(c.id)?.status, 'open', '重开成员 → 类对称恢复 open');
 });
 
 test('MVP54 listLedger.aiResolvedHint：成员诊断含"已修复"且 open → 提示；resolved 后不提示', () => {

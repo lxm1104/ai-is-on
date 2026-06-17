@@ -10,7 +10,10 @@
 import { upsertContextUnit } from '../context/contextStore.js';
 import type { ContextEntityRef } from '../context/ContextUnit.js';
 import { attachMatterContextLink, getMatterById, saveMatter } from '../matter/matterStore.js';
-import { raiseMatterResolveProposal, raiseMatterProgressProposal } from '../matter/matterResolveProposal.js';
+import { userResolveMatter } from '../matter/matterActions.js';
+import { raiseMatterResolveProposal, raiseMatterProgressProposal, raiseMatterAutoResolvedReceipt } from '../matter/matterResolveProposal.js';
+import { scheduleMatterResolveVerification } from '../matter/matterVerifyService.js';
+import { config } from '../config.js';
 import { writeAudit } from '../boundary/auditLog.js';
 import { broadcast } from '../ws.js';
 import type { InvestigationConclusion } from './investigationPrompt.js';
@@ -21,6 +24,7 @@ export type InvestigationWritebackResult = {
   resultUnitId?: string;
   summaryUpdated: boolean;
   proposalRaised?: boolean; // resolved 高置信时是否升了「确认办结」提案卡
+  autoResolved?: boolean; // MVP55：是否触发了"AI 主动办结"（高置信，可逆）
   error?: string;
 };
 
@@ -120,7 +124,30 @@ export function applyInvestigationResult(input: {
   // 用户一键确认 = 一次"用户认可的自主完成"；不自动改 status（仍归用户裁决）。
   const proposalMatter = { ...matter, currentSummary: newSummary, nextAction: newNextAction, version: matter.version + 1, updatedAt: now };
   let proposalRaised = false;
-  if (c.verdict === 'resolved' && c.confidence >= 0.75) {
+  let autoResolved = false;
+  // 自主办结的额外护栏（对抗审查）：必须有证据（杜绝裸口说"已完成"）、且不碰 P0（高风险事项永远走人确认提案）。
+  const autoResolveEligible =
+    c.verdict === 'resolved' &&
+    config.investigationAutoResolveEnabled &&
+    c.confidence >= config.investigationAutoResolveMinConfidence &&
+    c.evidence.length >= 1 &&
+    matter.priority !== 'P0';
+  if (autoResolveEligible) {
+    // MVP55 放权第一档（内部可逆）：高置信 resolved → AI 直接办结（同 userResolveMatter 路径），
+    // 浮一张「AI 已主动办结」透明回执卡（可一键重开）。办结失败则退回提案，不丢事件。
+    const resolved = userResolveMatter(matter.id, `AI 自主排查高置信办结：${clip(factLine, 100)}`, now);
+    if (resolved) {
+      autoResolved = true;
+      raiseMatterAutoResolvedReceipt(resolved, { factSummary: factLine, evidence: c.evidence, confidence: c.confidence });
+      // 与用户「已处理」同等待遇：排一次二档核实——若稍后查到矛盾证据，会浮「核实存疑」reopen 卡（该卡已豁免 resolved-sweep）。
+      scheduleMatterResolveVerification({ matterId: matter.id, userNote: 'AI 自主办结（高置信），二档核实' });
+    } else {
+      proposalRaised = raiseMatterResolveProposal(proposalMatter, {
+        why: `AI 自主排查发现这件事疑似已完成：${clip(factLine, 100)}。确认后该事项标记为已解决、相关催办卡自动清除。`,
+        suggestedAction: '确认办结，或忽略保持跟进',
+      });
+    }
+  } else if (c.verdict === 'resolved' && c.confidence >= 0.75) {
     proposalRaised = raiseMatterResolveProposal(proposalMatter, {
       why: `AI 自主排查发现这件事疑似已完成：${clip(factLine, 100)}。确认后该事项标记为已解决、相关催办卡自动清除。`,
       suggestedAction: '确认办结，或忽略保持跟进',
@@ -140,5 +167,5 @@ export function applyInvestigationResult(input: {
     broadcast({ type: 'matter_updated', matterId: matter.id });
   } catch {}
 
-  return { ok: true, matterId: matter.id, resultUnitId, summaryUpdated: meaningful, proposalRaised };
+  return { ok: true, matterId: matter.id, resultUnitId, summaryUpdated: meaningful, proposalRaised, autoResolved };
 }

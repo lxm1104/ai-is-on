@@ -2837,6 +2837,11 @@ export function markAttentionSupersededForResolvedMatters(updatedAt: string): nu
          SET status = 'superseded', updated_at = ?
        WHERE status = 'live'
          AND matter_id IS NOT NULL
+         -- MVP55：恰恰"关于已办结状态"的回执/核实卡必须留下——「AI 已主动办结」(可重开,是用户对
+         -- 自主办结的唯一可见入口)、「核实存疑」reopen 卡。否则它们会在下一 tick 被这条 resolved-sweep
+         -- 误清→自主办结变得既不可见也无法撤销。与 collapseDuplicateLiveCardsByMatter 的"提案/system 不动"对齐。
+         AND input_hash NOT LIKE 'proposal:matter-autoresolved:%'
+         AND input_hash NOT LIKE 'proposal:matter-reopen:%'
          -- MVP29D：matter_id 可能被 LLM 截断成 8 位前缀落库，用前缀匹配兜底，
          -- 否则 resolved/dropped 的 matter 永远清不掉旧卡（"已处理还在催"）。
          AND EXISTS (

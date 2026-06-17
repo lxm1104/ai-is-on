@@ -18,6 +18,7 @@ import type { AttentionPriority } from '../attention/attentionTypes.js';
 
 export const MATTER_RESOLVE_PROPOSAL_PREFIX = 'proposal:matter-resolve:';
 export const MATTER_PROGRESS_PROPOSAL_PREFIX = 'proposal:matter-progress:';
+export const MATTER_AUTORESOLVED_PREFIX = 'proposal:matter-autoresolved:'; // MVP55：AI 已主动办结回执（可重开）
 
 function hasLiveProposal(prefix: string, matterId: string): boolean {
   return !!db
@@ -92,4 +93,37 @@ export function raiseMatterProgressProposal(
     why: `${lead}${evLines.length ? '\n证据：\n' + evLines.join('\n') : ''}`,
     suggestedAction: '知道了 / 办结 / 继续跟进',
   });
+}
+
+/**
+ * MVP55 — 「AI 已主动办结」回执卡。matter 此时**已被 userResolveMatter 办结**，故不走 raiseMatterProposal
+ * （它会因 status=resolved 拒绝）；直接插一张透明回执，动作组 [知道了, 重开]，用户可一键撤销。
+ */
+export function raiseMatterAutoResolvedReceipt(
+  matter: Matter,
+  opts: { factSummary: string; evidence: string[]; confidence: number }
+): boolean {
+  if (hasLiveProposal(MATTER_AUTORESOLVED_PREFIX, matter.id)) return false;
+  const fact = opts.factSummary.trim().slice(0, 140);
+  const evLines = opts.evidence
+    .slice(0, 3)
+    .map((e) => `· ${e.trim().slice(0, 120)}`)
+    .filter((l) => l.length > 2);
+  insertAttentionItem({
+    id: randomUUID(),
+    generation: 0,
+    llmRunId: null,
+    inputHash: `${MATTER_AUTORESOLVED_PREFIX}${matter.id}`,
+    llmItem: {
+      priority: 'P2',
+      title: `✅ AI 已主动办结：${matter.title.slice(0, 40)}`,
+      why: `AI 自主排查高置信(${opts.confidence.toFixed(2)})判定这件事已完成，已替你办结：${fact}${evLines.length ? '\n证据：\n' + evLines.join('\n') : ''}\n如判断有误，点「重开」即可恢复跟进。`,
+      suggestedAction: '知道了 / 重开',
+      signalIds: [],
+      matterId: matter.id,
+    },
+    now: new Date().toISOString(),
+  });
+  broadcast({ type: 'attention_updated', generation: 0, itemsEmitted: 1 });
+  return true;
 }

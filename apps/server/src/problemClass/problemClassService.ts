@@ -19,6 +19,10 @@ import {
   createDistilledClass,
   listClassesForSpace,
   refreshClass,
+  getClassIdForMatter,
+  allMemberMattersResolved,
+  getProblemClass,
+  setProblemClassStatus,
 } from './problemClassStore.js';
 import {
   PROBLEM_CLASS_DISTILL_SYSTEM,
@@ -139,6 +143,19 @@ export async function maybeDistillForSpace(spaceId: string | null, deps: Distill
   }
   if (changed) console.log(`[problem-class] space=${spaceId ?? '全局'} 归类 ${assignments.length} 条，新类 ${newClassByLabel.size} 个`);
   return changed;
+}
+
+/** MVP55：某 matter 办结后，若其问题类的全部成员都已 resolved → 自动把该类标记已修复（可逆，用户能重开）。 */
+export function syncClassStatusForResolvedMatter(matterId: string): void {
+  if (!config.problemClassEnabled) return;
+  const classId = getClassIdForMatter(matterId);
+  if (!classId) return;
+  const cls = getProblemClass(classId);
+  if (!cls || cls.status === 'resolved') return;
+  if (allMemberMattersResolved(classId)) {
+    setProblemClassStatus(classId, 'resolved');
+    console.log(`[problem-class] 全部成员已办结 → 自动标记问题类「${cls.label}」已修复`);
+  }
 }
 
 /** 扫所有有 pending 的 space 各蒸馏一次（启动 backfill 后/调试用）。 */

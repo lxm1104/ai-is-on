@@ -290,6 +290,25 @@ export function setProblemClassStatus(id: string, status: ProblemClassStatus, no
   return getProblemClass(id);
 }
 
+/** MVP55：某 matter 归属的问题类 id（assigned）。 */
+export function getClassIdForMatter(matterId: string): string | null {
+  const r = db.prepare(`SELECT class_id FROM problem_class_members WHERE matter_id=? AND status='assigned'`).get(matterId) as
+    | { class_id: string | null }
+    | undefined;
+  return r?.class_id ?? null;
+}
+
+/** MVP55：该问题类的全部 assigned 成员对应的 matter 是否都已 resolved（无成员则 false）。 */
+export function allMemberMattersResolved(classId: string): boolean {
+  const members = db.prepare(`SELECT matter_id FROM problem_class_members WHERE class_id=? AND status='assigned'`).all(classId) as Array<{ matter_id: string }>;
+  if (members.length === 0) return false;
+  for (const m of members) {
+    const row = db.prepare(`SELECT status FROM matters WHERE id=?`).get(m.matter_id) as { status: string } | undefined;
+    if (!row || row.status !== 'resolved') return false;
+  }
+  return true;
+}
+
 /** 台账视图：每个类 + 它的成员摘要 + AI 疑似已修复提示（成员诊断文本里出现"已修复/合入 release"等）。 */
 export function listLedger(
   spaceId?: string | null

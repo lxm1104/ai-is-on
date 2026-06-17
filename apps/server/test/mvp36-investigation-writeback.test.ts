@@ -17,6 +17,15 @@ process.env.COLLECTOR_ENABLED = 'false';
 const cs = await import('../src/context/contextStore.js');
 const ms = await import('../src/matter/matterStore.js');
 const { applyInvestigationResult } = await import('../src/investigation/investigationWriteback.js');
+const { db, markAttentionSupersededForResolvedMatters } = await import('../src/db.js');
+const { config } = await import('../src/config.js');
+
+function autoResolvedCard(matterId: string) {
+  return db.prepare(`SELECT title FROM attention_items WHERE input_hash = ?`).get(`proposal:matter-autoresolved:${matterId}`) as { title: string } | undefined;
+}
+function cardStatus(prefix: string, matterId: string) {
+  return (db.prepare(`SELECT status FROM attention_items WHERE input_hash = ?`).get(`${prefix}${matterId}`) as { status: string } | undefined)?.status;
+}
 
 let n = 0;
 function mkMatter(opts?: { status?: string; summary?: string }) {
@@ -49,11 +58,11 @@ test('T1 progressed：挂证据 + 更新摘要，status 不变', () => {
   assert.ok(ms.listMatterContextLinks(m.id).some((l) => l.contextUnitId === r.resultUnitId && l.effect === 'no_change'), '证据 effect=no_change');
 });
 
-test('T2 resolved 高置信：nextAction 改提示待确认，但 status 仍不变（不自动办结）', () => {
+test('T2 resolved 提案档(0.75≤c<0.85)：nextAction 提示待确认，status 不变（不自动办结）', () => {
   const m = mkMatter();
   const r = applyInvestigationResult({
     matterId: m.id,
-    conclusion: { verdict: 'resolved', confidence: 0.9, factSummary: '对方已确认收到评测集', evidence: ['om_xyz'] },
+    conclusion: { verdict: 'resolved', confidence: 0.8, factSummary: '对方已确认收到评测集', evidence: ['om_xyz'] },
   });
   assert.equal(r.ok, true);
   const after = ms.getMatterById(m.id)!;
@@ -117,7 +126,7 @@ test('T6 resolved 高置信(≥0.75) → 升办结提案卡 + proposalRaised', (
   const m = mkMatter();
   const r = applyInvestigationResult({
     matterId: m.id,
-    conclusion: { verdict: 'resolved', confidence: 0.85, factSummary: '对方已确认收到并点赞', evidence: ['om_x'] },
+    conclusion: { verdict: 'resolved', confidence: 0.8, factSummary: '对方已确认收到并点赞', evidence: ['om_x'] },
   });
   assert.equal(r.proposalRaised, true);
   assert.ok(liveResolveProposal(m.id), '应有在场办结提案');
@@ -145,9 +154,9 @@ test('T8 progressed → 不升「办结」提案（改升进展回执，见 T10�
 
 test('T9 幂等：已有在场提案 → 再次 resolved 不重复升', () => {
   const m = mkMatter();
-  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'resolved', confidence: 0.9, factSummary: 'a', evidence: [] } });
+  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'resolved', confidence: 0.8, factSummary: 'a', evidence: [] } });
   const before = attn.listLiveAttentionItems(200).filter((x) => x.inputHash === `proposal:matter-resolve:${m.id}`).length;
-  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'resolved', confidence: 0.95, factSummary: 'b', evidence: [] } });
+  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'resolved', confidence: 0.82, factSummary: 'b', evidence: [] } });
   const after = attn.listLiveAttentionItems(200).filter((x) => x.inputHash === `proposal:matter-resolve:${m.id}`).length;
   assert.equal(before, 1);
   assert.equal(after, 1, '不重复升提案');
@@ -184,7 +193,7 @@ test('T12 progressed 低置信(<0.6) → 不升卡', () => {
 
 test('T13 已有在场办结提案 → 不叠升进展卡（止损）', () => {
   const m = mkMatter();
-  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'resolved', confidence: 0.9, factSummary: '已完成', evidence: [] } });
+  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'resolved', confidence: 0.8, factSummary: '已完成', evidence: [] } });
   assert.ok(liveResolveProposal(m.id));
   const r = applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'progressed', confidence: 0.8, factSummary: '又有进展', evidence: [] } });
   assert.equal(r.proposalRaised, false, '办结已在场，不叠进展卡');
@@ -195,7 +204,7 @@ test('T14 升办结时顶掉在场进展卡（办结优先）', () => {
   const m = mkMatter();
   applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'progressed', confidence: 0.7, factSummary: '进展', evidence: [] } });
   assert.ok(liveProgressProposal(m.id), '先有进展卡');
-  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'resolved', confidence: 0.9, factSummary: '完成', evidence: [] } });
+  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'resolved', confidence: 0.8, factSummary: '完成', evidence: [] } });
   assert.ok(liveResolveProposal(m.id), '办结卡升起');
   assert.ok(!liveProgressProposal(m.id), '进展卡被顶掉');
 });
@@ -206,4 +215,70 @@ test('T15 进展卡幂等：同 matter 不重复升', () => {
   applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'blocked', confidence: 0.7, factSummary: 'b', evidence: [] } });
   const n = attn.listLiveAttentionItems(300).filter((x) => x.inputHash === `proposal:matter-progress:${m.id}`).length;
   assert.equal(n, 1, '不重复升进展卡');
+});
+
+test('MVP55 自主办结：resolved 高置信(≥0.85) → matter 办结 + autoResolved + 透明回执卡(可重开)', () => {
+  const m = mkMatter();
+  const r = applyInvestigationResult({
+    matterId: m.id,
+    conclusion: { verdict: 'resolved', confidence: 0.9, factSummary: '已确认对方收到评测集', evidence: ['6/13 群里发了并 @ 了对方'] },
+  });
+  assert.equal(r.autoResolved, true);
+  assert.equal(ms.getMatterById(m.id)?.status, 'resolved'); // 真办结了
+  const card = autoResolvedCard(m.id);
+  assert.ok(card && card.title.startsWith('✅ AI 已主动办结')); // 透明回执卡在场
+});
+
+test('MVP55 自主办结：中置信(0.75≤c<0.85) → 不自动办，仍走「确认办结」提案', () => {
+  const m = mkMatter();
+  const r = applyInvestigationResult({
+    matterId: m.id,
+    conclusion: { verdict: 'resolved', confidence: 0.78, factSummary: '疑似已发', evidence: [] },
+  });
+  assert.notEqual(r.autoResolved, true);
+  assert.notEqual(ms.getMatterById(m.id)?.status, 'resolved'); // 没自动办
+  assert.equal(autoResolvedCard(m.id), undefined);
+  const prop = db.prepare(`SELECT 1 FROM attention_items WHERE input_hash = ?`).get(`proposal:matter-resolve:${m.id}`);
+  assert.ok(prop); // 升了确认办结提案
+});
+
+test('MVP55 自主办结：config 关 → 高置信也不自动办，退回提案', () => {
+  const saved = config.investigationAutoResolveEnabled;
+  config.investigationAutoResolveEnabled = false;
+  try {
+    const m = mkMatter();
+    const r = applyInvestigationResult({
+      matterId: m.id,
+      conclusion: { verdict: 'resolved', confidence: 0.95, factSummary: '已确认', evidence: [] },
+    });
+    assert.notEqual(r.autoResolved, true);
+    assert.notEqual(ms.getMatterById(m.id)?.status, 'resolved');
+  } finally {
+    config.investigationAutoResolveEnabled = saved;
+  }
+});
+
+test('MVP55 护栏：无证据的 resolved → 不自动办（退回提案，杜绝裸口说已完成）', () => {
+  const m = mkMatter();
+  const r = applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'resolved', confidence: 0.95, factSummary: '据说完成了', evidence: [] } });
+  assert.notEqual(r.autoResolved, true);
+  assert.notEqual(ms.getMatterById(m.id)?.status, 'resolved');
+  assert.equal(autoResolvedCard(m.id), undefined);
+});
+
+test('MVP55 护栏：P0 事项即便高置信 resolved 也不自动办（永远走人确认）', () => {
+  const m = mkMatter();
+  ms.saveMatter({ ...ms.getMatterById(m.id)!, priority: 'P0' as never });
+  const r = applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'resolved', confidence: 0.95, factSummary: '完成', evidence: ['om_e'] } });
+  assert.notEqual(r.autoResolved, true);
+  assert.notEqual(ms.getMatterById(m.id)?.status, 'resolved');
+});
+
+test('MVP55 透明性：resolved-sweep 不清掉「AI 已主动办结」回执卡（否则自主办结既不可见也无法撤销）', () => {
+  const m = mkMatter();
+  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'resolved', confidence: 0.95, factSummary: '对方已确认完成', evidence: ['om_e'] } });
+  assert.equal(cardStatus('proposal:matter-autoresolved:', m.id), 'live', '回执卡已建且 live');
+  // matter 此刻 resolved；跑 resolved-sweep（每 tick 都会跑）
+  markAttentionSupersededForResolvedMatters(new Date().toISOString());
+  assert.equal(cardStatus('proposal:matter-autoresolved:', m.id), 'live', 'sweep 后回执卡仍 live（可见+可重开）');
 });

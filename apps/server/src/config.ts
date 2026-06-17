@@ -210,6 +210,10 @@ export const config = {
   // MVP51 问题类聚合：把"已诊断/有根因"的事项按根因汇总成问题类台账（case→class）。攒够 ≥2 条同 space
   // 诊断成员 → 一次 one-shot 按根因归类。默认开；设 false 则不吸纳/不蒸馏。
   problemClassEnabled: envBool('PROBLEM_CLASS_ENABLED', true),
+  // MVP55 自主办结（放权第一档·内部可逆）：自主排查 resolved 且置信 ≥ 阈值时，AI 直接办结 matter（复用
+  // userResolveMatter 同路径），并浮一张「AI 已主动办结」回执卡（可一键重开）。比"提案"门更高（自动办更谨慎）。
+  investigationAutoResolveEnabled: envBool('INVESTIGATION_AUTO_RESOLVE_ENABLED', true),
+  investigationAutoResolveMinConfidence: envFloat('INVESTIGATION_AUTO_RESOLVE_MIN_CONFIDENCE', 0.85),
   matterVerifyEnabled: envBool('MATTER_VERIFY_ENABLED', true),
   // mark_done → 核实的延迟。≥ IM collector 一轮（imIntervalMs 默认 3min），
   // 让"刚回的消息"先经 collector → Reducer 挂到 matter_context_links，核实 agent 才看得到。
