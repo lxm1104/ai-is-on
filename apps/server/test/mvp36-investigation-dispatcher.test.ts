@@ -105,6 +105,20 @@ test('select：worthy + 非冷却中 → 按优先级 → 最久未动 取 top-1
   assert.equal(pick?.id, 'c', 'P1 中最久未动的 c（d 虽 P0 但 nextAction 不 worthy）');
 });
 
+test('MVP57 select：badcase 类优先（但 P0 仍绝对最先）', () => {
+  const matters = [
+    mkMatter({ id: 'p0', priority: 'P0', title: '与王爽核对数据', nextAction: '确认是否已完成' }), // P0 非 badcase、worthy
+    mkMatter({ id: 'bad', priority: 'P2', title: 'middleware 报错排查', nextAction: '排查为什么报错' }), // P2 badcase
+    mkMatter({ id: 'norm', priority: 'P1', title: '确认评测集进度', nextAction: '核实是否已发' }), // P1 非 badcase、worthy
+  ];
+  assert.equal(selectInvestigationCandidate(matters, () => false)?.id, 'p0', 'P0 绝对最先');
+  assert.equal(
+    selectInvestigationCandidate(matters.filter((m) => m.id !== 'p0'), () => false)?.id,
+    'bad',
+    '去掉 P0 后，badcase(P2) 胜过更高优先级的非 badcase(P1)'
+  );
+});
+
 test('select：冷却中的被跳过', () => {
   const matters = [
     mkMatter({ id: 'a', priority: 'P0', nextAction: '确认是否已完成' }),

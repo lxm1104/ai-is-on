@@ -50,6 +50,13 @@ export function hasResolvableBadcase(input: { title?: string; currentSummary?: s
   return BADCASE_SIGNAL_RE.test(blob) && ARTIFACT_RE.test(blob);
 }
 
+// MVP57：用户的核心工作是 badcase——自主排查的有限吞吐应优先用在 badcase 类上（P0 仍绝对最先）。
+const BADCASE_TITLE_RE = /badcase|排查|报错|故障|失败|trace|日志|崩|异常|沙箱/i;
+/** 是不是"badcase / 排查类"事项（带凭据的、或标题就是排查/报错类）。纯函数，用于排序前置。 */
+export function isBadcaseMatter(input: { title?: string; currentSummary?: string | null }): boolean {
+  return hasResolvableBadcase(input) || BADCASE_TITLE_RE.test(input.title ?? '');
+}
+
 /**
  * 这件事值不值得自动排查（纯函数）。看 标题 + 下一步 + 摘要：
  * - nextAction 具体（非泛兜底）且命中查证词 → worthy；
@@ -99,9 +106,18 @@ export function selectInvestigationCandidate(
   );
   if (pool.length === 0) return null;
   pool.sort((a, b) => {
+    // ① P0 绝对最先（高风险/到期事项不让位）
+    const aP0 = a.priority === 'P0' ? 0 : 1;
+    const bP0 = b.priority === 'P0' ? 0 : 1;
+    if (aP0 !== bP0) return aP0 - bP0;
+    // ② MVP57：badcase / 排查类优先（用户的核心工作；有限排查吞吐先用在它们上）
+    const aBad = isBadcaseMatter(a) ? 0 : 1;
+    const bBad = isBadcaseMatter(b) ? 0 : 1;
+    if (aBad !== bBad) return aBad - bBad;
+    // ③ 再按优先级、最久未动
     const pr = (PRIO_RANK[a.priority] ?? 3) - (PRIO_RANK[b.priority] ?? 3);
     if (pr !== 0) return pr;
-    return (a.updatedAt || '').localeCompare(b.updatedAt || ''); // 最久未动优先
+    return (a.updatedAt || '').localeCompare(b.updatedAt || '');
   });
   return pool[0];
 }
