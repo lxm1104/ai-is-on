@@ -35,6 +35,7 @@ import { MATTER_VERIFY_SYSTEM_PROMPT } from '../matter/matterVerifyPrompt.js';
 import { INVESTIGATE_SYSTEM_PROMPT, renderToolsDoc } from '../investigation/investigationPrompt.js';
 import { PLAYBOOK_DISTILL_SYSTEM_PROMPT } from '../playbook/playbookDistillPrompt.js';
 import { PROJECT_ROUTER_SYSTEM } from '../investigation/projectRouterPrompt.js';
+import { PROBLEM_CLASS_DISTILL_SYSTEM } from '../problemClass/problemClassDistillPrompt.js';
 import { listReadTools } from '../investigation/readTools.js';
 
 export type OpencodeAgentName =
@@ -57,7 +58,8 @@ export type OpencodeAgentName =
   | 'aiisn-matter-verify'
   | 'aiisn-investigate'
   | 'aiisn-playbook-distill'
-  | 'aiisn-project-router';
+  | 'aiisn-project-router'
+  | 'aiisn-problem-class-distill';
 
 type Permission = 'allow' | 'ask' | 'deny';
 type AgentDef = {
@@ -205,6 +207,13 @@ const AGENTS: readonly AgentDef[] = [
     description: 'AI is ON MVP50 项目归类器（事项 → 候选项目 id，确定性兜底用）',
     permission: { bash: 'deny', edit: 'deny', write: 'deny', webfetch: 'deny', read: 'deny' },
     prompt: PROJECT_ROUTER_SYSTEM,
+  },
+  {
+    // MVP51 问题归类器：把已诊断事项按根因汇总成"问题类"台账。纯文本进 JSON 出，全工具 deny。
+    name: 'aiisn-problem-class-distill',
+    description: 'AI is ON MVP51 问题归类器（诊断事项 → 按根因归到问题类）',
+    permission: { bash: 'deny', edit: 'deny', write: 'deny', webfetch: 'deny', read: 'deny' },
+    prompt: PROBLEM_CLASS_DISTILL_SYSTEM,
   },
 ];
 

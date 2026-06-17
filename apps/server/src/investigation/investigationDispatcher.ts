@@ -16,6 +16,8 @@ import { applyInvestigationResult } from './investigationWriteback.js';
 import { captureInvestigationTrace } from '../playbook/playbookCapture.js';
 import { matchPlaybookForMatter, renderPlaybookForPrompt } from '../playbook/playbookMatcher.js';
 import { resolveProjectProfileForMatter } from './projectProfile.js';
+import { resolveProjectSpaceDeterministic } from './projectRouter.js';
+import { ingestConclusion } from '../problemClass/problemClassService.js';
 
 // deriveDefaultNextAction 的兜底文案——这些太泛，不值得自动排查（要具体的"确认X是否…"才查）。
 const GENERIC_NEXT_ACTIONS = new Set([
@@ -142,6 +144,14 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
     });
     const toolSummary = result.toolLog.map((l) => `${l.tool}:${l.ok ? l.summary : '失败'}`).join('；');
     applyInvestigationResult({ matterId: candidate.id, conclusion: result.conclusion, toolSummary });
+    // MVP51：诊断结论吸纳进「问题类聚合」（case→根因类台账，fire-and-forget，过诊断门才落）
+    void ingestConclusion({
+      matterId: candidate.id,
+      spaceId: candidate.primarySpaceId ?? resolveProjectSpaceDeterministic(candidate)?.spaceId ?? null,
+      text: result.conclusion.factSummary,
+      evidence: result.conclusion.evidence,
+      confidence: result.conclusion.confidence,
+    }).catch(() => {});
     // 能力二：把"这次怎么查的"落成操作轨迹（纯采集，供后续蒸馏 playbook）
     try {
       captureInvestigationTrace(candidate, result);

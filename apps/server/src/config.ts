@@ -207,6 +207,9 @@ export const config = {
   // MVP50 项目路由 AI 兜底：确定性(primarySpaceId/canonical/标题)全落空时，是否打一次轻量 one-shot
   // 从候选项目里挑一个（按 matterId 缓存）。默认开（用户选了"允许 AI 判断"）；设 false 则只走确定性路由。
   projectRoutingAiEnabled: envBool('PROJECT_ROUTING_AI_ENABLED', true),
+  // MVP51 问题类聚合：把"已诊断/有根因"的事项按根因汇总成问题类台账（case→class）。攒够 ≥2 条同 space
+  // 诊断成员 → 一次 one-shot 按根因归类。默认开；设 false 则不吸纳/不蒸馏。
+  problemClassEnabled: envBool('PROBLEM_CLASS_ENABLED', true),
   matterVerifyEnabled: envBool('MATTER_VERIFY_ENABLED', true),
   // mark_done → 核实的延迟。≥ IM collector 一轮（imIntervalMs 默认 3min），
   // 让"刚回的消息"先经 collector → Reducer 挂到 matter_context_links，核实 agent 才看得到。
