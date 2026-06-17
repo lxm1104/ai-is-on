@@ -182,7 +182,14 @@ export const config = {
   // 总开关（第一档「已处理」无开关——它是核心语义）。
   // MVP36 自主排查 dispatcher：默认**关**（硬只读边界已就位，但自动派发会消耗 LLM/lark-cli，opt-in）。
   investigationDispatchEnabled: envBool('INVESTIGATION_DISPATCH_ENABLED', false),
-  investigationTickMs: envInt('INVESTIGATION_TICK_MS', 600_000), // 10min 低频
+  // MVP58：排查 tick 调密到 3min（投查走独立 gate 车道，不挤主道 attention/chat）；新事项另有 kick 立刻触发。
+  investigationTickMs: envInt('INVESTIGATION_TICK_MS', 180_000),
+  // 新建可排查事项后的"立刻派发"去抖：合并一批新建、又不连打单并发 gate。
+  investigationKickDebounceMs: envInt('INVESTIGATION_KICK_DEBOUNCE_MS', 5_000),
+  // MVP57/58：自主排查"优先挑"的关键词（命中标题即优先；用户可改，定义"哪类先查"）。P0 仍绝对最先。
+  investigationPriorityKeywords: envList('INVESTIGATION_PRIORITY_KEYWORDS', [
+    'badcase', '排查', '报错', '故障', '失败', 'trace', '日志', '崩', '异常', '沙箱',
+  ]),
   // 排查走 high 队列公平竞争 gate（默认 true）。频率极低（10min/6h 冷却），偶尔延后一次 attention 可接受；
   // 设 false 则让位 attention，但在繁忙环境下排查会被持续饿死、出不了数据。
   investigationPriority: envBool('INVESTIGATION_PRIORITY', true),

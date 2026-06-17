@@ -13,6 +13,7 @@
  * 状态变更比"漏提醒"更伤信任，所以 resolve 门槛高、reducer 永不自动 drop、dropped 不自动 reopen。
  */
 import { randomUUID } from 'node:crypto';
+import { kickInvestigation } from '../investigation/investigationKick.js';
 import {
   getContextEntityById,
   getSetting,
@@ -243,7 +244,7 @@ function createFromUnit(
   const status: MatterStatus = unit.kind === 'uncertainty' ? 'blocked' : 'open';
   const resolvedNextAction =
     (typeof nextAction === 'string' && nextAction.trim()) || deriveDefaultNextAction(type, status);
-  return createMatter({
+  const created = createMatter({
     nextAction: resolvedNextAction,
     subjectId: unit.subjectId,
     scope: unit.scope,
@@ -272,6 +273,10 @@ function createFromUnit(
     createdReason: `MVP27 reducer: created from ${unit.kind} ${unit.id}`,
     now: nowIso,
   });
+  // MVP58：新建事项 = 可能的新 badcase/待排查 → 立刻 kick 派发（dispatcher 去抖+在飞行锁+worthiness 过滤兜底，
+  // 非排查类只会触发一次空转 tick，无害）。解耦走 investigationKick 叶子模块，不引 dispatcher 防循环依赖。
+  kickInvestigation();
+  return created;
 }
 
 // commitment 再次 upsert：刷新 dueAt / title / summary，不动 status / 不写 transition。

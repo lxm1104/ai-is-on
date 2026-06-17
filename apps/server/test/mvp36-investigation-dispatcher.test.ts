@@ -169,3 +169,12 @@ test('select：shouldSkip 命中的事项被跳过（已有提案/查不清）',
   const pick = selectInvestigationCandidate(matters, () => false, (id) => id === 'skip');
   assert.equal(pick?.id, 'keep', '止损跳过 skip，选 keep（即便 keep 优先级更低）');
 });
+
+test('MVP58 kick：onInvestigationKick 注册的 handler 收到 kickInvestigation（解耦 matterReducer↔dispatcher）', async () => {
+  const k = await import('../src/investigation/investigationKick.js');
+  let n = 0;
+  k.onInvestigationKick(() => { n += 1; });
+  k.kickInvestigation();
+  k.kickInvestigation();
+  assert.equal(n, 2, '每次 kick 都触达已注册 handler');
+});

@@ -18,6 +18,7 @@ import { matchPlaybookForMatter, renderPlaybookForPrompt } from '../playbook/pla
 import { resolveProjectProfileForMatter } from './projectProfile.js';
 import { resolveProjectSpaceDeterministic } from './projectRouter.js';
 import { ingestConclusion, syncClassStatusForResolvedMatter } from '../problemClass/problemClassService.js';
+import { onInvestigationKick } from './investigationKick.js';
 
 // deriveDefaultNextAction 的兜底文案——这些太泛，不值得自动排查（要具体的"确认X是否…"才查）。
 const GENERIC_NEXT_ACTIONS = new Set([
@@ -50,11 +51,14 @@ export function hasResolvableBadcase(input: { title?: string; currentSummary?: s
   return BADCASE_SIGNAL_RE.test(blob) && ARTIFACT_RE.test(blob);
 }
 
-// MVP57：用户的核心工作是 badcase——自主排查的有限吞吐应优先用在 badcase 类上（P0 仍绝对最先）。
-const BADCASE_TITLE_RE = /badcase|排查|报错|故障|失败|trace|日志|崩|异常|沙箱/i;
-/** 是不是"badcase / 排查类"事项（带凭据的、或标题就是排查/报错类）。纯函数，用于排序前置。 */
+// MVP57/58：自主排查"优先挑"的关键词由 config 给（用户可改，定义"哪类先查"）；P0 仍绝对最先。
+const PRIORITY_KW_RE = new RegExp(
+  config.investigationPriorityKeywords.map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).filter(Boolean).join('|') || '(?!)',
+  'i'
+);
+/** 是不是"优先排查类"事项（带凭据的 badcase、或标题命中用户配置的优先关键词）。纯函数，用于排序前置。 */
 export function isBadcaseMatter(input: { title?: string; currentSummary?: string | null }): boolean {
-  return hasResolvableBadcase(input) || BADCASE_TITLE_RE.test(input.title ?? '');
+  return hasResolvableBadcase(input) || PRIORITY_KW_RE.test(input.title ?? '');
 }
 
 /**
@@ -204,13 +208,31 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
   }
 }
 
+// MVP58：事件驱动——新可排查事项一到就近实时派发（去抖合并突发；派完若还有候选则继续 drain）。
+let kickTimer: ReturnType<typeof setTimeout> | null = null;
+export function requestInvestigationSoon(delayMs = config.investigationKickDebounceMs): void {
+  if (!config.investigationDispatchEnabled) return;
+  if (inFlight || kickTimer) return; // 已在飞行 / 已排了一次 → 不叠（去抖）
+  kickTimer = setTimeout(() => {
+    kickTimer = null;
+    void runInvestigationDispatchTick()
+      .then((did) => {
+        if (did) requestInvestigationSoon(1_500); // 刚查完一件、还有候选 → 继续排干（单并发，逐件）
+      })
+      .catch(() => {});
+  }, delayMs);
+  kickTimer.unref?.();
+}
+
 export function startInvestigationDispatcher(): void {
   if (!config.investigationDispatchEnabled) {
     console.log('[investigation] dispatcher 默认关闭（INVESTIGATION_DISPATCH_ENABLED=true 开启）');
     return;
   }
+  // 订阅"该排查了"信号：matterReducer 等新建可排查事项时 kickInvestigation() → 这里立刻派发。
+  onInvestigationKick(() => requestInvestigationSoon());
   if (timer) return;
-  console.log(`[investigation] dispatcher 启动，每 ${Math.round(config.investigationTickMs / 1000)}s 派发≤1 件`);
+  console.log(`[investigation] dispatcher 启动，每 ${Math.round(config.investigationTickMs / 1000)}s 兜底派发 + 新事项即时 kick`);
   timer = setInterval(() => {
     void runInvestigationDispatchTick();
   }, config.investigationTickMs);
@@ -221,5 +243,9 @@ export function stopInvestigationDispatcher(): void {
   if (timer) {
     clearInterval(timer);
     timer = null;
+  }
+  if (kickTimer) {
+    clearTimeout(kickTimer);
+    kickTimer = null;
   }
 }
