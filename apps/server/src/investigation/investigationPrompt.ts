@@ -86,6 +86,18 @@ export function buildInvestigateUserMessage(opts: {
       : '',
     '</matter>',
   ];
+  // MVP64 ⑥：决策类事项——不替用户拍板，而是用只读工具拉齐"决策信息包"。
+  if (opts.matterType === 'decision') {
+    lines.push(
+      '',
+      '<决策信息包指引>',
+      '这是一个待拍板的决策。请用只读工具(IM 搜索/相关文档)去拉齐三样：',
+      '① 各方立场——谁倾向哪个方案、理由；② 约束——deadline/资源/技术/合规等硬限制；③ 缺口——还缺哪些信息才能拍板。',
+      'conclude 时 verdict 用 progressed；factSummary 一句话概括这个"决策信息包"；',
+      'evidence 分条列：以「立场/约束/缺口」前缀标注每条并附来源(谁在何时何处说的)。**不要替用户做决定**，只把决策所需信息摆齐。',
+      '</决策信息包指引>'
+    );
+  }
   if (opts.projectProfile) {
     lines.push(
       '',

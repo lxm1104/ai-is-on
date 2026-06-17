@@ -51,6 +51,15 @@ export function hasResolvableBadcase(input: { title?: string; currentSummary?: s
   return BADCASE_SIGNAL_RE.test(blob) && ARTIFACT_RE.test(blob);
 }
 
+// MVP64 ⑥：决策类事项——「该拍但还没拍/信息不全」时值得自主去 IM/文档拉齐各方立场+约束+缺口，
+// 产出"决策信息包"待用户拍板。仅在有**未决信号**时放行（已拍板的决策不反复查，避免挤占单并发 gate）。
+const DECISION_OPEN_RE = /待定|未决|没定|定不下来|拍不了板|待拍板|未拍板|分歧|各方意见|选型|要不要|是否要|怎么定|方案[^。]{0,6}(待|未定|没定|不确定)/;
+/** 待拍板且信息不全的决策类 matter → 值得自主拉齐决策信息包。纯函数。 */
+export function isOpenDecision(input: { type?: string; title?: string; currentSummary?: string | null }): boolean {
+  if (input.type !== 'decision') return false;
+  return DECISION_OPEN_RE.test(`${input.title ?? ''} ${input.currentSummary ?? ''}`);
+}
+
 // MVP57/58：自主排查"优先挑"的关键词由 config 给（用户可改，定义"哪类先查"）；P0 仍绝对最先。
 const PRIORITY_KW_RE = new RegExp(
   config.investigationPriorityKeywords.map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).filter(Boolean).join('|') || '(?!)',
@@ -67,12 +76,17 @@ export function isBadcaseMatter(input: { title?: string; currentSummary?: string
  * - 或标题本身命中查证词（如"排查宁波力劲…"）→ worthy；
  * - 或（MVP52）代码/系统类 badcase 且带可解析凭据（日志ID/traceID）→ worthy（交给 run_command 追）。
  */
-export function isInvestigationWorthy(input: { title?: string; nextAction?: string | null; currentSummary?: string | null }): boolean {
+export function isInvestigationWorthy(input: { title?: string; nextAction?: string | null; currentSummary?: string | null; type?: string }): boolean {
   const na = (input.nextAction ?? '').trim();
   const ti = (input.title ?? '').trim();
   const naWorthy = na.length >= 6 && !GENERIC_NEXT_ACTIONS.has(na) && WORTHY_RE.test(na);
   const tiWorthy = ti.length >= 4 && WORTHY_RE.test(ti);
-  return naWorthy || tiWorthy || hasResolvableBadcase({ title: input.title, currentSummary: input.currentSummary });
+  return (
+    naWorthy ||
+    tiWorthy ||
+    hasResolvableBadcase({ title: input.title, currentSummary: input.currentSummary }) ||
+    isOpenDecision({ type: input.type, title: input.title, currentSummary: input.currentSummary })
+  );
 }
 
 const PRIO_RANK: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
@@ -104,7 +118,7 @@ export function selectInvestigationCandidate(
   const pool = matters.filter(
     (m) =>
       (m.status === 'open' || m.status === 'in_progress') &&
-      isInvestigationWorthy({ title: m.title, nextAction: m.nextAction, currentSummary: m.currentSummary }) &&
+      isInvestigationWorthy({ title: m.title, nextAction: m.nextAction, currentSummary: m.currentSummary, type: m.type }) &&
       !isCoolingDown(m.id) &&
       !shouldSkip(m.id)
   );

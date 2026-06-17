@@ -178,3 +178,38 @@ test('MVP58 kick：onInvestigationKick 注册的 handler 收到 kickInvestigatio
   k.kickInvestigation();
   assert.equal(n, 2, '每次 kick 都触达已注册 handler');
 });
+
+// MVP64 ⑥ 决策信息包：待拍板且信息不全的决策类 matter → worthy；已拍板/无未决信号 → 不查
+import { isOpenDecision } from '../src/investigation/investigationDispatcher.js';
+
+test('MVP64 isOpenDecision：仅 decision 类 + 未决信号 → true', () => {
+  assert.equal(isOpenDecision({ type: 'decision', title: '多维表格定价方案待定' }), true);
+  assert.equal(isOpenDecision({ type: 'decision', title: '技术选型', currentSummary: '两个方案有分歧' }), true);
+  // 已拍板的决策（无未决信号）→ 不反复查
+  assert.equal(isOpenDecision({ type: 'decision', title: '已确定用方案A' }), false);
+  // 非 decision 类即便有"待定" → 交给别的 worthy 通道，这里不放行
+  assert.equal(isOpenDecision({ type: 'follow_up', title: '价格待定' }), false);
+});
+
+test('MVP64 isInvestigationWorthy：决策类带未决信号 worthy（即便 nextAction 泛兜底）', () => {
+  assert.equal(
+    isInvestigationWorthy({ type: 'decision', title: '编辑器选型待拍板', nextAction: '确认决策结论并同步相关方' }),
+    true
+  );
+  // 决策已拍板（无未决信号）+ 泛兜底 → 不查
+  assert.equal(
+    isInvestigationWorthy({ type: 'decision', title: '季度目标', nextAction: '确认决策结论并同步相关方' }),
+    false
+  );
+});
+
+test('MVP64 prompt：decision 类注入决策信息包指引；非 decision 不注入', async () => {
+  const { buildInvestigateUserMessage } = await import('../src/investigation/investigationPrompt.js');
+  const base = { matterTitle: 'x', currentSummary: '', nextAction: '', entities: [], findings: [], round: 1, maxRounds: 3 };
+  const dec = buildInvestigateUserMessage({ ...base, matterType: 'decision' });
+  assert.match(dec, /决策信息包指引/);
+  assert.match(dec, /各方立场/);
+  assert.match(dec, /不要替用户做决定/);
+  const fu = buildInvestigateUserMessage({ ...base, matterType: 'follow_up' });
+  assert.ok(!/决策信息包指引/.test(fu), '非决策类不注入');
+});
