@@ -118,15 +118,21 @@ export async function runInvestigation(
     let step;
     try {
       step = parseInvestigationStep(await judge(userMessage));
-    } catch (err) {
-      // 解析彻底失败 → 收尾为 unknown，不空转
-      concluded = {
-        verdict: 'unknown',
-        confidence: 0,
-        factSummary: `排查器输出无法解析：${err instanceof Error ? err.message : String(err)}`,
-        evidence: [],
-      };
-      break;
+    } catch {
+      // MVP52：模型偶发夹说理散文/误发原生 tool-call 致这一轮无合法 JSON → **重试一次**（实测模型能出对的，
+      // 一次格式打嗝不该让整个排查归零、再被止损放弃）。重试仍败才降级 unknown，不空转。
+      try {
+        const retryMsg = `${userMessage}\n\n⚠️ 上一次没有输出合法 JSON（不要写任何说理散文、不要尝试调用工具）。现在**只**输出那一个 JSON 对象。`;
+        step = parseInvestigationStep(await judge(retryMsg));
+      } catch (err2) {
+        concluded = {
+          verdict: 'unknown',
+          confidence: 0,
+          factSummary: `排查器输出无法解析（重试后仍失败）：${err2 instanceof Error ? err2.message : String(err2)}`,
+          evidence: [],
+        };
+        break;
+      }
     }
 
     if (step.action === 'conclude') {

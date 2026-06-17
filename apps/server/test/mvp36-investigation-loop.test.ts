@@ -57,6 +57,15 @@ test('parse: 垃圾文本 → 抛错(由循环兜底)', () => {
   assert.throws(() => parseInvestigationStep('这不是 JSON'), /非合法 JSON/);
 });
 
+test('MVP52 parse: JSON 前后夹说理散文 → 仍抠出 action（实测模型常这样）', () => {
+  const s = parseInvestigationStep(
+    '我需要查证这个 middleware bug 是否已修复，先并行查 IM 和代码改动。\n' +
+      '{"action":"investigate","toolCalls":[{"tool":"search_im_messages","params":{"query":"middleware"}}]}\n这样应该能确认。'
+  );
+  assert.equal(s.action, 'investigate');
+  if (s.action === 'investigate') assert.equal(s.toolCalls[0].tool, 'search_im_messages');
+});
+
 // ---- runInvestigation ----
 
 function scriptedJudge(steps: string[]) {
@@ -68,6 +77,16 @@ function scriptedJudge(steps: string[]) {
   };
   return { judge, seen };
 }
+
+test('MVP52 T-retry: 首轮无法解析 → 重试一次 → 用重试结果（不再整轮归零 unknown@0）', async () => {
+  const { judge, seen } = scriptedJudge([
+    '我先看看……（这次忘了输出 JSON）', // 第一次：解析失败
+    JSON.stringify({ action: 'conclude', conclusion: { verdict: 'blocked', confidence: 0.7, factSummary: '查到受阻根因', evidence: ['e'] } }), // 重试：合法
+  ]);
+  const r = await runInvestigation({ ...baseInput, maxRounds: 2 }, { judge });
+  assert.equal(r.conclusion.verdict, 'blocked'); // 用了重试的有效结论，不是 unknown@0
+  assert.equal(seen.length, 2); // 原始 + 重试各一次
+});
 
 test('T1 投查→结论：执行只读工具、累计 findings、回结论', async () => {
   const { judge } = scriptedJudge([

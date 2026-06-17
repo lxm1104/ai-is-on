@@ -126,14 +126,54 @@ function tryParse(s: string): unknown | null {
   return null;
 }
 
+/** 括号配平：抠出文本里所有顶层 {...} 片段（应对模型在 JSON 前后夹了说理散文）。 */
+function balancedObjects(s: string): string[] {
+  const out: string[] = [];
+  let depth = 0, start = -1, inStr = false, esc = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === '{') { if (depth === 0) start = i; depth++; }
+    else if (ch === '}') { depth--; if (depth === 0 && start >= 0) { out.push(s.slice(start, i + 1)); start = -1; } }
+  }
+  return out;
+}
+
 function extractJson(s: string): Record<string, unknown> {
-  const whole = tryParse(s);
-  if (whole && typeof whole === 'object') return whole as Record<string, unknown>;
+  // 1. 整串**严格** JSON.parse（纯 JSON 回复的快路径）。不在这步用 jsonrepair——它对"散文夹 JSON"
+  //    会把整段散文"修"成一个乱对象，反而短路掉下面的精准抠取（实测 bug）。
+  try {
+    const w = JSON.parse(s);
+    if (w && typeof w === 'object') return w as Record<string, unknown>;
+  } catch {}
+  // 2. 代码围栏
   const fenced = s.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   if (fenced?.[1]) {
     const inside = tryParse(fenced[1]);
     if (inside && typeof inside === 'object') return inside as Record<string, unknown>;
   }
+  // 3. 模型常在 JSON 前后夹说理散文（"我先并行查 IM 和代码…{json}…"）→ 配平抠出每个 {...}，
+  //    优先取含 action/toolCalls/conclusion 的那个（对每个**孤立片段**用 jsonrepair 是安全的）。
+  const objs = balancedObjects(s);
+  let fallback: Record<string, unknown> | null = null;
+  for (const o of objs) {
+    const parsed = tryParse(o);
+    if (parsed && typeof parsed === 'object') {
+      const obj = parsed as Record<string, unknown>;
+      if ('action' in obj || 'toolCalls' in obj || 'conclusion' in obj) return obj;
+      if (!fallback) fallback = obj;
+    }
+  }
+  if (fallback) return fallback;
+  // 4. 兜底：整串 jsonrepair / 首尾大括号
+  const repaired = tryParse(s);
+  if (repaired && typeof repaired === 'object') return repaired as Record<string, unknown>;
   const first = s.indexOf('{');
   const last = s.lastIndexOf('}');
   if (first >= 0 && last > first) {
