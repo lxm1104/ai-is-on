@@ -213,3 +213,22 @@ test('MVP64 prompt：decision 类注入决策信息包指引；非 decision 不�
   const fu = buildInvestigateUserMessage({ ...base, matterType: 'follow_up' });
   assert.ok(!/决策信息包指引/.test(fu), '非决策类不注入');
 });
+
+// MVP65 unknown 退避：刚查回真实 unknown → 冷却 ×MULT；有意义结论/退化哨兵 → 原冷却
+import { effectiveCooldownMs, UNKNOWN_COOLDOWN_MULT } from '../src/investigation/investigationDispatcher.js';
+
+test('MVP65 effectiveCooldownMs：最近真实 unknown → 拉长冷却', () => {
+  const base = 6 * 3600_000;
+  // 最近一次真实 unknown → ×MULT
+  assert.equal(effectiveCooldownMs([u(0.3)], base), base * UNKNOWN_COOLDOWN_MULT);
+  assert.equal(effectiveCooldownMs([u(0.3), v('progressed', 0.8)], base), base * UNKNOWN_COOLDOWN_MULT);
+  // 最近是有意义结论 → 原冷却
+  assert.equal(effectiveCooldownMs([v('progressed', 0.8), u(0.3)], base), base);
+  assert.equal(effectiveCooldownMs([v('resolved', 0.9)], base), base);
+  // 只有 conf=0 退化哨兵(空转/工具报错) → 不算查不清 → 原冷却(别误退避从没真查过的)
+  assert.equal(effectiveCooldownMs([u(0), u(0)], base), base);
+  // 退化哨兵在前、真实 unknown 在后 → 取最近真实=unknown → 退避
+  assert.equal(effectiveCooldownMs([u(0), u(0.3)], base), base * UNKNOWN_COOLDOWN_MULT);
+  // 空历史 → 原冷却
+  assert.equal(effectiveCooldownMs([], base), base);
+});

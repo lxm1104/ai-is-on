@@ -146,9 +146,24 @@ const lastInvestigatedAt = new Map<string, number>();
 let inFlight = false;
 let timer: ReturnType<typeof setInterval> | null = null;
 
+// MVP65：unknown 退避——刚查回「真实 unknown」的事项很可能仍查不清，把冷却拉长（默认 4×），
+// 让稀缺单并发 gate 的吞吐优先给新鲜/有意义的事项。实测 98 次排查里 55% 是 unknown（浪费）。
+// 不动 worthiness、不动 2-strikes 止损：最坏退化回原冷却，是严格改进。纯函数，导出供测。
+export const UNKNOWN_COOLDOWN_MULT = 4;
+export function effectiveCooldownMs(
+  recent: Array<{ verdict: string; confidence: number }>,
+  baseMs: number
+): number {
+  // 最近一次"真实"结论（排除 conf=0 退化哨兵：排查器空转/工具报错，不代表查不清）
+  const genuine = recent.find((r) => !(r.verdict === 'unknown' && r.confidence <= 0));
+  return genuine && genuine.verdict === 'unknown' ? baseMs * UNKNOWN_COOLDOWN_MULT : baseMs;
+}
+
 function isCoolingDown(matterId: string, now: number): boolean {
   const last = lastInvestigatedAt.get(matterId);
-  return last !== undefined && now - last < config.investigationCooldownMs;
+  if (last === undefined) return false;
+  const cd = effectiveCooldownMs(getRecentInvestigationVerdicts(matterId, 3), config.investigationCooldownMs);
+  return now - last < cd;
 }
 
 function buildEntities(matterId: string): Array<{ type: string; name: string; role: string }> {
