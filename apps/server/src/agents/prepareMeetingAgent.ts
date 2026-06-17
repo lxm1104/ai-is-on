@@ -7,6 +7,7 @@ import {
 import { createCardFromProposal } from '../cards/cardsService.js';
 import { recommendHandling } from '../context/agentContextAssembler.js';
 import { runOneShot } from '../triage/backgroundRuntime.js';
+import { gatherMeetingLedger, renderLedgerBlock, isLedgerEmpty, type MeetingLedger } from './meetingLedger.js';
 import type { AgentHandler } from './agentRegistry.js';
 import type { ContextUnit } from '../context/ContextUnit.js';
 import type { AgentContextPacket } from '../context/agentContextAssembler.js';
@@ -15,11 +16,13 @@ export const PREPARE_MEETING_SYSTEM_PROMPT = `你正在为用户准备一个即�
 1. 会议本身（标题、时间、参会人）
 2. 该会议关联的上下文：相关承诺、最近相关消息、相关项目状态
 3. 用户的 Work Map 信息（角色 / 项目 / 权威文档 / stakeholders）
+4. <ledger> 与参会人之间「我欠对方 / 对方欠我 / 相关跟进」的未了事项（含上次结论与待答问题）
 
 任务：用一份简短的会前摘要回应。
 
 铁律：
 - 输出 1 段会议主旨（≤60 字）+ 最多 3 个"应带要点" + 1-3 个"缺失/不确定信息"。
+- 若有 <ledger>，应带要点优先来自它：把"我欠对方该交付的、对方欠我待催的、尚未答复的问题"带进会，不要泛泛而谈。
 - 优先利用 Work Map 中的权威文档与项目目标当上下文锚，不要复述会议标题。
 - 不要主动提议联系外部人。
 - 如果上下文很少，明确说"上下文较少，可能需要现场补齐"，不要瞎补。
@@ -49,7 +52,10 @@ export const prepareMeetingHandler: AgentHandler = async ({
     };
   }
 
-  const userMessage = buildUserMessage(unit, packet);
+  // MVP61：会前先确定性拉齐「与参会人未了往来」(我欠/对方欠我/相关 + 上次结论 + 待答)，
+  // 既喂给 LLM 当锚，又作为卡片正文的可靠底座(不依赖 LLM 是否复述)。
+  const ledger = gatherMeetingLedger(unit.id);
+  const userMessage = buildUserMessage(unit, packet, ledger);
 
   let parsed: PrepareMeetingResult;
   try {
@@ -84,6 +90,9 @@ export const prepareMeetingHandler: AgentHandler = async ({
     bodyLines.push('', '不确定：');
     for (const m of parsed.missingInfo) bodyLines.push(`- ${m}`);
   }
+  // MVP61：确定性往来清单置于摘要后（不论 LLM 是否复述都可靠呈现）。
+  const ledgerBlock = renderLedgerBlock(ledger);
+  if (ledgerBlock) bodyLines.push('', ledgerBlock);
   const body = bodyLines.join('\n');
 
   // P0 if any related Space is critical
@@ -111,6 +120,7 @@ export const prepareMeetingHandler: AgentHandler = async ({
       llmConfidence: parsed.confidence,
       spacePriorities: packet?.spaces?.map((s) => ({ name: s.name, priority: s.priority })) ?? [],
       recommendedHandling: handlingRec?.handling ?? null,
+      ledgerCount: ledger.iOwe.length + ledger.owedToMe.length + ledger.related.length,
     }),
     created_at: now,
     updated_at: now,
@@ -148,7 +158,7 @@ type PrepareMeetingResult = {
  * MVP8.1 §5.5.2：prompt 现在直接消费 packet 的 spaces / goals / stakeholders /
  * relatedContext / subject，不再自己 collectRelatedContext。
  */
-function buildUserMessage(unit: ContextUnit, packet?: AgentContextPacket): string {
+function buildUserMessage(unit: ContextUnit, packet?: AgentContextPacket, ledger?: MeetingLedger): string {
   const meta = {
     title: unit.title,
     startsAt: unit.time?.startsAt ?? unit.time?.occurredAt,
@@ -230,6 +240,10 @@ function buildUserMessage(unit: ContextUnit, packet?: AgentContextPacket): strin
       '</context>',
       ''
     );
+  }
+  // MVP61：与参会人「未了往来」确定性清单——优先据此提"应带要点"(把我欠的、对方欠我的、待答问题带进会)。
+  if (ledger && !isLedgerEmpty(ledger)) {
+    blocks.push('与参会人未了往来（据此优先生成应带要点）：', '<ledger>', renderLedgerBlock(ledger), '</ledger>', '');
   }
   if (packet?.boundary && packet.boundary.decision !== 'allow') {
     blocks.push(`(boundary: ${packet.boundary.decision} — ${packet.boundary.reason ?? ''})`, '');
