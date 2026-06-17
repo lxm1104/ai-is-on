@@ -18,6 +18,7 @@ process.env.COLLECTOR_ENABLED = 'false';
 
 const types = await import('../src/problemClass/problemClassTypes.js');
 const prompt = await import('../src/problemClass/problemClassDistillPrompt.js');
+const analyzePrompt = await import('../src/problemClass/problemClassAnalyzePrompt.js');
 const store = await import('../src/problemClass/problemClassStore.js');
 const svc = await import('../src/problemClass/problemClassService.js');
 const { config } = await import('../src/config.js');
@@ -191,6 +192,52 @@ test('MVP55 syncClassStatusForResolvedMatter：成员 matter 全办结 → 类�
   // MVP55 对称可逆：重开任一成员 matter → 类自动恢复 open（否则台账谎报已修复）
   userReopenMatter(m1, '测试重开');
   assert.equal(store.getProblemClass(c.id)?.status, 'open', '重开成员 → 类对称恢复 open');
+});
+
+test('MVP56 parseClassAnalysis：合法解析；缺系统性根因/解法 → null', () => {
+  const ok = analyzePrompt.parseClassAnalysis(JSON.stringify({ systematicRootCause: '工具返回普遍被截断', systematicSolution: '统一加分页+fetch全文', affectedScope: 'get_base_schema', recommendedAction: '改 schema 读取', confidence: 0.7 }));
+  assert.equal(ok?.systematicSolution, '统一加分页+fetch全文');
+  assert.equal(ok?.confidence, 0.7);
+  assert.equal(analyzePrompt.parseClassAnalysis(JSON.stringify({ systematicRootCause: '只有根因没解法' })), null);
+  assert.equal(analyzePrompt.parseClassAnalysis('不是 JSON'), null);
+});
+
+test('MVP56 analyzeClass：综合成员 → 写"待审阅"系统性分析（不动任何 matter 状态）', async () => {
+  const sid = 'sp-an-' + randomUUID().slice(0, 6);
+  const c = store.createDistilledClass({ spaceId: sid, label: '截断类', rootCause: '工具返回被截断' });
+  for (let i = 0; i < 2; i++) {
+    const mid = 'm-' + randomUUID();
+    store.upsertMember({ matterId: mid, spaceId: sid, symptomBucket: '截断', diagnosticText: `case${i} 字段没取全`, evidence: [], confidence: 0.8 });
+    store.setMemberAssigned(mid, c.id);
+  }
+  const judge = async () => JSON.stringify({ systematicRootCause: '都因工具返回被截断', systematicSolution: '统一分页+fetch全文', affectedScope: 'get_base_schema', recommendedAction: '改读取逻辑', confidence: 0.8 });
+  const ok = await svc.analyzeClass(c.id, { judge });
+  assert.equal(ok, true);
+  const got = store.getProblemClass(c.id)!;
+  assert.equal(got.analysisStatus, 'pending_review', '分析结论必须待审阅，不自动落地');
+  assert.equal(got.analysis?.systematicSolution, '统一分页+fetch全文');
+  // 审阅
+  store.markClassAnalysisReviewed(c.id);
+  assert.equal(store.getProblemClass(c.id)?.analysisStatus, 'reviewed');
+});
+
+test('MVP56 maybeAnalyzeClass：非 systemic 不自动分析；systemic 且未分析才跑', async () => {
+  const sid = 'sp-auto-' + randomUUID().slice(0, 6);
+  const c = store.createDistilledClass({ spaceId: sid, label: 'x', rootCause: 'y' });
+  let called = 0;
+  const judge = async () => { called++; return JSON.stringify({ systematicRootCause: 'r', systematicSolution: 's', affectedScope: '', recommendedAction: '', confidence: 0.6 }); };
+  // 只有 1 成员 → 非 systemic → 不分析
+  const m1 = 'm-' + randomUUID();
+  store.upsertMember({ matterId: m1, spaceId: sid, symptomBucket: '报错', diagnosticText: 'd', evidence: [], confidence: 0.8 });
+  store.setMemberAssigned(m1, c.id);
+  store.refreshClass(c.id);
+  assert.equal(await svc.maybeAnalyzeClass(c.id, { judge }), false);
+  assert.equal(called, 0);
+  // 加到 3 成员 → systemic → 自动分析
+  for (let i = 0; i < 2; i++) { const mid = 'm-' + randomUUID(); store.upsertMember({ matterId: mid, spaceId: sid, symptomBucket: '报错', diagnosticText: 'd' + i, evidence: [], confidence: 0.8 }); store.setMemberAssigned(mid, c.id); }
+  store.refreshClass(c.id);
+  assert.equal(await svc.maybeAnalyzeClass(c.id, { judge }), true);
+  assert.equal(store.getProblemClass(c.id)?.analysisStatus, 'pending_review');
 });
 
 test('MVP54 listLedger.aiResolvedHint：成员诊断含"已修复"且 open → 提示；resolved 后不提示', () => {

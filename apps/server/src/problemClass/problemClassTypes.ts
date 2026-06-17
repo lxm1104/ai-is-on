@@ -10,6 +10,16 @@ export type ProblemClassOrigin = 'distilled' | 'user';
 export type MemberStatus = 'pending' | 'assigned' | 'rejected';
 export type ProblemClassStatus = 'open' | 'fixing' | 'resolved'; // MVP54：根因类的修复生命周期
 
+// MVP56：问题类「系统性分析」——AI 综合这一类所有 case 得出的系统性结论（必须经用户审阅，绝不自动落地）。
+export type ClassAnalysisStatus = 'none' | 'pending_review' | 'reviewed';
+export type ClassAnalysis = {
+  systematicRootCause: string; // 这一类问题系统性的根本原因（综合多 case，而非单 case）
+  systematicSolution: string; // 系统性解法/修复方向
+  affectedScope: string; // 影响面/涉及组件/范围
+  recommendedAction: string; // 建议的下一步（给用户决策，不自动执行）
+  confidence: number;
+};
+
 // 成员诊断文本里出现这些 → AI 疑似已查到该类被修复（台账上提示用户可标已修复）
 export const RESOLVED_HINT_RE = /已修复|已上线|已合入|合入\s*release|fixed|修复方案已|已发版|已部署/i;
 
@@ -37,6 +47,9 @@ export type ProblemClass = {
   memberCount: number;
   systemic: boolean;
   status: ProblemClassStatus;
+  analysis: ClassAnalysis | null; // MVP56：系统性分析结论（null=未分析）
+  analysisStatus: ClassAnalysisStatus; // 待审阅 / 已审阅
+  analyzedAt: string | null;
   createdAt: string;
   updatedAt: string;
 };

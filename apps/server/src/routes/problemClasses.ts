@@ -4,9 +4,9 @@
  * POST /api/problem-classes/backfill     —— 从已有 matters 回填诊断成员并蒸馏一轮（首次填充/手动）
  */
 import { Router } from 'express';
-import { listLedger, listAllClasses, userEditClass, approveClass, setProblemClassStatus } from '../problemClass/problemClassStore.js';
+import { listLedger, listAllClasses, userEditClass, approveClass, setProblemClassStatus, markClassAnalysisReviewed } from '../problemClass/problemClassStore.js';
 import type { ProblemClassStatus } from '../problemClass/problemClassTypes.js';
-import { backfillMembersFromMatters, distillAllPending } from '../problemClass/problemClassService.js';
+import { backfillMembersFromMatters, distillAllPending, analyzeClass } from '../problemClass/problemClassService.js';
 import { writeAudit } from '../boundary/auditLog.js';
 
 export const problemClassesRouter = Router();
@@ -45,6 +45,26 @@ problemClassesRouter.post('/problem-classes/:id/status', (req, res) => {
   if (!cls) return res.status(404).json({ error: 'class not found' });
   // 复用 problem_class_edited 审计动作（避免动并行会话在改的 auditLog.ts）
   writeAudit({ action: 'problem_class_edited', reason: `问题类「${cls.label}」状态 → ${status}`, payload: { id: cls.id, status } });
+  res.json({ class: cls });
+});
+
+// MVP56：手动触发对某类的系统性分析（结论待审阅，不自动执行）
+problemClassesRouter.post('/problem-classes/:id/analyze', async (req, res) => {
+  try {
+    const ok = await analyzeClass(req.params.id);
+    const item = listLedger().find((c) => c.id === req.params.id);
+    if (!item) return res.status(404).json({ error: 'class not found' });
+    res.json({ ok, class: item });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// MVP56：用户审阅过该类的系统性分析
+problemClassesRouter.post('/problem-classes/:id/analysis/review', (req, res) => {
+  const cls = markClassAnalysisReviewed(req.params.id);
+  if (!cls) return res.status(404).json({ error: 'class not found' });
+  writeAudit({ action: 'problem_class_edited', reason: `审阅问题类「${cls.label}」系统性分析`, payload: { id: cls.id } });
   res.json({ class: cls });
 });
 

@@ -210,6 +210,9 @@ export const config = {
   // MVP51 问题类聚合：把"已诊断/有根因"的事项按根因汇总成问题类台账（case→class）。攒够 ≥2 条同 space
   // 诊断成员 → 一次 one-shot 按根因归类。默认开；设 false 则不吸纳/不蒸馏。
   problemClassEnabled: envBool('PROBLEM_CLASS_ENABLED', true),
+  // MVP56 问题类系统性分析：某类成为 systemic（≥3 成员）时自动综合多 case 出"系统性根因+解法"结论（待用户审阅，
+  // 绝不自动执行解法）。默认开；手动触发不受此开关限制（用户可在台账点「分析这一类」）。
+  problemClassAutoAnalyzeEnabled: envBool('PROBLEM_CLASS_AUTO_ANALYZE_ENABLED', true),
   // MVP55 自主办结（放权第一档·内部可逆）：自主排查 resolved 且置信 ≥ 阈值时，AI 直接办结 matter（复用
   // userResolveMatter 同路径），并浮一张「AI 已主动办结」回执卡（可一键重开）。比"提案"门更高（自动办更谨慎）。
   investigationAutoResolveEnabled: envBool('INVESTIGATION_AUTO_RESOLVE_ENABLED', true),

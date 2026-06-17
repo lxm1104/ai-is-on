@@ -36,6 +36,7 @@ import { INVESTIGATE_SYSTEM_PROMPT, renderToolsDoc } from '../investigation/inve
 import { PLAYBOOK_DISTILL_SYSTEM_PROMPT } from '../playbook/playbookDistillPrompt.js';
 import { PROJECT_ROUTER_SYSTEM } from '../investigation/projectRouterPrompt.js';
 import { PROBLEM_CLASS_DISTILL_SYSTEM } from '../problemClass/problemClassDistillPrompt.js';
+import { PROBLEM_CLASS_ANALYZE_SYSTEM } from '../problemClass/problemClassAnalyzePrompt.js';
 import { listReadTools } from '../investigation/readTools.js';
 
 export type OpencodeAgentName =
@@ -59,7 +60,8 @@ export type OpencodeAgentName =
   | 'aiisn-investigate'
   | 'aiisn-playbook-distill'
   | 'aiisn-project-router'
-  | 'aiisn-problem-class-distill';
+  | 'aiisn-problem-class-distill'
+  | 'aiisn-problem-class-analyze';
 
 type Permission = 'allow' | 'ask' | 'deny';
 type AgentDef = {
@@ -214,6 +216,13 @@ const AGENTS: readonly AgentDef[] = [
     description: 'AI is ON MVP51 问题归类器（诊断事项 → 按根因归到问题类）',
     permission: { bash: 'deny', edit: 'deny', write: 'deny', webfetch: 'deny', read: 'deny' },
     prompt: PROBLEM_CLASS_DISTILL_SYSTEM,
+  },
+  {
+    // MVP56 系统性分析师：综合一个问题类的多条 case → 系统性根因/解法（结论交用户审阅）。纯文本进 JSON 出。
+    name: 'aiisn-problem-class-analyze',
+    description: 'AI is ON MVP56 系统性问题分析师（问题类 → 系统性根因+解法，待审阅）',
+    permission: { bash: 'deny', edit: 'deny', write: 'deny', webfetch: 'deny', read: 'deny' },
+    prompt: PROBLEM_CLASS_ANALYZE_SYSTEM,
   },
 ];
 

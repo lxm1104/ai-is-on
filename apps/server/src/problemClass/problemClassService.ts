@@ -23,12 +23,19 @@ import {
   allMemberMattersResolved,
   getProblemClass,
   setProblemClassStatus,
+  getClassMembersForAnalysis,
+  setClassAnalysis,
 } from './problemClassStore.js';
 import {
   PROBLEM_CLASS_DISTILL_SYSTEM,
   buildProblemClassMessage,
   parseProblemClassOutput,
 } from './problemClassDistillPrompt.js';
+import {
+  PROBLEM_CLASS_ANALYZE_SYSTEM,
+  buildClassAnalyzeMessage,
+  parseClassAnalysis,
+} from './problemClassAnalyzePrompt.js';
 
 const MIN_MEMBERS = 2; // 攒够这么多 pending 诊断成员才归类（≥3 成员的类自动标 systemic）
 const BATCH_K = 12; // 单次最多喂这么多 pending 成员，控 token
@@ -141,8 +148,54 @@ export async function maybeDistillForSpace(spaceId: string | null, deps: Distill
       refreshClass(cid);
     }
   }
+  // MVP56：刚成 systemic 的类 → fire-and-forget 出一份系统性分析（maybeAnalyzeClass 内部判 systemic + 未分析 + gated）
+  for (const cid of touched) void maybeAnalyzeClass(cid, deps).catch(() => {});
   if (changed) console.log(`[problem-class] space=${spaceId ?? '全局'} 归类 ${assignments.length} 条，新类 ${newClassByLabel.size} 个`);
   return changed;
+}
+
+// ---- MVP56：问题类系统性分析（综合多 case → 系统性根因+解法，结论待用户审阅，绝不自动执行） ----
+
+export type AnalyzeDeps = { judge?: (system: string, user: string) => Promise<string> };
+
+async function defaultAnalyzeJudge(system: string, user: string): Promise<string> {
+  const r = await runOneShot(user, { agentName: 'aiisn-problem-class-analyze', systemPrompt: system, lane: 'investigation' });
+  return r.text;
+}
+
+/** 对一个问题类做系统性分析，写入「待审阅」结论。返回是否产出。用户手点 / 自动触发都走它。 */
+export async function analyzeClass(classId: string, deps: AnalyzeDeps = {}): Promise<boolean> {
+  if (!config.problemClassEnabled) return false;
+  const cls = getProblemClass(classId);
+  if (!cls) return false;
+  const members = getClassMembersForAnalysis(classId);
+  if (members.length < 1) return false;
+  const profile = cls.spaceId ? getContextSpace(cls.spaceId)?.investigation_profile ?? null : null;
+  const judge = deps.judge ?? defaultAnalyzeJudge;
+  let parsed;
+  try {
+    const text = await judge(
+      PROBLEM_CLASS_ANALYZE_SYSTEM,
+      buildClassAnalyzeMessage({ label: cls.label, rootCause: cls.rootCause, members, projectProfile: profile })
+    );
+    parsed = parseClassAnalysis(text);
+  } catch (err) {
+    console.warn('[problem-class] 系统性分析失败:', err instanceof Error ? err.message : String(err));
+    return false;
+  }
+  if (!parsed) return false;
+  setClassAnalysis(classId, parsed); // → analysis_status='pending_review'，等用户审
+  console.log(`[problem-class] 已对「${cls.label}」产出系统性分析（待审阅）`);
+  return true;
+}
+
+/** 自动触发：类成 systemic（≥3）且尚无分析时，fire-and-forget 出一份系统性分析（gated）。 */
+export async function maybeAnalyzeClass(classId: string, deps: AnalyzeDeps = {}): Promise<boolean> {
+  if (!config.problemClassAutoAnalyzeEnabled) return false;
+  const cls = getProblemClass(classId);
+  if (!cls || !cls.systemic) return false;
+  if (cls.analysisStatus !== 'none') return false; // 已分析（待审/已审）不重复自动跑
+  return analyzeClass(classId, deps);
 }
 
 /** MVP55：某 matter 办结后，若其问题类的全部成员都已 resolved → 自动把该类标记已修复（可逆，用户能重开）。 */

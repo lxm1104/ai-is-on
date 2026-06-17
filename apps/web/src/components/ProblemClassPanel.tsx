@@ -6,9 +6,15 @@ import { fetchProblemClasses, editProblemClass, approveProblemClass, type Proble
  * - 列出每个问题类：标签、根因、成员数、是否系统性、来源（自学/你校正）
  * - 编辑标签/根因 → 升权威版（自发蒸馏不再覆盖）；批准草稿
  */
-// MVP54：台账 GET 还返回 status + aiResolvedHint（api.ts 的 ProblemClass 暂未加这两字段，这里本地扩展）
+// MVP54/56：台账 GET 还返回 status/aiResolvedHint/analysis（api.ts 的 ProblemClass 暂未加，这里本地扩展）
 type ProblemClassStatus = 'open' | 'fixing' | 'resolved';
-type LedgerClass = ProblemClass & { status?: ProblemClassStatus; aiResolvedHint?: boolean };
+type ClassAnalysis = { systematicRootCause: string; systematicSolution: string; affectedScope: string; recommendedAction: string; confidence: number };
+type LedgerClass = ProblemClass & {
+  status?: ProblemClassStatus;
+  aiResolvedHint?: boolean;
+  analysis?: ClassAnalysis | null;
+  analysisStatus?: 'none' | 'pending_review' | 'reviewed';
+};
 const STATUS_LABEL: Record<ProblemClassStatus, string> = { open: '待修复', fixing: '修复中', resolved: '已修复' };
 
 export function ProblemClassPanel() {
@@ -76,6 +82,31 @@ export function ProblemClassPanel() {
       setBusy(false);
     }
   }
+  // MVP56：手动触发系统性分析 / 审阅
+  async function analyze(id: string) {
+    setBusy(true);
+    try {
+      const r = await fetch(`/api/problem-classes/${encodeURIComponent(id)}/analyze`, { method: 'POST' });
+      if (!r.ok) throw new Error(`analyze ${r.status}`);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function reviewAnalysis(id: string) {
+    setBusy(true);
+    try {
+      await fetch(`/api/problem-classes/${encodeURIComponent(id)}/analysis/review`, { method: 'POST' });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function doApprove(id: string) {
     setBusy(true);
     try {
@@ -143,8 +174,32 @@ export function ProblemClassPanel() {
                           ))}
                         </ol>
                       )}
+                      {c.analysis && (
+                        <div style={{ marginTop: 6, padding: '6px 8px', border: '1px solid var(--border, #3a3a3a)', borderRadius: 6, fontSize: 12, lineHeight: 1.55 }}>
+                          <div style={{ marginBottom: 4 }}>
+                            <strong>🔬 AI 系统性分析</strong>
+                            <span className={`playbook__tag ${c.analysisStatus === 'reviewed' ? '' : 'playbook__tag--ok'}`} style={{ marginLeft: 6 }}>
+                              {c.analysisStatus === 'reviewed' ? '已审阅' : '待审阅'}
+                            </span>
+                            <span style={{ opacity: 0.6, marginLeft: 6 }}>置信 {c.analysis.confidence.toFixed(2)}</span>
+                          </div>
+                          <div><strong>系统性根因：</strong>{c.analysis.systematicRootCause}</div>
+                          <div><strong>系统性解法：</strong>{c.analysis.systematicSolution}</div>
+                          {c.analysis.affectedScope && <div><strong>影响面：</strong>{c.analysis.affectedScope}</div>}
+                          {c.analysis.recommendedAction && <div><strong>建议下一步：</strong>{c.analysis.recommendedAction}</div>}
+                        </div>
+                      )}
                       <div className="card__reply-actions">
                         <button type="button" className="btn btn--card" disabled={busy} onClick={() => startEdit(c)}>校正根因</button>
+                        {!c.analysis && (
+                          <button type="button" className="btn btn--card" disabled={busy} onClick={() => void analyze(c.id)}>🔬 分析这一类</button>
+                        )}
+                        {c.analysis && c.analysisStatus !== 'reviewed' && (
+                          <button type="button" className="btn btn--card btn--reply-send" disabled={busy} onClick={() => void reviewAnalysis(c.id)}>已审阅</button>
+                        )}
+                        {c.analysis && c.analysisStatus === 'reviewed' && (
+                          <button type="button" className="btn btn--card" disabled={busy} onClick={() => void analyze(c.id)}>重新分析</button>
+                        )}
                         {!c.approved && c.origin !== 'user' && (
                           <button type="button" className="btn btn--card btn--reply-send" disabled={busy} onClick={() => void doApprove(c.id)}>批准</button>
                         )}

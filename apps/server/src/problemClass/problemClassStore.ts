@@ -11,6 +11,8 @@ import {
   type ProblemClassMember,
   type ProblemClassOrigin,
   type ProblemClassStatus,
+  type ClassAnalysis,
+  type ClassAnalysisStatus,
   type MemberStatus,
 } from './problemClassTypes.js';
 
@@ -49,6 +51,18 @@ try {
   db.exec(`ALTER TABLE problem_classes ADD COLUMN status TEXT NOT NULL DEFAULT 'open'`);
 } catch {
   // 列已存在
+}
+// MVP56：系统性分析列（幂等加列）
+for (const ddl of [
+  `ALTER TABLE problem_classes ADD COLUMN analysis_json TEXT`,
+  `ALTER TABLE problem_classes ADD COLUMN analysis_status TEXT NOT NULL DEFAULT 'none'`,
+  `ALTER TABLE problem_classes ADD COLUMN analyzed_at TEXT`,
+]) {
+  try {
+    db.exec(ddl);
+  } catch {
+    // 列已存在
+  }
 }
 
 type MemberRow = {
@@ -179,10 +193,19 @@ type ClassRow = {
   member_count: number;
   systemic: number;
   status: string | null;
+  analysis_json: string | null;
+  analysis_status: string | null;
+  analyzed_at: string | null;
   created_at: string;
   updated_at: string;
 };
 function rowToClass(r: ClassRow): ProblemClass {
+  let analysis: ClassAnalysis | null = null;
+  if (r.analysis_json) {
+    try {
+      analysis = JSON.parse(r.analysis_json) as ClassAnalysis;
+    } catch {}
+  }
   return {
     id: r.id,
     spaceId: r.space_id,
@@ -193,6 +216,9 @@ function rowToClass(r: ClassRow): ProblemClass {
     memberCount: r.member_count,
     systemic: r.systemic === 1,
     status: (r.status as ProblemClassStatus) ?? 'open',
+    analysis,
+    analysisStatus: (r.analysis_status as ClassAnalysisStatus) ?? 'none',
+    analyzedAt: r.analyzed_at,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -226,12 +252,15 @@ export function createDistilledClass(input: { spaceId: string | null; label: str
     member_count: 0,
     systemic: 0,
     status: 'open',
+    analysis_json: null,
+    analysis_status: 'none',
+    analyzed_at: null,
     created_at: now,
     updated_at: now,
   };
   db.prepare(
-    `INSERT INTO problem_classes (id, space_id, label, root_cause, origin, approved, member_count, systemic, status, created_at, updated_at)
-     VALUES (@id,@space_id,@label,@root_cause,@origin,@approved,@member_count,@systemic,@status,@created_at,@updated_at)`
+    `INSERT INTO problem_classes (id, space_id, label, root_cause, origin, approved, member_count, systemic, status, analysis_json, analysis_status, analyzed_at, created_at, updated_at)
+     VALUES (@id,@space_id,@label,@root_cause,@origin,@approved,@member_count,@systemic,@status,@analysis_json,@analysis_status,@analyzed_at,@created_at,@updated_at)`
   ).run(row);
   return rowToClass(row);
 }
@@ -288,6 +317,40 @@ export function setProblemClassStatus(id: string, status: ProblemClassStatus, no
   if (!getProblemClass(id)) return null;
   db.prepare(`UPDATE problem_classes SET status=?, updated_at=? WHERE id=?`).run(status, now, id);
   return getProblemClass(id);
+}
+
+/** MVP56：写入系统性分析结论 → 标「待审阅」（绝不自动落地，等用户审）。 */
+export function setClassAnalysis(id: string, analysis: ClassAnalysis, now = new Date().toISOString()): ProblemClass | null {
+  if (!getProblemClass(id)) return null;
+  db.prepare(`UPDATE problem_classes SET analysis_json=?, analysis_status='pending_review', analyzed_at=?, updated_at=? WHERE id=?`).run(
+    JSON.stringify(analysis),
+    now,
+    now,
+    id
+  );
+  return getProblemClass(id);
+}
+
+/** MVP56：用户审阅过该类分析。 */
+export function markClassAnalysisReviewed(id: string, now = new Date().toISOString()): ProblemClass | null {
+  if (!getProblemClass(id)) return null;
+  db.prepare(`UPDATE problem_classes SET analysis_status='reviewed', updated_at=? WHERE id=?`).run(now, id);
+  return getProblemClass(id);
+}
+
+/** MVP56：取一个类的成员（诊断文本 + 各自最近一次排查轨迹结论），供系统性分析综合。 */
+export function getClassMembersForAnalysis(
+  classId: string
+): Array<{ matterId: string; diagnosticText: string; traceOutcome: string | null }> {
+  const members = db
+    .prepare(`SELECT matter_id, diagnostic_text FROM problem_class_members WHERE class_id=? AND status='assigned' ORDER BY created_at DESC LIMIT 12`)
+    .all(classId) as Array<{ matter_id: string; diagnostic_text: string }>;
+  return members.map((m) => {
+    const t = db
+      .prepare(`SELECT outcome FROM task_traces WHERE matter_id=? AND source='investigation' ORDER BY created_at DESC LIMIT 1`)
+      .get(m.matter_id) as { outcome: string | null } | undefined;
+    return { matterId: m.matter_id, diagnosticText: m.diagnostic_text, traceOutcome: t?.outcome ?? null };
+  });
 }
 
 /** MVP55：某 matter 归属的问题类 id（assigned）。 */
