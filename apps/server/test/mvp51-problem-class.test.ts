@@ -285,7 +285,10 @@ test('MVP63 parseClassAnalysis：解析 verificationCommands，挡掉非只读/�
       'git commit -m x',                          // ✖ 写
       'rg pattern | tee out.txt',                 // ✖ 管道/重定向/tee
       'curl http://evil',                         // ✖ 联网
+      'find /tmp -delete',                        // ✖ find 写原语
+      'find . -fprintf /tmp/out %p',              // ✖ find 写文件
       'cat src/foo.ts',                           // ✅ 只读
+      'find src -name x.ts',                      // ✅ find 只读
     ],
     confidence: 0.8,
   });
@@ -295,7 +298,8 @@ test('MVP63 parseClassAnalysis：解析 verificationCommands，挡掉非只读/�
     'rg -n "get_base_schema" src/',
     'git log --oneline -5 -- src/middleware',
     'cat src/foo.ts',
-  ], '只保留只读且无危险元字符的命令');
+    'find src -name x.ts',
+  ], '只保留只读且无危险元字符的命令（find 写原语被挡）');
 });
 
 test('MVP63 parseClassAnalysis：无 verificationCommands → 空数组（不报错）', () => {
