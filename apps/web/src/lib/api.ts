@@ -369,6 +369,46 @@ export async function setPlaybookActive(taskTypeKey: string, active: boolean): P
   return j.playbook;
 }
 
+// MVP51 — 问题类台账
+export type ProblemClass = {
+  id: string;
+  spaceId: string | null;
+  label: string;
+  rootCause: string;
+  origin: 'distilled' | 'user';
+  approved: boolean;
+  memberCount: number;
+  systemic: boolean;
+  createdAt: string;
+  updatedAt: string;
+  members: Array<{ matterId: string; diagnosticText: string }>;
+};
+
+export async function fetchProblemClasses(spaceId?: string): Promise<ProblemClass[]> {
+  const q = spaceId ? `?spaceId=${encodeURIComponent(spaceId)}` : '';
+  const r = await fetch(`/api/problem-classes${q}`);
+  if (!r.ok) throw new Error(`problem-classes ${r.status}`);
+  return (await r.json()).items ?? [];
+}
+
+export async function editProblemClass(id: string, input: { label?: string; rootCause?: string }): Promise<ProblemClass> {
+  const r = await fetch(`/api/problem-classes/${encodeURIComponent(id)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `edit ${r.status}`);
+  return j.class;
+}
+
+export async function approveProblemClass(id: string): Promise<ProblemClass> {
+  const r = await fetch(`/api/problem-classes/${encodeURIComponent(id)}/approve`, { method: 'POST' });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || `approve ${r.status}`);
+  return j.class;
+}
+
 export async function fetchCollectors(): Promise<CollectorStatus[]> {
   const r = await fetch('/api/collectors');
   if (!r.ok) throw new Error(`collectors ${r.status}`);

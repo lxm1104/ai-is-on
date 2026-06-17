@@ -28,7 +28,9 @@ export type AuditAction =
   | 'playbook_user_upsert'              // MVP37：用户编写/编辑 playbook
   | 'playbook_approved'
   | 'playbook_active_set'
-  | 'project_profile_set';              // MVP38：用户设置项目排查档案
+  | 'project_profile_set'                // MVP38：用户设置项目排查档案
+  | 'problem_class_edited'               // MVP51：用户校正问题类（升权威）
+  | 'problem_class_approved';
 
 export function writeAudit(input: {
   action: AuditAction;

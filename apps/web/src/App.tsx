@@ -9,6 +9,7 @@ import { SpacesPanel } from './components/SpacesPanel';
 import { ProjectProposalsPanel } from './components/ProjectProposalsPanel';
 import { RulesPanel } from './components/RulesPanel';
 import { PlaybookPanel } from './components/PlaybookPanel';
+import { ProblemClassPanel } from './components/ProblemClassPanel';
 import { TonePanel } from './components/TonePanel';
 import { WorkMapPanel } from './components/WorkMapPanel';
 import { MyCollaboratorsPanel } from './components/MyCollaboratorsPanel';
@@ -526,6 +527,7 @@ export function App() {
             <ProjectProposalsPanel />
             <RulesPanel />
             <PlaybookPanel />
+            <ProblemClassPanel />
             <MatterPanel refreshSignal={matterTick} />
             <ContextPanel />
           </SettingsDrawer>

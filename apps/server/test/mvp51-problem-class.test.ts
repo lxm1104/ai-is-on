@@ -159,3 +159,20 @@ test('backfillMembersFromMatters：空库不崩、返回数', () => {
   const n = svc.backfillMembersFromMatters();
   assert.equal(typeof n, 'number');
 });
+
+test('userEditClass / approveClass：升权威，且自发蒸馏不再覆盖根因', () => {
+  const sid = 'space-auth-' + randomUUID().slice(0, 6);
+  const c = store.createDistilledClass({ spaceId: sid, label: '旧标签', rootCause: '蒸馏给的根因' });
+  // 用户校正 → 权威
+  const edited = store.userEditClass(c.id, { label: '人改标签', rootCause: '人写的真根因' });
+  assert.equal(edited?.origin, 'user');
+  assert.equal(edited?.approved, true);
+  assert.equal(edited?.rootCause, '人写的真根因');
+  // 自发蒸馏想刷新文案 → 被权威避让（只更计数，不覆盖根因/标签）
+  const refreshed = store.refreshClass(c.id, { rootCause: '蒸馏又想改', label: '蒸馏标签' });
+  assert.equal(refreshed?.rootCause, '人写的真根因', '权威版根因不被蒸馏覆盖');
+  assert.equal(refreshed?.label, '人改标签');
+  // approveClass：草稿升批准
+  const c2 = store.createDistilledClass({ spaceId: sid, label: 'x', rootCause: 'y' });
+  assert.equal(store.approveClass(c2.id)?.approved, true);
+});

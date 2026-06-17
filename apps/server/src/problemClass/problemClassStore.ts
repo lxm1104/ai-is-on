@@ -249,6 +249,29 @@ export function refreshClass(classId: string, opts: { rootCause?: string; label?
   return getProblemClass(classId);
 }
 
+/** 用户编辑一个类的标签/根因 → 升为权威版（origin=user, approved=1），自发蒸馏不再覆盖。 */
+export function userEditClass(id: string, input: { label?: string; rootCause?: string; now?: string }): ProblemClass | null {
+  const existing = getProblemClass(id);
+  if (!existing) return null;
+  const now = input.now ?? new Date().toISOString();
+  db.prepare(
+    `UPDATE problem_classes SET label=@label, root_cause=@root_cause, origin='user', approved=1, updated_at=@now WHERE id=@id`
+  ).run({
+    id,
+    label: (input.label ?? existing.label).slice(0, 40),
+    root_cause: (input.rootCause ?? existing.rootCause).slice(0, 400),
+    now,
+  });
+  return getProblemClass(id);
+}
+
+/** 批准一个蒸馏草稿类 → 升权威（approved=1），不再被自发蒸馏覆盖根因文案。 */
+export function approveClass(id: string, now = new Date().toISOString()): ProblemClass | null {
+  if (!getProblemClass(id)) return null;
+  db.prepare(`UPDATE problem_classes SET approved=1, updated_at=? WHERE id=?`).run(now, id);
+  return getProblemClass(id);
+}
+
 /** 台账视图：每个类 + 它的成员摘要。 */
 export function listLedger(spaceId?: string | null): Array<ProblemClass & { members: Array<{ matterId: string; diagnosticText: string }> }> {
   const classes = spaceId === undefined ? listAllClasses() : listClassesForSpace(spaceId);
