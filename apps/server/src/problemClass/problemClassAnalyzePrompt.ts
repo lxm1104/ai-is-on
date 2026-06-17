@@ -62,7 +62,7 @@ export type ParsedClassAnalysis = {
 
 // MVP63：只读命令白名单——展示给用户的"验证命令"必须明显只读，挡掉模型偶发写/删/发指令。
 const READONLY_CMD_RE = /^\s*(rg|grep|git\s+(log|show|blame|diff|status|cat-file|rev-list|grep)|fornax-cli|bytedcli|cat|less|head|tail|find|ls|sed\s+-n|awk)\b/i;
-const FORBIDDEN_CMD_RE = /\b(rm|mv|cp|chmod|chown|kill|curl|wget|ssh|scp|npm|pnpm|yarn|pip|push|commit|reset|checkout|merge|rebase|apply|clean|sudo|tee|>>?|\||&&|;)\b|[`$()]/;
+const FORBIDDEN_CMD_RE = /\b(rm|mv|cp|chmod|chown|kill|curl|wget|ssh|scp|npm|pnpm|yarn|pip|push|commit|reset|checkout|merge|rebase|apply|clean|sudo|tee|eval|exec)\b|[`$()<>|&;]/;
 function sanitizeVerificationCommands(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
   const out: string[] = [];
