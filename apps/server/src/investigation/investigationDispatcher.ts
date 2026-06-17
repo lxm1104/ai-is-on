@@ -38,18 +38,30 @@ const GENERIC_NEXT_ACTIONS = new Set([
 const WORTHY_RE =
   /(是否|核实|排查(进展|结果)?|查清|查证|确认.*(进展|完成|收到|发|回复)|跟进.*(进展|结果|排查)|待确认|待回复|未回复|未闭环|不确定)/;
 
+// MVP52：run_command 落地后，"代码/系统类 badcase"不再只能留给人——只要带**可解析的凭据**
+// （日志ID/traceID，run_command 能 bytedcli→fornax→grep 追下去），就值得自动排查。
+// 失败信号 + 凭据 双命中才放行（仅"报错"无凭据不进，避免泛触发挤兑单并发 gate）。
+const BADCASE_SIGNAL_RE = /报错|bug|缺陷|失败|崩|异常|panic|超时|截断|无权限|鉴权失败|沙箱|trace|日志/i;
+const ARTIFACT_RE = /\b\d{16,20}\b|trace[_-]?id|traceid|日志\s*ID|run[_-]?log/i;
+
+/** 代码/系统类 badcase 且带 run_command 可解析的凭据（日志ID/traceID）→ 值得自主排查。纯函数。 */
+export function hasResolvableBadcase(input: { title?: string; currentSummary?: string | null }): boolean {
+  const blob = `${input.title ?? ''} ${input.currentSummary ?? ''}`;
+  return BADCASE_SIGNAL_RE.test(blob) && ARTIFACT_RE.test(blob);
+}
+
 /**
- * 这件事值不值得自动排查（纯函数）。**标题 + 下一步都看**：
+ * 这件事值不值得自动排查（纯函数）。看 标题 + 下一步 + 摘要：
  * - nextAction 具体（非泛兜底）且命中查证词 → worthy；
- * - 或标题本身命中查证词（如"排查宁波力劲…"，即便 nextAction 是回填的泛兜底）→ worthy。
- * 这样既不放过标题写着"排查/确认是否"的 P0，也不被泛兜底文案误触发。
+ * - 或标题本身命中查证词（如"排查宁波力劲…"）→ worthy；
+ * - 或（MVP52）代码/系统类 badcase 且带可解析凭据（日志ID/traceID）→ worthy（交给 run_command 追）。
  */
-export function isInvestigationWorthy(input: { title?: string; nextAction?: string | null }): boolean {
+export function isInvestigationWorthy(input: { title?: string; nextAction?: string | null; currentSummary?: string | null }): boolean {
   const na = (input.nextAction ?? '').trim();
   const ti = (input.title ?? '').trim();
   const naWorthy = na.length >= 6 && !GENERIC_NEXT_ACTIONS.has(na) && WORTHY_RE.test(na);
   const tiWorthy = ti.length >= 4 && WORTHY_RE.test(ti);
-  return naWorthy || tiWorthy;
+  return naWorthy || tiWorthy || hasResolvableBadcase({ title: input.title, currentSummary: input.currentSummary });
 }
 
 const PRIO_RANK: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
@@ -81,7 +93,7 @@ export function selectInvestigationCandidate(
   const pool = matters.filter(
     (m) =>
       (m.status === 'open' || m.status === 'in_progress') &&
-      isInvestigationWorthy({ title: m.title, nextAction: m.nextAction }) &&
+      isInvestigationWorthy({ title: m.title, nextAction: m.nextAction, currentSummary: m.currentSummary }) &&
       !isCoolingDown(m.id) &&
       !shouldSkip(m.id)
   );

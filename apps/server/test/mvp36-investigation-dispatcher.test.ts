@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import {
   isInvestigationWorthy,
   selectInvestigationCandidate,
+  hasResolvableBadcase,
 } from '../src/investigation/investigationDispatcher.js';
 import type { Matter } from '../src/matter/matterTypes.js';
 
@@ -36,6 +37,29 @@ test('isInvestigationWorthy：具体"确认是否…"→true（nextAction 命中
   assert.equal(isInvestigationWorthy({ nextAction: '确认评测集是否已实际发送给鲁升纲' }), true);
   assert.equal(isInvestigationWorthy({ nextAction: '跟进黄炜深/冼晓东排查进展，确认修复排期' }), true);
   assert.equal(isInvestigationWorthy({ nextAction: '核实对方是否已收到文档' }), true);
+});
+
+test('MVP52 hasResolvableBadcase：失败信号 + 凭据 双命中才 true', () => {
+  // 有 traceID/日志ID 凭据 → run_command 能追 → worthy
+  assert.equal(hasResolvableBadcase({ title: 'middleware 报错未返回 tool result', currentSummary: '鲁升纲@traceID 2fd12bef…' }), true);
+  assert.equal(hasResolvableBadcase({ title: 'coding Agent 沙箱解压缩报错', currentSummary: '运行日志ID 7651916413615967418' }), true);
+  // 只有失败信号、无凭据 → 不进（避免泛触发挤兑 gate）
+  assert.equal(hasResolvableBadcase({ title: '模型走入安装技能链路导致报错', currentSummary: '需高优修复' }), false);
+  // 只有凭据、无失败信号 → 不进
+  assert.equal(hasResolvableBadcase({ title: '日常同步', currentSummary: '日志ID 7651916413615967418 已归档' }), true); // "日志" 本身是信号词
+  assert.equal(hasResolvableBadcase({ title: '普通跟进', currentSummary: '无异常' }), false);
+});
+
+test('MVP52 isInvestigationWorthy：代码 badcase 带凭据 → worthy（即便泛兜底 nextAction）', () => {
+  assert.equal(
+    isInvestigationWorthy({ title: 'middleware 报错未返回 tool result 问题评审', nextAction: '跟进进展并确认结果', currentSummary: '@traceID 2fd12bef…' }),
+    true
+  );
+  // 无凭据的纯 bug 标题仍不放行（run_command 也无从查起）
+  assert.equal(
+    isInvestigationWorthy({ title: '高优修复智能体安装技能权限链路报错', nextAction: '跟进进展并确认结果', currentSummary: '模型意外走入安装技能链路' }),
+    false
+  );
 });
 
 test('isInvestigationWorthy：标题命中"排查…"即便 nextAction 是泛兜底 → true', () => {
