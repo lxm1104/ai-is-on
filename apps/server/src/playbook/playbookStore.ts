@@ -82,6 +82,14 @@ export function countTracesByType(taskTypeKey: string): number {
   return r.n;
 }
 
+/** MVP53：取某 matter 最近一次自主排查的操作轨迹（供前端「展开排查过程」展示）。 */
+export function getLatestInvestigationTraceForMatter(matterId: string): TaskTrace | null {
+  const r = db
+    .prepare(`SELECT * FROM task_traces WHERE matter_id = ? AND source = 'investigation' ORDER BY created_at DESC LIMIT 1`)
+    .get(matterId) as TraceRow | undefined;
+  return r ? rowToTrace(r) : null;
+}
+
 // ---- playbooks ----
 
 type PlaybookRow = {

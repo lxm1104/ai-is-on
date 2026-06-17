@@ -10,6 +10,8 @@ import {
   postContextFeedback,
   previewImReply,
   postCardLarkDoc,
+  fetchInvestigationTrace,
+  type InvestigationTrace,
   type AttentionConversation,
   type AttentionOriginItem,
   type AttentionSignalDetail,
@@ -32,6 +34,14 @@ const SOURCE_LABEL: Record<SignalCardT['source'], string> = {
  * 卡片来源描述：MVP3 起卡片可能来自 triage（信息流判断）或 agent_run
  * （承诺追踪 / 会前准备）。
  */
+// MVP53：把排查步骤的关键参数压成一行短串
+function paramsOneLiner(p: Record<string, unknown>): string {
+  return Object.entries(p)
+    .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+    .join('  ')
+    .slice(0, 140);
+}
+
 function lineageLabel(card: SignalCardT): string {
   if (card.sourceKind === 'agent_run') {
     // proposal_type 我们没在 card 里，靠 title 猜
@@ -83,6 +93,10 @@ export function SignalCardView(props: {
   const [ctxOpen, setCtxOpen] = useState(false);
   const [ctxUnits, setCtxUnits] = useState<ContextUnit[] | null>(null);
   const [ctxErr, setCtxErr] = useState<string | null>(null);
+  // MVP53「展开排查过程」：undefined=未拉取，null=无记录
+  const [traceOpen, setTraceOpen] = useState(false);
+  const [trace, setTrace] = useState<InvestigationTrace | null | undefined>(undefined);
+  const [traceErr, setTraceErr] = useState<string | null>(null);
   const [fbOpen, setFbOpen] = useState(false);
   const [fbSent, setFbSent] = useState<string | null>(null);
   // MVP10.0 inline correction state（针对老 cards 表的卡片）
@@ -251,6 +265,20 @@ export function SignalCardView(props: {
     const next = !ctxOpen;
     setCtxOpen(next);
     if (next) await ensureCtxLoaded();
+  }
+
+  // MVP53「展开排查过程」：拉该卡所属 matter 最近一次自主排查的工具链
+  async function toggleTrace() {
+    const next = !traceOpen;
+    setTraceOpen(next);
+    if (next && trace === undefined) {
+      try {
+        setTrace(await fetchInvestigationTrace(card.id));
+      } catch (e) {
+        setTraceErr(e instanceof Error ? e.message : String(e));
+        setTrace(null);
+      }
+    }
   }
 
   async function sendFeedback(reason: string) {
@@ -599,6 +627,50 @@ export function SignalCardView(props: {
           )}
         </div>
       )}
+      {isAttention &&
+        (card.title.startsWith('AI 已查清进展') || card.title.startsWith('确认办结')) && (
+          <div className="card__origin">
+            <button
+              type="button"
+              className="card__origin-toggle"
+              onClick={() => void toggleTrace()}
+              aria-expanded={traceOpen}
+            >
+              {traceOpen ? '▾' : '▸'} 🔍 展开排查过程
+              {trace && trace.steps.length > 0 ? ` · ${trace.steps.length} 步` : ''}
+            </button>
+            {traceOpen && (
+              <div className="card__origin-body">
+                {traceErr && <div className="card__origin-err">{traceErr}</div>}
+                {trace === undefined && !traceErr && <div className="card__origin-empty">加载中…</div>}
+                {trace === null && !traceErr && (
+                  <div className="card__origin-empty">这条没有自主排查的工具链记录（可能是直接据已知信息下的结论）。</div>
+                )}
+                {trace && (
+                  <div style={{ fontSize: '12px', lineHeight: 1.5 }}>
+                    {trace.outcome && (
+                      <div style={{ marginBottom: 6, opacity: 0.85 }}>
+                        <strong>结论：</strong>
+                        {trace.outcome}
+                      </div>
+                    )}
+                    <ol style={{ margin: 0, paddingLeft: 18 }}>
+                      {trace.steps.map((s) => (
+                        <li key={s.order} style={{ marginBottom: 6 }}>
+                          <code>{s.tool ?? s.kind}</code>
+                          {s.params && Object.keys(s.params).length > 0 && (
+                            <span style={{ opacity: 0.7, marginLeft: 6 }}>{paramsOneLiner(s.params)}</span>
+                          )}
+                          <div style={{ opacity: 0.9 }}>→ {s.summary}</div>
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       <div className="card__ctx">
         <button
           type="button"

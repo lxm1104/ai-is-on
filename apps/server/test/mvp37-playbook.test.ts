@@ -40,6 +40,17 @@ test('insertTaskTrace + list/count', () => {
   assert.equal(store.countTracesByType('delivery:deliver'), 0);
 });
 
+test('MVP53 getLatestInvestigationTraceForMatter：取某 matter 最近一次排查轨迹', () => {
+  const mid = 'matter-trace-' + Math.floor(performance.now());
+  store.insertTaskTrace({ taskTypeKey: 'follow_up:verify', matterId: mid, source: 'investigation', title: '旧', steps: [{ order: 1, kind: 'read', tool: 'list_my_tasks', summary: '0 条' }], outcome: 'unknown', now: '2026-06-17T01:00:00Z' });
+  store.insertTaskTrace({ taskTypeKey: 'follow_up:verify', matterId: mid, source: 'investigation', title: '新', steps: [{ order: 1, kind: 'read', tool: 'run_command', summary: 'git log 命中' }], outcome: 'progressed（置信 0.80）：查到 fix commit', now: '2026-06-17T02:00:00Z' });
+  const t = store.getLatestInvestigationTraceForMatter(mid);
+  assert.equal(t?.title, '新'); // 取最近一条
+  assert.equal(t?.steps[0].tool, 'run_command');
+  assert.match(t?.outcome ?? '', /progressed/);
+  assert.equal(store.getLatestInvestigationTraceForMatter('no-such-matter'), null);
+});
+
 test('distillUpsertPlaybook：首次插入草稿(origin=distilled,approved=0,suggest) → 二次覆盖', () => {
   const key = 'follow_up:verify';
   const r1 = store.distillUpsertPlaybook({ taskTypeKey: key, title: '查证类标准流程', steps: [{ order: 1, intent: '搜相关 IM' }], traceCount: 2, confidence: 0.6 });
