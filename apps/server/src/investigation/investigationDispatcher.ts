@@ -19,6 +19,7 @@ import { resolveProjectProfileForMatter } from './projectProfile.js';
 import { resolveProjectSpaceDeterministic } from './projectRouter.js';
 import { ingestConclusion, syncClassStatusForResolvedMatter } from '../problemClass/problemClassService.js';
 import { onInvestigationKick } from './investigationKick.js';
+import { maybeAlertReadToolHealth } from './readToolHealth.js';
 
 // deriveDefaultNextAction 的兜底文案——这些太泛，不值得自动排查（要具体的"确认X是否…"才查）。
 const GENERIC_NEXT_ACTIONS = new Set([
@@ -267,6 +268,12 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
       captureInvestigationTrace(candidate, result);
     } catch (err) {
       console.warn('[playbook] capture trace failed:', err instanceof Error ? err.message : String(err));
+    }
+    // MVP70：感官健康自检——近期飞书读取几乎全空（搜真实词却 0 命中，统计上不正常）→ 升一张去重系统提醒。
+    try {
+      maybeAlertReadToolHealth();
+    } catch (err) {
+      console.warn('[health] read-tool health check failed:', err instanceof Error ? err.message : String(err));
     }
     console.log(
       `[investigation] 排查 matter=${candidate.id.slice(0, 8)} "${candidate.title.slice(0, 20)}" → ` +

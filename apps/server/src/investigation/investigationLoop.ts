@@ -7,6 +7,7 @@
  * judge 与 runTool 均可注入 → 可在不打真 LLM/lark-cli 的前提下确定性单测。
  */
 import { runOneShot } from '../triage/backgroundRuntime.js';
+import { recordReadOutcome } from './readToolHealth.js';
 import {
   listReadTools,
   runReadTool,
@@ -150,6 +151,7 @@ export async function runInvestigation(
       }
       const res = await runTool(call.tool as ReadToolName, call.params);
       toolLog.push({ round, tool: call.tool, params: call.params, ok: res.ok, summary: res.summary, error: res.error });
+      recordReadOutcome(call.tool, res.ok, res.summary); // MVP70：感官健康自检滚动窗口
       // run_command：把实质 stdout（trace/代码内容）按更大预算回喂，而非截 JSON 包壳；其它工具沿用 600。
       let detail: string;
       if (call.tool === 'run_command' && res.data && typeof res.data === 'object') {
