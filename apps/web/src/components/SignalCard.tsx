@@ -8,15 +8,11 @@ import {
   postAttentionFeedback,
   postCardCorrection,
   postContextFeedback,
-  previewImReply,
-  postCardLarkDoc,
   fetchInvestigationTrace,
   type InvestigationTrace,
   type AttentionConversation,
   type AttentionOriginItem,
   type AttentionSignalDetail,
-  type ImReplyTarget,
-  type ImReplyContext,
   type LarkTaskCreateResult,
   type CorrectionApplyResult,
 } from '../lib/api';
@@ -110,68 +106,9 @@ export function SignalCardView(props: {
   const [corrBusy, setCorrBusy] = useState(false);
   const [corrErr, setCorrErr] = useState<string | null>(null);
 
-  // MVP34：AI 代发飞书 IM 回复（执行腿首个对外动作）。preview→展示目标→用户确认→send。
-  const [replyOpen, setReplyOpen] = useState(false);
-  const [replyTarget, setReplyTarget] = useState<ImReplyTarget | null>(null);
-  const [replyText, setReplyText] = useState('');
-  const [replyBusy, setReplyBusy] = useState(false);
-  const [replyErr, setReplyErr] = useState<string | null>(null);
-  const [replySent, setReplySent] = useState(false);
-  const [replyContext, setReplyContext] = useState<ImReplyContext | null>(null);
-
   // MVP14 Step 4 attention feedback state
   const isAttention = card.source === 'agent' && card.sourceKind === 'agent_run';
 
-  async function openReply() {
-    setReplyBusy(true);
-    setReplyErr(null);
-    try {
-      const { target, suggestedText, context } = await previewImReply(card.id);
-      setReplyTarget(target);
-      setReplyText(suggestedText || card.draftReply || '');
-      setReplyContext(context ?? null);
-      setReplyOpen(true);
-    } catch (e) {
-      // 非 IM 卡 / 会话不唯一 → 展示原因，不开编辑框
-      setReplyTarget(null);
-      setReplyErr(e instanceof Error ? e.message : String(e));
-      setReplyOpen(true);
-    } finally {
-      setReplyBusy(false);
-    }
-  }
-
-  // 公司策略不允许 AI 代发飞书 IM —— AI 只起草，用户复制后自行发送。
-  async function copyReply() {
-    if (!replyText.trim()) {
-      setReplyErr('回复内容不能为空');
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(replyText.trim());
-      setReplySent(true);
-      setReplyOpen(false);
-    } catch {
-      setReplyErr('复制失败，请手动选中草稿复制');
-    }
-  }
-
-  // MVP35：AI 起草并新建飞书文档（内部可逆，单击确认即创建）
-  const [docBusy, setDocBusy] = useState(false);
-  const [docResult, setDocResult] = useState<{ url?: string; title: string } | null>(null);
-  const [docErr, setDocErr] = useState<string | null>(null);
-  async function makeDoc() {
-    setDocBusy(true);
-    setDocErr(null);
-    try {
-      const r = await postCardLarkDoc({ cardId: card.id });
-      setDocResult({ url: r.url, title: r.title });
-    } catch (e) {
-      setDocErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setDocBusy(false);
-    }
-  }
   const [attnFbBusy, setAttnFbBusy] = useState<string | null>(null);
   const [attnFbDone, setAttnFbDone] = useState<string | null>(null);
   const [attnFbErr, setAttnFbErr] = useState<string | null>(null);
@@ -490,110 +427,6 @@ export function SignalCardView(props: {
             <ResolvedText text={card.draftReply} />
           </pre>
         </details>
-      )}
-      {/* MVP34：AI 代发飞书 IM 回复 —— 先看清回复给谁，确认后才真正发送 */}
-      {(isAttention || card.draftReply) && !replySent && (
-        <div className="card__reply">
-          {!replyOpen ? (
-            <button
-              type="button"
-              className="btn btn--card btn--reply"
-              disabled={replyBusy}
-              onClick={() => void openReply()}
-              title="AI 起草一条回复（含回复给谁），你复制后自行在飞书发送（公司策略不允许 AI 代发）"
-            >
-              {replyBusy ? '解析中…' : '🤖 AI 起草回复'}
-            </button>
-          ) : (
-            <div className="card__reply-panel">
-              {replyErr ? (
-                <p className="card__reply-err">⚠ {replyErr}</p>
-              ) : (
-                <>
-                  <p className="card__reply-target">
-                    回复给：<b>{replyTarget?.chatName || replyTarget?.chatId}</b>
-                    {replyTarget?.replyToActor ? ` · 回应 ${replyTarget.replyToActor}` : ''}
-                  </p>
-                  {replyTarget?.replyToText && (
-                    <p className="card__reply-quote">「{replyTarget.replyToText}」</p>
-                  )}
-                  {replyContext && (
-                    <div className="card__reply-context">
-                      {replyContext.threadConclusion && (
-                        <p className="card__reply-context-line">📌 上次结论：{replyContext.threadConclusion}</p>
-                      )}
-                      {replyContext.threadOpenQuestion && (
-                        <p className="card__reply-context-line">❓ 待答：{replyContext.threadOpenQuestion}</p>
-                      )}
-                      {replyContext.counterpartLedger && (
-                        <pre className="card__reply-context-ledger">{replyContext.counterpartLedger}</pre>
-                      )}
-                    </div>
-                  )}
-                  <textarea
-                    className="card__reply-text"
-                    value={replyText}
-                    onChange={(e) => setReplyText(e.target.value)}
-                    rows={3}
-                    placeholder="编辑回复草稿…（复制后到飞书手动发送）"
-                  />
-                </>
-              )}
-              <div className="card__reply-actions">
-                {!replyErr && (
-                  <button
-                    type="button"
-                    className="btn btn--card btn--reply-send"
-                    disabled={replyBusy || !replyText.trim()}
-                    onClick={() => void copyReply()}
-                  >
-                    复制草稿
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="btn btn--card"
-                  disabled={replyBusy}
-                  onClick={() => {
-                    setReplyOpen(false);
-                    setReplyErr(null);
-                  }}
-                >
-                  取消
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-      {replySent && <p className="card__reply-sent">✓ 已复制草稿，去飞书粘贴发送即可</p>}
-      {/* MVP35：AI 起草并新建飞书文档（内部可逆） */}
-      {isAttention && !docResult && (
-        <div className="card__doc">
-          <button
-            type="button"
-            className="btn btn--card btn--doc"
-            disabled={docBusy}
-            onClick={() => void makeDoc()}
-            title="由 AI 把该事项整理成一份飞书文档草稿（草稿态，可改可删）"
-          >
-            {docBusy ? '创建中…' : '📄 起草成飞书文档'}
-          </button>
-          {docErr && <p className="card__reply-err">⚠ {docErr}</p>}
-        </div>
-      )}
-      {docResult && (
-        <p className="card__reply-sent">
-          ✓ 已新建文档「{docResult.title}」
-          {docResult.url && (
-            <>
-              {' '}
-              <a href={docResult.url} target="_blank" rel="noreferrer">
-                打开 ↗
-              </a>
-            </>
-          )}
-        </p>
       )}
       {card.sourceUrl && (
         <a className="card__link" href={card.sourceUrl} target="_blank" rel="noreferrer">

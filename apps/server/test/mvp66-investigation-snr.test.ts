@@ -115,3 +115,25 @@ test('MVP66 hasNewExternalEvidenceSince：作废(status!=active)不算新证据'
   link(m, mkUnit({ originKind: 'event', createdAt: '2026-06-16T09:00:00.000Z', status: 'superseded' }), '2026-06-16T09:00:00.000Z');
   assert.equal(db.hasNewExternalEvidenceSince(m, since), false);
 });
+
+// MVP68 listAiActivity：只取 AI 自主动作 + join 事项标题 + 排除 conf=0 哨兵
+test('MVP68 listAiActivity：过滤自主动作、join 标题、排除 conf=0 哨兵', () => {
+  resetDb();
+  const m = 'mtr-' + randomUUID();
+  db.db.prepare(
+    `INSERT INTO matters (id, subject_id, scope, type, title, canonical_key, status, priority, current_summary, created_from_context_unit_id, confidence, reopened_count, version, created_at, updated_at)
+     VALUES (?, 'me','work','follow_up','授权超时跟进','k1','open','P1','','u1',0.7,0,1,?,?)`
+  ).run(m, '2026-06-15T00:00:00.000Z', '2026-06-15T00:00:00.000Z');
+  // 自主动作（应入选）
+  writeback(m, 'progressed', 0.7, '2026-06-15T10:00:00.000Z');
+  db.insertAuditLog({ id: randomUUID(), agent_run_id: null, card_id: null, rule_id: null, action: 'matter_auto_resolved', reason: 'AI 自主办结：已发', payload_json: JSON.stringify({ matterId: m, confidence: 0.9 }), created_at: '2026-06-15T11:00:00.000Z' });
+  // conf=0 哨兵（应排除）
+  writeback(m, 'unknown', 0, '2026-06-15T12:00:00.000Z');
+  // 非自主动作（应排除）
+  db.insertAuditLog({ id: randomUUID(), agent_run_id: null, card_id: null, rule_id: null, action: 'card_blocked', reason: 'x', payload_json: null, created_at: '2026-06-15T13:00:00.000Z' });
+
+  const items = db.listAiActivity(50);
+  assert.equal(items.length, 2, '只 2 条自主动作（排除 conf=0 哨兵 + 非自主 card_blocked）');
+  assert.ok(items.every((i) => i.action === 'investigation_written_back' || i.action === 'matter_auto_resolved'));
+  assert.ok(items.every((i) => i.matterTitle === '授权超时跟进'), 'join 到事项标题');
+});

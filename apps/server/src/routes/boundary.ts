@@ -6,6 +6,7 @@ import {
   setRuleActive,
 } from '../boundary/boundaryStore.js';
 import { listRecentAudits } from '../boundary/auditLog.js';
+import { listAiActivity } from '../db.js';
 import type {
   BoundaryAction,
   BoundaryCondition,
@@ -70,6 +71,12 @@ boundaryRouter.patch('/boundary/rules/:id', (req, res) => {
 boundaryRouter.get('/audit-logs', (req, res) => {
   const limit = clampInt(req.query.limit, 200, 1, 1000);
   res.json({ items: listRecentAudits(limit) });
+});
+
+// MVP68：「AI 替你做了什么」——只取 AI 自主动作 + 事项标题，给用户一个可读的自主处理记录。
+boundaryRouter.get('/ai-activity', (req, res) => {
+  const limit = clampInt(req.query.limit, 60, 1, 300);
+  res.json({ items: listAiActivity(limit) });
 });
 
 function clampInt(v: unknown, fallback: number, min: number, max: number): number {

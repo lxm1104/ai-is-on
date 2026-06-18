@@ -3,6 +3,7 @@ import { StatusBar } from './components/StatusBar';
 import { MessageList } from './components/MessageList';
 import { Composer } from './components/Composer';
 import { CardList } from './components/CardList';
+import { AiActivityPanel } from './components/AiActivityPanel';
 import { ContextPanel } from './components/ContextPanel';
 import { MatterPanel } from './components/MatterPanel';
 import { SpacesPanel } from './components/SpacesPanel';
@@ -511,6 +512,7 @@ export function App() {
       )}
       <main className="main main--split">
         <aside className="pane pane--cards">
+          <AiActivityPanel />
           <CardList
             cards={cards}
             onAction={onCardAction}

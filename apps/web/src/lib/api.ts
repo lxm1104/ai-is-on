@@ -860,6 +860,24 @@ export async function fetchAuditLogs(limit = 50): Promise<AuditLog[]> {
   return (j.items ?? []) as AuditLog[];
 }
 
+// MVP68：「AI 替你做了什么」自主动作记录
+export type AiActivity = {
+  id: string;
+  action: string;
+  reason: string;
+  verdict: string | null;
+  confidence: number | null;
+  matterId: string | null;
+  matterTitle: string | null;
+  createdAt: string;
+};
+export async function fetchAiActivity(limit = 60): Promise<AiActivity[]> {
+  const r = await fetch(`/api/ai-activity?limit=${limit}`);
+  if (!r.ok) throw new Error(`ai-activity ${r.status}`);
+  const j = await r.json();
+  return (j.items ?? []) as AiActivity[];
+}
+
 // -------- MVP10 Correction --------
 
 export type CorrectionType =

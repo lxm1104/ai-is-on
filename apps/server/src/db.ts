@@ -2411,6 +2411,44 @@ export function listAuditLogs(limit = 200): AuditLogRow[] {
     .all(limit) as AuditLogRow[];
 }
 
+// MVP68：「AI 替你做了什么」活动流——只取 AI **自主**动作（非用户手点），并 join 事项标题，便于做成用户可读的记录。
+export type AiActivityRow = {
+  id: string;
+  action: string;
+  reason: string;
+  verdict: string | null;
+  confidence: number | null;
+  matterId: string | null;
+  matterTitle: string | null;
+  createdAt: string;
+};
+const AI_ACTIVITY_ACTIONS = [
+  'matter_auto_resolved', // AI 高置信主动办结
+  'investigation_written_back', // AI 自主排查写回结论
+  'chat_conclusion_written_back', // AI 从对话里替你更新事项
+] as const;
+export function listAiActivity(limit = 60): AiActivityRow[] {
+  const placeholders = AI_ACTIVITY_ACTIONS.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT a.id AS id, a.action AS action, a.reason AS reason, a.created_at AS createdAt,
+              json_extract(a.payload_json,'$.matterId') AS matterId,
+              json_extract(a.payload_json,'$.verdict') AS verdict,
+              json_extract(a.payload_json,'$.confidence') AS confidence,
+              m.title AS matterTitle
+       FROM audit_logs a
+       LEFT JOIN matters m ON m.id = json_extract(a.payload_json,'$.matterId')
+       WHERE a.action IN (${placeholders})
+         -- 排除 conf=0 退化哨兵（排查器空转/工具报错，不是真做了事）
+         AND NOT (a.action='investigation_written_back'
+                  AND json_extract(a.payload_json,'$.verdict')='unknown'
+                  AND json_extract(a.payload_json,'$.confidence')<=0)
+       ORDER BY a.created_at DESC LIMIT ?`
+    )
+    .all(...AI_ACTIVITY_ACTIONS, limit) as AiActivityRow[];
+  return rows;
+}
+
 // -------- entity_aliases (MVP10) --------
 
 export type EntityAliasRow = {
