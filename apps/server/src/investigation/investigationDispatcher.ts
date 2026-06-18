@@ -165,6 +165,12 @@ export function selectInvestigationCandidate(
 
 const lastInvestigatedAt = new Map<string, number>();
 let inFlight = false;
+// MVP69 P1：当前正在排查哪件事（透明度——让用户看到"AI 此刻在查什么"）。单并发，故至多一件。
+let currentInvestigation: { matterId: string; title: string; startedAt: string } | null = null;
+/** 当前在飞的排查（无则 null）。带 startedAt 陈旧兜底由读取侧做（崩溃/重启会留陈旧值）。 */
+export function getCurrentInvestigation(): { matterId: string; title: string; startedAt: string } | null {
+  return currentInvestigation;
+}
 let timer: ReturnType<typeof setInterval> | null = null;
 
 // MVP65：unknown 退避——刚查回「真实 unknown」的事项很可能仍查不清，把冷却拉长（默认 4×），
@@ -224,6 +230,7 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
   if (!candidate) return false;
 
   inFlight = true;
+  currentInvestigation = { matterId: candidate.id, title: candidate.title, startedAt: new Date(now).toISOString() };
   lastInvestigatedAt.set(candidate.id, now); // 进 in-flight 即占冷却，防重入
   try {
     const matchedPb = matchPlaybookForMatter(candidate);
@@ -271,6 +278,7 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
     return false;
   } finally {
     inFlight = false;
+    currentInvestigation = null;
   }
 }
 

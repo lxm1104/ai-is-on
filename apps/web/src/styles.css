@@ -1146,6 +1146,20 @@ body { background: var(--bg); color: var(--text); }
 .ai-activity__time { margin-left: auto; font-size: 11px; color: var(--text-dim); }
 .ai-activity__matter { font-size: 12px; color: var(--text); margin: 2px 0; }
 .ai-activity__detail { font-size: 12px; color: var(--text-dim); line-height: 1.4; }
+.ai-activity__conf { font-size: 10px; color: var(--text-dim); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; }
+.ai-activity__inflight {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--text); margin: 0 0 8px;
+  padding: 5px 8px; border-radius: 4px;
+  background: var(--surface-2, rgba(107,138,253,0.10));
+  border-left: 2px solid var(--accent, #6b8afd);
+}
+.ai-activity__inflight--idle { color: var(--text-dim); background: transparent; border-left-color: var(--border); }
+.ai-activity__inflight-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent, #6b8afd);
+  animation: ai-pulse 1.2s ease-in-out infinite; flex: 0 0 auto;
+}
+@keyframes ai-pulse { 0%,100% { opacity: 0.35; } 50% { opacity: 1; } }
 
 .ctx-panel {
   border-top: 1px solid var(--border);

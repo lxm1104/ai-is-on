@@ -7,6 +7,7 @@ import {
 } from '../boundary/boundaryStore.js';
 import { listRecentAudits } from '../boundary/auditLog.js';
 import { listAiActivity } from '../db.js';
+import { getCurrentInvestigation } from '../investigation/investigationDispatcher.js';
 import type {
   BoundaryAction,
   BoundaryCondition,
@@ -77,6 +78,14 @@ boundaryRouter.get('/audit-logs', (req, res) => {
 boundaryRouter.get('/ai-activity', (req, res) => {
   const limit = clampInt(req.query.limit, 60, 1, 300);
   res.json({ items: listAiActivity(limit) });
+});
+
+// MVP69 P1：「AI 此刻在做什么」——当前在飞的排查（透明度）。startedAt 超 10min 视为陈旧（崩溃残留），不显示。
+boundaryRouter.get('/ai-activity/now', (_req, res) => {
+  const cur = getCurrentInvestigation();
+  const fresh =
+    cur && Date.now() - new Date(cur.startedAt).getTime() < 10 * 60_000 ? cur : null;
+  res.json({ inFlight: fresh });
 });
 
 function clampInt(v: unknown, fallback: number, min: number, max: number): number {

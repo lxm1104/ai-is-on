@@ -878,6 +878,15 @@ export async function fetchAiActivity(limit = 60): Promise<AiActivity[]> {
   return (j.items ?? []) as AiActivity[];
 }
 
+// MVP69 P1：AI 此刻在排查哪件事（透明度）
+export type AiInFlight = { matterId: string; title: string; startedAt: string } | null;
+export async function fetchAiActivityNow(): Promise<AiInFlight> {
+  const r = await fetch(`/api/ai-activity/now`);
+  if (!r.ok) throw new Error(`ai-activity/now ${r.status}`);
+  const j = await r.json();
+  return (j.inFlight ?? null) as AiInFlight;
+}
+
 // -------- MVP10 Correction --------
 
 export type CorrectionType =

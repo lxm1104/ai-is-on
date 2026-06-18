@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchAiActivity, type AiActivity } from '../lib/api';
+import { fetchAiActivity, fetchAiActivityNow, type AiActivity, type AiInFlight } from '../lib/api';
 
 /**
  * MVP68「AI 替你做了什么」——把 AI 自主动作（主动办结 / 自主排查 / 从对话更新事项）做成用户可读的记录流。
@@ -46,6 +46,7 @@ function shortTime(iso: string): string {
 export function AiActivityPanel() {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<AiActivity[]>([]);
+  const [inFlight, setInFlight] = useState<AiInFlight>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,7 +54,9 @@ export function AiActivityPanel() {
     setLoading(true);
     setError(null);
     try {
-      setItems(await fetchAiActivity(60));
+      const [list, now] = await Promise.all([fetchAiActivity(60), fetchAiActivityNow().catch(() => null)]);
+      setItems(list);
+      setInFlight(now);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -62,7 +65,11 @@ export function AiActivityPanel() {
   }
 
   useEffect(() => {
-    if (open) void load();
+    if (!open) return;
+    void load();
+    // 展开时轮询"AI 此刻在查什么"（单并发，变化不频繁，15s 足够）。
+    const t = setInterval(() => { void fetchAiActivityNow().then(setInFlight).catch(() => {}); }, 15_000);
+    return () => clearInterval(t);
   }, [open]);
 
   return (
@@ -81,6 +88,13 @@ export function AiActivityPanel() {
             </button>
           </div>
           {error && <div className="ai-activity__err">{error}</div>}
+          {inFlight ? (
+            <div className="ai-activity__inflight">
+              <span className="ai-activity__inflight-dot" /> AI 正在排查：「{inFlight.title}」
+            </div>
+          ) : (
+            <div className="ai-activity__inflight ai-activity__inflight--idle">AI 当前没有在排查（有新事项/新证据会自动开查）</div>
+          )}
           {!error && items.length === 0 && !loading && (
             <div className="ai-activity__empty">还没有 AI 自主处理记录。AI 排查/办结后会出现在这里。</div>
           )}
@@ -92,6 +106,9 @@ export function AiActivityPanel() {
                   <div className="ai-activity__head">
                     <span className="ai-activity__icon">{meta.icon}</span>
                     <span className="ai-activity__action">{meta.label}</span>
+                    {typeof a.confidence === 'number' && a.action === 'investigation_written_back' && (
+                      <span className="ai-activity__conf" title="AI 对该结论的把握">置信 {a.confidence.toFixed(2)}</span>
+                    )}
                     <span className="ai-activity__time">{shortTime(a.createdAt)}</span>
                   </div>
                   {a.matterTitle && <div className="ai-activity__matter">「{a.matterTitle}」</div>}
