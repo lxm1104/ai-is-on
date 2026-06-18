@@ -167,13 +167,58 @@ const TOOLS: Record<ReadToolName, ReadTool> = {
   },
 };
 
+// 注意：lark-cli 把结果包在 { ok, identity, data: { messages|items|... } } 里。
+// 旧实现只看顶层 messages/items，又把 data 当数组判断（它是对象）→ **对每次 IM 搜索都数成 0 条**
+// （2026-06-18 实测：搜「高虎伟」API 明明返回多条，countItems 却报 0；这是 55% unknown 的主因）。
+// 修复：识别结果数组键，并下钻一层 lark-cli 的 data 信封。
+/** 下钻 lark-cli 的 { ok, data: {...} } 信封拿到真正的结果对象。 */
+function unwrapEnvelope(d: unknown): unknown {
+  if (d && typeof d === 'object' && !Array.isArray(d)) {
+    const o = d as Record<string, unknown>;
+    if (o.data !== undefined && o.data !== d) return o.data;
+  }
+  return d;
+}
+
+/**
+ * MVP70：把列表类结果（IM 消息 / 任务 / 文件）压成对模型友好、可读的紧凑文本，取代"喂原始 verbose
+ * JSON 被 600 字截断"——后者让模型只看到一堆 chat_id 元数据、看不到消息正文，等于瞎查。
+ * 返回空串表示"不是列表结果"，调用方回落原 JSON。导出供测试。
+ */
+export function compactToolData(data: unknown, maxItems = 8): string {
+  const inner = unwrapEnvelope(data) as Record<string, unknown> | unknown;
+  const o = (inner && typeof inner === 'object' ? inner : {}) as Record<string, unknown>;
+  const msgs = o.messages;
+  if (Array.isArray(msgs)) {
+    return msgs
+      .slice(0, maxItems)
+      .map((m: any) => {
+        const who = m?.sender?.name ?? m?.sender?.id ?? '?';
+        const when = m?.create_time ?? '';
+        const where = m?.chat_name ? `[${m.chat_name}] ` : '';
+        const text = String(m?.content ?? '').replace(/\s+/g, ' ').slice(0, 180);
+        return `${where}${who}（${when}）：${text}`;
+      })
+      .join('\n');
+  }
+  const list = o.items ?? o.tasks ?? o.results ?? o.records;
+  if (Array.isArray(list)) {
+    return list
+      .slice(0, maxItems)
+      .map((it: any) => `· ${String(it?.title ?? it?.summary ?? it?.name ?? JSON.stringify(it)).replace(/\s+/g, ' ').slice(0, 180)}`)
+      .join('\n');
+  }
+  return '';
+}
+
 function countItems(d: unknown): number {
   if (Array.isArray(d)) return d.length;
   if (d && typeof d === 'object') {
-    for (const k of ['items', 'messages', 'data', 'tasks', 'results']) {
-      const v = (d as Record<string, unknown>)[k];
-      if (Array.isArray(v)) return v.length;
+    const o = d as Record<string, unknown>;
+    for (const k of ['items', 'messages', 'tasks', 'results', 'records', 'files', 'events', 'chats']) {
+      if (Array.isArray(o[k])) return (o[k] as unknown[]).length;
     }
+    if (o.data !== undefined && o.data !== d) return countItems(o.data); // 下钻 lark-cli data 信封
   }
   return 0;
 }

@@ -10,6 +10,7 @@ import { runOneShot } from '../triage/backgroundRuntime.js';
 import {
   listReadTools,
   runReadTool,
+  compactToolData,
   type ReadToolName,
   type ReadToolResult,
 } from './readTools.js';
@@ -156,7 +157,10 @@ export async function runInvestigation(
         const out = typeof d.stdout === 'string' ? d.stdout : '';
         detail = truncate(out, RUN_COMMAND_FINDING_TRUNC) || `(exit ${String(d.code)}，无输出)`;
       } else {
-        detail = truncate(JSON.stringify(res.data ?? ''), FINDING_TRUNC);
+        // MVP70：列表类结果（IM 消息/任务）压成可读紧凑文本——否则模型只看到被 600 字截断的 verbose
+        // JSON 信封（一堆 chat_id 元数据、看不到正文），等于瞎查。非列表回落原 JSON。
+        const compact = compactToolData(res.data);
+        detail = compact ? truncate(compact, RUN_COMMAND_FINDING_TRUNC) : truncate(JSON.stringify(res.data ?? ''), FINDING_TRUNC);
       }
       findings.push(
         res.ok
