@@ -6,7 +6,8 @@
 > - **支柱C owned_by_other**：`deriveNeedFromUser` 确定性兜底（≤2 具名他人 + 我是 requester + conf≥0.5 + 过滤非人/代词）+ config 默认放开。集成测试确定性升卡。
 > - **支柱D 完成度量盘**：`getAiActivityTally` + 面板顶部徽标。**真实 UI 实测**：折叠态「待你 3 件」+ 展开「✅办结0 · 📈推进13 · 🙋待你3 · 🤝已应答1（近7天）」。
 > - **降噪闸**：合并「待你处理」配额（needhelp+dangling，默认 3）+ dismiss 后重升冷却（默认 7 天）+ conf≥0.5（否决 v1 降 conf>0）。
-> - 未做（按红队建议延后）：owned_by_other 的「帮我起草去问X」draft 按钮（系统卡上下文薄，inline 回填路径已足够且与 KEYSTONE 构成真闭环）。
+> - **转化增强（commit 2c9575b）**：dangling 卡的「我来跟进」原是空 ack（什么都没接住）→ 改「补一句进展，AI 接着办」走 mark_done dangling 支路：补的真实状态落 card_action 证据 → KEYSTONE 喂回重查 → AI 接着办。防再催：dangling re-raise 冷却扩到 acted（刚补过别立刻又催；needhelp 仍允许多轮）。真实 UI 已验证按钮+inline 文案。
+> - 未做（按红队建议延后）：owned_by_other 的「帮我起草去问X」draft 按钮（系统卡上下文薄，inline 回填路径已足够且与 KEYSTONE 构成真闭环）；更多 needFromUser kind（need_info/decision/outbound/tool_gap）——按 throughput 铁律"不靠证据不放宽"，待真实转化数据再定。
 >
 > **命名**：原拟 MVP70，但并行会话已用 MVP70（IM 解析 bug 修复 14cd147 + 感官 tripwire d74e376），故改 MVP71。
 > **2026-06-19 诊断重估（证据优先）**：MVP70 的 14cd147 已查实并修复「IM 搜索结果被数成 0 条」的解析 bug——这是历史 52% unknown 的**大半主因**（API 返回 95 条却报 0）。故下方 §1 的 52% 是**修复前**数据，修复后真实 unknown 率会显著下降（修复后尚无新排查样本）。
