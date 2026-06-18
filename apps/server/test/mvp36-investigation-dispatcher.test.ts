@@ -232,3 +232,42 @@ test('MVP65 effectiveCooldownMs：最近真实 unknown → 拉长冷却', () => 
   // 空历史 → 原冷却
   assert.equal(effectiveCooldownMs([], base), base);
 });
+
+// ============ MVP66 信噪比：无新证据门 + 死胡同止损 ============
+import { shouldSkipNoNewEvidence, isStuckDeadEnd } from '../src/investigation/investigationDispatcher.js';
+
+test('MVP66 shouldSkipNoNewEvidence：从没查过→放行；查过无新证据→跳过；有新证据→放行', () => {
+  // 从没查过（lastAt=null）→ 首查必放行
+  assert.equal(shouldSkipNoNewEvidence(null, () => false), false);
+  assert.equal(shouldSkipNoNewEvidence(null, () => true), false);
+  // 查过 + 此后无新外部证据 → 跳过
+  assert.equal(shouldSkipNoNewEvidence('2026-06-15T07:58:00.000Z', () => false), true);
+  // 查过 + 有新外部证据 → 放行重查
+  assert.equal(shouldSkipNoNewEvidence('2026-06-16T17:00:00.000Z', () => true), false);
+  // seam 精确性：hasNewSince 必须以 lastAt 原样调用（防 off-by-one）
+  let seen = '';
+  shouldSkipNoNewEvidence('2026-06-15T07:58:00.000Z', (s) => { seen = s; return false; });
+  assert.equal(seen, '2026-06-15T07:58:00.000Z');
+});
+
+test('MVP66 isStuckDeadEnd：blocked 也算死胡同（修 48a55ea3 振荡漏止损）', () => {
+  // 旧 isStuckOnUnknowns 此处为 false（blocked 不算）；新口径 → true
+  assert.equal(isStuckDeadEnd([v('blocked', 0.7), v('blocked', 0.85)]), true);
+  assert.equal(isStuckDeadEnd([u(0.6), v('blocked', 0.85)]), true, 'unknown+blocked 混合也止损');
+  // progressed 打断死胡同（确实有进展不该止损）
+  assert.equal(isStuckDeadEnd([v('progressed', 0.7), v('blocked', 0.8)]), false);
+  // conf=0 哨兵剔除后不足 n（保 MVP45：从没真查过不背刺）
+  assert.equal(isStuckDeadEnd([u(0), v('blocked', 0.7)]), false);
+  // resolved 不算死胡同
+  assert.equal(isStuckDeadEnd([v('resolved', 0.9), v('blocked', 0.7)]), false);
+});
+
+test('MVP66 effectiveCooldownMs：blocked 也触发 ×退避（不止 unknown）', () => {
+  const base = 6 * 3600_000;
+  assert.equal(effectiveCooldownMs([v('blocked', 0.8)], base), base * UNKNOWN_COOLDOWN_MULT);
+  assert.equal(effectiveCooldownMs([v('progressed', 0.8)], base), base, 'progressed 不退避');
+});
+
+test('MVP66 isStuckOnUnknowns 别名 === isStuckDeadEnd（旧调用兼容）', () => {
+  assert.equal(isStuckOnUnknowns, isStuckDeadEnd);
+});

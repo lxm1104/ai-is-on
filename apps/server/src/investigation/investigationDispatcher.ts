@@ -8,7 +8,7 @@
  * 选件/worthiness 为纯函数 → 可单测。调度部分薄。
  */
 import { config } from '../config.js';
-import { getContextEntityById, hasLiveMatterProposal, getRecentInvestigationVerdicts } from '../db.js';
+import { getContextEntityById, hasLiveMatterProposal, getRecentInvestigationVerdicts, getLastInvestigatedAt, hasNewExternalEvidenceSince } from '../db.js';
 import { listMatters, listMatterEntities } from '../matter/matterStore.js';
 import type { Matter } from '../matter/matterTypes.js';
 import { runInvestigation } from './investigationLoop.js';
@@ -96,13 +96,34 @@ const PRIO_RANK: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
  * 只数 confidence>0 的真 unknown：conf=0 是排查器空转/工具报错的退化哨兵（瞬时失败），
  * 不能算进永久放弃（实测 2 个 matter 因两次 conf0 退化被误背刺、从没真查过 → MVP45）。
  */
-export function isStuckOnUnknowns(
+// MVP66：死胡同集合——unknown(查不清) 与 blocked(查到但解不了) 同属"重查也不会有产出"。
+// 旧 isStuckOnUnknowns 只数 unknown，被 blocked/progressed 打断连续计数 → 振荡 matter 永不止损
+// （实测 48a55ea3：7 unknown + 3 blocked 交替，被排查 10 次从未 resolved）。
+const DEAD_END_VERDICTS = new Set(['unknown', 'blocked']);
+export function isStuckDeadEnd(
   recent: Array<{ verdict: string; confidence: number }>,
   n = 2
 ): boolean {
   const genuine = recent.filter((r) => !(r.verdict === 'unknown' && r.confidence <= 0));
   if (genuine.length < n) return false;
-  return genuine.slice(0, n).every((r) => r.verdict === 'unknown');
+  return genuine.slice(0, n).every((r) => DEAD_END_VERDICTS.has(r.verdict));
+}
+/** 兼容别名（既有单测/调用按旧名引用）。 */
+export const isStuckOnUnknowns = isStuckDeadEnd;
+
+/**
+ * MVP66 信噪比主力门（纯函数，deps 注入，零 I/O）：上次排查后**无新外部证据 → 不重查**。
+ * 实测元凶是「对同一份没变过的证据反复空查」（13 个 matter 占 88% 排查量，bb858dee 一天查 8 次全 unknown）。
+ *  - lastInvestigatedAt===null（从没真查过）→ 放行首查，绝不误伤。
+ *  - 查过且此后无新外部证据 → 跳过（把稀缺单并发 gate 让给新鲜/有进展的事项）。
+ * "新外部证据"判定见 db.hasNewExternalEvidenceSince（排自产、看 updated_at|mcl.created_at）。
+ */
+export function shouldSkipNoNewEvidence(
+  lastInvestigatedAt: string | null,
+  hasNewSince: (sinceIso: string) => boolean
+): boolean {
+  if (lastInvestigatedAt === null) return false;
+  return !hasNewSince(lastInvestigatedAt);
 }
 
 /**
@@ -155,13 +176,20 @@ export function effectiveCooldownMs(
   baseMs: number
 ): number {
   // 最近一次"真实"结论（排除 conf=0 退化哨兵：排查器空转/工具报错，不代表查不清）
+  // MVP66：unknown 与 blocked 同属死胡同 → 都拉长冷却（不止 unknown）。
   const genuine = recent.find((r) => !(r.verdict === 'unknown' && r.confidence <= 0));
-  return genuine && genuine.verdict === 'unknown' ? baseMs * UNKNOWN_COOLDOWN_MULT : baseMs;
+  return genuine && DEAD_END_VERDICTS.has(genuine.verdict) ? baseMs * UNKNOWN_COOLDOWN_MULT : baseMs;
 }
 
 function isCoolingDown(matterId: string, now: number): boolean {
-  const last = lastInvestigatedAt.get(matterId);
-  if (last === undefined) return false;
+  // MVP66 重启安全：内存 Map 重启即丢（实测 bb858dee 攻击间隔小到 19min ≪ 6h，多次重启即绕过冷却）。
+  // 回落到 audit_logs 派生的持久时刻（取内存与持久的较晚者）。
+  const memLast = lastInvestigatedAt.get(matterId);
+  const persistedLast = Date.parse(getLastInvestigatedAt(matterId) ?? '') || 0;
+  const last = Math.max(memLast ?? 0, persistedLast);
+  if (last <= 0) return false;
+  // MVP66：新外部证据优先于冷却——真有新进展的 matter 不被 ×4 退避压住最多 24h（对抗审查 P1）。
+  if (hasNewExternalEvidenceSince(matterId, new Date(last).toISOString())) return false;
   const cd = effectiveCooldownMs(getRecentInvestigationVerdicts(matterId, 3), config.investigationCooldownMs);
   return now - last < cd;
 }
@@ -183,8 +211,12 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
   const candidate = selectInvestigationCandidate(
     listMatters({ statuses: ['open', 'in_progress'], limit: 200 }),
     (id) => isCoolingDown(id, now),
-    // 止损：已有 live 提案（结论已交用户）或近 2 次都 unknown（飞书查不清）→ 跳过，省配额给新事项。
-    (id) => hasLiveMatterProposal(id) || isStuckOnUnknowns(getRecentInvestigationVerdicts(id, 3))
+    // 止损（省配额给新事项）：已有 live 提案（结论已交用户）｜近 2 次都死胡同（查不清/解不了）
+    // ｜MVP66 上次排查后无新外部证据（对同一份没变的证据反复空查，实测 88% 浪费的元凶）。
+    (id) =>
+      hasLiveMatterProposal(id) ||
+      isStuckDeadEnd(getRecentInvestigationVerdicts(id, 3)) ||
+      shouldSkipNoNewEvidence(getLastInvestigatedAt(id), (since) => hasNewExternalEvidenceSince(id, since))
   );
   if (!candidate) return false;
 

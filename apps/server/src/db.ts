@@ -2956,6 +2956,47 @@ export function getRecentInvestigationVerdicts(
   ).map((r) => ({ verdict: r.v, confidence: typeof r.c === 'number' ? r.c : 0 }));
 }
 
+/**
+ * MVP66 信噪比：最近一次「真实」自主排查的时刻（ISO），无则 null。
+ * 排除 conf=0 退化哨兵（排查器空转/工具报错，并非真查过）——与 getRecentInvestigationVerdicts 哨兵口径对齐，
+ * 否则一次工具打嗝会让从没真查过的 matter 被"无新证据"门永久跳过（对抗审查 P0）。重启安全（audit_logs 派生）。
+ */
+export function getLastInvestigatedAt(matterId: string): string | null {
+  const r = db
+    .prepare(
+      `SELECT created_at FROM audit_logs
+       WHERE action='investigation_written_back'
+         AND json_extract(payload_json,'$.matterId')=?
+         AND NOT (json_extract(payload_json,'$.verdict')='unknown' AND json_extract(payload_json,'$.confidence')<=0)
+       ORDER BY created_at DESC LIMIT 1`
+    )
+    .get(matterId) as { created_at: string } | undefined;
+  return r?.created_at ?? null;
+}
+
+/**
+ * MVP66 信噪比：自 sinceIso 起，该 matter 是否有**新外部证据**（决定要不要重查）。
+ * 关键防误判（对抗审查）：
+ *  - 排除 AI 自产排查回声：origin_kind='agent_run' AND origin_ref_id LIKE 'investigation:%'（central trap）。
+ *  - 用 (cu.updated_at > since OR mcl.created_at > since)：IM 跟进会**就地 merge** 进既有 unit（created_at 不变、
+ *    只刷 updated_at），单看 created_at 会漏掉"承诺终于有回音"这类最高价值重查；mcl.created_at 兜"延迟挂链"。
+ *  - status='active'：被作废/superseded 的不算新证据。
+ */
+export function hasNewExternalEvidenceSince(matterId: string, sinceIso: string): boolean {
+  const r = db
+    .prepare(
+      `SELECT 1 FROM matter_context_links mcl
+       JOIN context_units cu ON cu.id = mcl.context_unit_id
+       WHERE mcl.matter_id = ?
+         AND cu.status = 'active'
+         AND NOT (cu.origin_kind = 'agent_run' AND cu.origin_ref_id LIKE 'investigation:%')
+         AND (cu.updated_at > ? OR mcl.created_at > ?)
+       LIMIT 1`
+    )
+    .get(matterId, sinceIso, sinceIso);
+  return r !== undefined;
+}
+
 export function collapseDuplicateLiveCardsByMatter(updatedAt: string): number {
   const notProposal = `input_hash NOT LIKE 'proposal:%' AND input_hash NOT LIKE 'system:%'`;
   // ① 同 matter（非提案）只留最新一张。
