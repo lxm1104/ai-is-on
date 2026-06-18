@@ -8,11 +8,11 @@
  * 选件/worthiness 为纯函数 → 可单测。调度部分薄。
  */
 import { config } from '../config.js';
-import { getContextEntityById, hasLiveMatterProposal, getRecentInvestigationVerdicts, getLastInvestigatedAt, hasNewExternalEvidenceSince } from '../db.js';
+import { getContextEntityById, hasLiveMatterProposal, getRecentInvestigationVerdicts, getLastInvestigatedAt, hasNewExternalEvidenceSince, listUserBackfillUnitsForMatter } from '../db.js';
 import { listMatters, listMatterEntities } from '../matter/matterStore.js';
 import type { Matter } from '../matter/matterTypes.js';
 import { runInvestigation } from './investigationLoop.js';
-import { applyInvestigationResult } from './investigationWriteback.js';
+import { applyInvestigationResult, scanDanglingCommitments } from './investigationWriteback.js';
 import { captureInvestigationTrace } from '../playbook/playbookCapture.js';
 import { matchPlaybookForMatter, renderPlaybookForPrompt } from '../playbook/playbookMatcher.js';
 import { resolveProjectProfileForMatter } from './projectProfile.js';
@@ -215,6 +215,13 @@ function buildEntities(matterId: string): Array<{ type: string; name: string; ro
 export async function runInvestigationDispatchTick(): Promise<boolean> {
   if (!config.investigationDispatchEnabled || inFlight) return false;
   const now = Date.now();
+  // MVP71 §11.1：dangling 静态扫描——确定性、零 LLM、零 gate。让"被正确停查的存量自我承诺"浮成「待你处理」卡
+  // （writeback 路径只在新鲜 unknown 时触发、catch 不到这些停查存量）。每 tick 一次，幂等+合并配额兜噪。
+  try {
+    scanDanglingCommitments();
+  } catch (err) {
+    console.warn('[dangling-scan] failed:', err instanceof Error ? err.message : String(err));
+  }
   const candidate = selectInvestigationCandidate(
     listMatters({ statuses: ['open', 'in_progress'], limit: 200 }),
     (id) => isCoolingDown(id, now),
@@ -245,6 +252,8 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
       priority: config.investigationPriority, // 低频排查公平竞争 gate（默认 true），否则繁忙时被饿死
       playbookHint: matchedPb ? renderPlaybookForPrompt(matchedPb) : undefined,
       projectProfile: (await resolveProjectProfileForMatter(candidate)) ?? undefined,
+      // MVP71 KEYSTONE：把用户经求助卡补给该 matter 的内容喂回重查——闭环从"只解封不喂内容"的假闭环变真闭环。
+      userBackfills: listUserBackfillUnitsForMatter(candidate.id, 5).map((u) => u.content),
     });
     const toolSummary = result.toolLog.map((l) => `${l.tool}:${l.ok ? l.summary : '失败'}`).join('；');
     // MVP69 P0-5：把"派发起始时刻"透传给 writeback 写进 audit payload.startedAt，

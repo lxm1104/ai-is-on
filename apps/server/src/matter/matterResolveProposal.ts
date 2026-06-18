@@ -10,7 +10,7 @@
  * 幂等：同事项已有在场同类提案则跳过。办结 > 进展：升办结时顶掉在场进展卡；已有办结时不叠升进展卡。
  */
 import { randomUUID } from 'node:crypto';
-import { db, countLiveNeedHelpProposals } from '../db.js';
+import { db, countLivePendingUserProposals, wasProposalRecentlyDismissed } from '../db.js';
 import { config } from '../config.js';
 import { insertAttentionItem, markAttentionItemsSupersededByHash } from '../attention/attentionStore.js';
 import { broadcast } from '../ws.js';
@@ -28,6 +28,14 @@ function hasLiveProposal(prefix: string, matterId: string): boolean {
   return !!db
     .prepare(`SELECT 1 FROM attention_items WHERE status='live' AND input_hash = ? LIMIT 1`)
     .get(`${prefix}${matterId}`);
+}
+
+/** MVP71 降噪 P0-3：该 matter 同类「待你处理」卡近 cooldown 天内被 dismiss 过 → 不重升（防反复打扰）。 */
+function blockedByReRaiseCooldown(prefix: string, matterId: string): boolean {
+  const days = config.investigationPendingReRaiseCooldownDays;
+  if (!days || days <= 0) return false;
+  const sinceIso = new Date(Date.now() - days * 86_400_000).toISOString();
+  return wasProposalRecentlyDismissed(`${prefix}${matterId}`, sinceIso);
 }
 
 /** 参数化内核：幂等查在场 + insertAttentionItem + broadcast。各提案类型转调它。 */
@@ -113,6 +121,11 @@ export function raiseMatterDanglingCommitmentProposal(
   if (hasLiveProposal(MATTER_RESOLVE_PROPOSAL_PREFIX, matter.id)) return false;
   if (hasLiveProposal(MATTER_PROGRESS_PROPOSAL_PREFIX, matter.id)) return false;
   if (hasLiveProposal(MATTER_NEEDHELP_PROPOSAL_PREFIX, matter.id)) return false; // MVP69：needhelp 顶 dangling
+  // MVP71 降噪：被 dismiss 过冷却期内不重升（P0-3）；合并「待你处理」配额（P0-1，dangling 不再裸奔无闸）。
+  if (blockedByReRaiseCooldown(MATTER_DANGLING_PROPOSAL_PREFIX, matter.id)) return false;
+  if (!hasLiveProposal(MATTER_DANGLING_PROPOSAL_PREFIX, matter.id) && countLivePendingUserProposals() >= config.investigationNeedHelpMaxLive) {
+    return false;
+  }
   const fact = (opts.factSummary ?? '').trim().slice(0, 140);
   return raiseMatterProposal(matter, {
     prefix: MATTER_DANGLING_PROPOSAL_PREFIX,
@@ -133,8 +146,10 @@ export function raiseMatterNeedHelpProposal(
   opts: { needFromUser: NeedFromUser; factSummary?: string; evidence?: string[] }
 ): boolean {
   if (hasLiveProposal(MATTER_RESOLVE_PROPOSAL_PREFIX, matter.id)) return false; // 办结已在场，不叠
-  // MVP69 防焦虑闸：已有同事项 needhelp 卡则走幂等更新（kernel 内 hasLiveProposal 拦）；否则受全局上限约束。
-  if (!hasLiveProposal(MATTER_NEEDHELP_PROPOSAL_PREFIX, matter.id) && countLiveNeedHelpProposals() >= config.investigationNeedHelpMaxLive) {
+  // MVP71 降噪：被 dismiss 过冷却期内不重升（P0-3，否则升→dismiss→下轮又升）。
+  if (blockedByReRaiseCooldown(MATTER_NEEDHELP_PROPOSAL_PREFIX, matter.id)) return false;
+  // 防焦虑闸：已有同事项 needhelp 卡走幂等更新；否则受**合并「待你处理」配额**约束（needhelp+dangling 总数，P0-1）。
+  if (!hasLiveProposal(MATTER_NEEDHELP_PROPOSAL_PREFIX, matter.id) && countLivePendingUserProposals() >= config.investigationNeedHelpMaxLive) {
     return false;
   }
   const now = new Date().toISOString();

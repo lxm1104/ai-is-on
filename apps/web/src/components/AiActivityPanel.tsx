@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchAiActivity, fetchAiActivityNow, fetchMatterInvestigationTrace, type AiActivity, type AiInFlight, type InvestigationTrace } from '../lib/api';
+import { fetchAiActivity, fetchAiActivityNow, fetchMatterInvestigationTrace, type AiActivity, type AiActivityTally, type AiInFlight, type InvestigationTrace } from '../lib/api';
 
 // MVP69 P1：把内部工具名映射成用户能懂的说法；**只做术语层**，不展示 run_command 原始命令/路径（防泄漏）。
 const TOOL_LABEL: Record<string, string> = {
@@ -69,6 +69,7 @@ function shortTime(iso: string): string {
 export function AiActivityPanel() {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<AiActivity[]>([]);
+  const [tally, setTally] = useState<AiActivityTally | null>(null);
   const [inFlight, setInFlight] = useState<AiInFlight>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -78,7 +79,8 @@ export function AiActivityPanel() {
     setError(null);
     try {
       const [list, now] = await Promise.all([fetchAiActivity(60), fetchAiActivityNow().catch(() => null)]);
-      setItems(list);
+      setItems(list.items);
+      setTally(list.tally);
       setInFlight(now);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -95,15 +97,34 @@ export function AiActivityPanel() {
     return () => clearInterval(t);
   }, [open]);
 
+  // MVP71 支柱D：折叠态也拉一次度量盘，让"待你 J"召唤行动在标题上可见（轻量，limit=1）。
+  useEffect(() => {
+    void fetchAiActivity(1).then((r) => setTally(r.tally)).catch(() => {});
+  }, []);
+
   return (
     <div className={`ai-activity ${open ? 'is-open' : ''}`}>
       <button type="button" className="ai-activity__toggle" onClick={() => setOpen((v) => !v)}>
         <span>🤖 AI 替你做了什么</span>
         <span className="ai-activity__chev">{open ? '▾' : '▸'}</span>
+        {/* MVP71：折叠态也显示"待你 J 件"召唤行动 */}
+        {!open && tally && tally.pendingCount > 0 && (
+          <span className="ai-activity__count" style={{ background: '#b45309' }}>待你 {tally.pendingCount} 件</span>
+        )}
         {open && <span className="ai-activity__count">{items.length} 条</span>}
       </button>
       {open && (
         <div className="ai-activity__body">
+          {/* MVP71 支柱D：「AI 帮你完成了多少」近 7 天度量盘 —— 直接回答 North Star */}
+          {tally && (
+            <div className="ai-activity__tally" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', padding: '6px 10px', fontSize: 12 }}>
+              <span title="近 7 天 AI 高置信主动办结的事项数">✅ 办结 <b>{tally.resolvedCount}</b></span>
+              <span title="近 7 天 AI 自主查到进展的事项数">📈 推进 <b>{tally.progressedCount}</b></span>
+              <span title="当前需要你补一手才能接着办的事项数" style={{ color: tally.pendingCount > 0 ? '#b45309' : undefined }}>🙋 待你 <b>{tally.pendingCount}</b></span>
+              <span title="近 7 天你已应答的求助/待办卡（人机协作转化）">🤝 已应答 <b>{tally.answeredCount}</b></span>
+              <span style={{ opacity: 0.6 }}>（近 7 天）</span>
+            </div>
+          )}
           <div className="ai-activity__bar">
             <span className="ai-activity__hint">AI 自主处理的记录（主动办结 / 自主排查 / 从对话更新），均可在事项里复核</span>
             <button type="button" className="btn btn--ghost" onClick={() => void load()} disabled={loading}>

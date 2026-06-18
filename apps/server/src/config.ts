@@ -199,11 +199,14 @@ export const config = {
   investigationDanglingReminderEnabled: envBool('INVESTIGATION_DANGLING_REMINDER_ENABLED', true),
   // 够旧才提醒（避免刚承诺就被催）：默认创建满 3 天（或已过期）才升。
   investigationDanglingMinAgeMs: envInt('INVESTIGATION_DANGLING_MIN_AGE_MS', 259_200_000),
-  // MVP69：AI 卡住→结构化求助卡（needFromUser）。首轮降噪：默认只对 need_credential 升卡（最高 ROI、最具体）。
+  // MVP69/71：AI 卡住→结构化求助卡（needFromUser，LLM 给或确定性兜底推导）。
+  // MVP71：默认放 need_credential（贴 traceID 接着查）+ owned_by_other（进展在他人名下，帮你起草去问/你告诉我）。
   investigationNeedHelpEnabled: envBool('INVESTIGATION_NEEDHELP_ENABLED', true),
-  investigationNeedHelpKinds: envList('INVESTIGATION_NEEDHELP_KINDS', ['need_credential']),
-  // 同一时刻最多浮多少张 needhelp 求助卡（防焦虑闸）。
-  investigationNeedHelpMaxLive: envInt('INVESTIGATION_NEEDHELP_MAX_LIVE', 2),
+  investigationNeedHelpKinds: envList('INVESTIGATION_NEEDHELP_KINDS', ['need_credential', 'owned_by_other']),
+  // 「待你处理」合并配额（MVP71 降噪 P0-1）：needhelp + dangling 同时在场总数上限（防 dangling 裸奔无闸）。
+  investigationNeedHelpMaxLive: envInt('INVESTIGATION_NEEDHELP_MAX_LIVE', 3),
+  // 升过的 needhelp/dangling 被 dismiss 后，多少天内不就同一 matter 同类重升（MVP71 降噪 P0-3 防重复打扰）。
+  investigationPendingReRaiseCooldownDays: envInt('INVESTIGATION_PENDING_RERAISE_COOLDOWN_DAYS', 7),
   // ---------- MVP49 run_command 本地只读命令工具 ----------
   // 自主排查可用的本地只读 CLI 白名单（逗号分隔，可配，不写死命令）。run_command 只放行这些可执行文件。
   // 安全模型见 investigation/runCommand.ts：argv 直 spawn 无 shell + 环境最小化 + 每 CLI 写面护栏 + 路径根限制。

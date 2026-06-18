@@ -9,13 +9,13 @@
  */
 import { upsertContextUnit } from '../context/contextStore.js';
 import type { ContextEntityRef } from '../context/ContextUnit.js';
-import { attachMatterContextLink, getMatterById, saveMatter } from '../matter/matterStore.js';
+import { attachMatterContextLink, getMatterById, saveMatter, listMatterEntities, listMatters } from '../matter/matterStore.js';
 import { userResolveMatter } from '../matter/matterActions.js';
 import { raiseMatterResolveProposal, raiseMatterProgressProposal, raiseMatterAutoResolvedReceipt, raiseMatterDanglingCommitmentProposal, raiseMatterNeedHelpProposal } from '../matter/matterResolveProposal.js';
-import { isValidNeedFromUser } from './investigationPrompt.js';
+import { isValidNeedFromUser, type NeedFromUser } from './investigationPrompt.js';
+import { getSelfEntityIds, deriveNeedFromUser, isSelfCommitment } from './needHelpClassifier.js';
 import { scheduleMatterResolveVerification } from '../matter/matterVerifyService.js';
-import { getSetting } from '../db.js';
-import { resolveAliased } from '../context/entityResolver.js';
+import { getContextEntityById, getRecentInvestigationVerdicts } from '../db.js';
 import { config } from '../config.js';
 import { writeAudit } from '../boundary/auditLog.js';
 import { broadcast } from '../ws.js';
@@ -129,6 +129,8 @@ export function applyInvestigationResult(input: {
   const proposalMatter = { ...matter, currentSummary: newSummary, nextAction: newNextAction, version: matter.version + 1, updatedAt: now };
   let proposalRaised = false;
   let autoResolved = false;
+  // MVP71：needFromUser 一次性解析（LLM 合法值优先；否则确定性兜底推导）。供 needhelp 分流复用，不重复查 entities。
+  const need = (c.verdict === 'blocked' || c.verdict === 'unknown') ? resolveNeedFromUser(matter, c) : undefined;
   // 自主办结的额外护栏（对抗审查）：必须有证据（杜绝裸口说"已完成"）、且不碰 P0（高风险事项永远走人确认提案）。
   const autoResolveEligible =
     c.verdict === 'resolved' &&
@@ -166,14 +168,15 @@ export function applyInvestigationResult(input: {
     (c.verdict === 'blocked' || c.verdict === 'unknown') &&
     c.confidence >= 0.5 &&
     config.investigationNeedHelpEnabled &&
-    isValidNeedFromUser(c.needFromUser) &&
-    config.investigationNeedHelpKinds.includes(c.needFromUser.kind)
+    isValidNeedFromUser(need) &&
+    config.investigationNeedHelpKinds.includes(need.kind)
   ) {
-    // MVP69：AI 卡住且明确知道缺哪件具体的事（needFromUser 合法）→ 升「需要你帮忙」求助卡。
+    // MVP69/71：AI 卡住且明确知道缺哪件具体的事 → 升「需要你帮忙」求助卡。
+    // MVP71：needFromUser 优先用 LLM 给的合法值；LLM 没给则**确定性兜底推导**（deriveNeedFromUser，零 LLM）。
     // 互斥顺序 resolve > needhelp > progress > dangling（插在 progress 前，否则 blocked 会被 progress 截胡）。
-    // 首轮降噪：config 默认只放 need_credential（traceID 场景，最高 ROI、最具体）。
+    // 降噪：config.investigationNeedHelpKinds 门控放哪些 kind（默认 need_credential + owned_by_other）。
     proposalRaised = raiseMatterNeedHelpProposal(proposalMatter, {
-      needFromUser: c.needFromUser!,
+      needFromUser: need,
       factSummary: factLine,
       evidence: c.evidence,
     });
@@ -199,21 +202,74 @@ export function applyInvestigationResult(input: {
   return { ok: true, matterId: matter.id, resultUnitId, summaryUpdated: meaningful, proposalRaised, autoResolved };
 }
 
+/** MVP71：取该 matter 的实体（带 id/name/type/role），供确定性「需要你」分类器用。复用 dispatcher buildEntities 模式。 */
+function buildMatterEntitiesForClassifier(matterId: string): Array<{ id: string; name: string; type: string; role: string }> {
+  return listMatterEntities(matterId)
+    .map((l) => {
+      const e = getContextEntityById(l.entityId);
+      return e ? { id: e.id, name: e.name, type: e.type, role: String(l.role) } : null;
+    })
+    .filter((x): x is { id: string; name: string; type: string; role: string } => x !== null);
+}
+
 /**
- * MVP67：把"你自己欠的承诺被查得 unknown（查无跟进）"变成一张可处理的待办提醒。
- * 高精度低噪门（实测：13 个被反复空查的元凶里仅 2 个 owner=自己，正是"对X承诺"的 dangling commitment）：
- *  - owner=自己（你欠的，才由你处理；他人名下的不归你催）；
- *  - 够旧：已过期 或 创建满阈值（避免刚承诺就被催）；
- *  - 无在场办结/进展提案（raiseMatterDanglingCommitmentProposal 内部再兜一层）。
- * 一次性：升后 MVP66「无新外部证据不重查」门会挡住后续重查 → 不复发。
+ * MVP71：解析 needFromUser——LLM 给的合法值优先；LLM 没给（实测常态）则**确定性兜底推导**（零 LLM）。
+ * 这是让 needhelp 卡真正能触发的关键（修「100% 依赖 LLM 自觉、实测从不填」根因）。
+ */
+function resolveNeedFromUser(
+  matter: ReturnType<typeof getMatterById>,
+  c: InvestigationConclusion
+): NeedFromUser | undefined {
+  if (isValidNeedFromUser(c.needFromUser)) return c.needFromUser;
+  if (!matter) return undefined;
+  const selfSet = getSelfEntityIds();
+  const entities = buildMatterEntitiesForClassifier(matter.id);
+  return deriveNeedFromUser({ verdict: c.verdict, confidence: c.confidence }, { entities, selfSet });
+}
+
+/**
+ * MVP71 §11.1（修真因）：dangling 的**独立静态扫描**——不依赖"又跑了一次排查"。
+ *
+ * 真因（git+audit 实证）：dangling 浮出原本只在 writeback 的 unknown 分支触发，但需要浮出的 stuck 承诺
+ * 恰恰被 MVP66「无新外部证据不重查」门正确地停查了——于是 dangling 代码出生后，对存量 stuck 件**从不被调用**。
+ * 本扫描确定性遍历 open/in_progress matter：是你欠的承诺（isSelfCommitment 三信号）+ 够旧 +
+ * AI 确实查过且查不清（近期有 unknown/blocked，conf>0）→ 升「待你处理」卡。零 LLM、零 gate、幂等+合并配额兜噪。
+ */
+export function scanDanglingCommitments(): number {
+  if (!config.investigationDanglingReminderEnabled) return 0;
+  const selfSet = getSelfEntityIds();
+  if (selfSet.size === 0) return 0;
+  let raised = 0;
+  for (const m of listMatters({ statuses: ['open', 'in_progress'], limit: 300 })) {
+    const execIds = listMatterEntities(m.id).filter((l) => String(l.role) === 'executor').map((l) => l.entityId);
+    if (!isSelfCommitment(m, execIds, selfSet)) continue;
+    const ageMs = Date.now() - new Date(m.createdAt).getTime();
+    const overdue = m.dueAt ? new Date(m.dueAt).getTime() < Date.now() : false;
+    if (!overdue && ageMs < config.investigationDanglingMinAgeMs) continue;
+    // 必须 AI 真查过且查不清（近期 unknown/blocked，conf>0）——否则可能只是还没排查，先别催。
+    const verdicts = getRecentInvestigationVerdicts(m.id, 3);
+    if (!verdicts.some((v) => (v.verdict === 'unknown' || v.verdict === 'blocked') && v.confidence > 0)) continue;
+    const ageDays = Math.max(1, Math.round(ageMs / 86_400_000));
+    if (raiseMatterDanglingCommitmentProposal(m, { ageDays, factSummary: clip(m.currentSummary || '', 140) })) raised++;
+  }
+  if (raised > 0) console.log(`[dangling-scan] 升「待你处理」卡 ${raised} 张（停查存量承诺浮出）`);
+  return raised;
+}
+
+/**
+ * MVP67/71：把"你自己欠的承诺被查得 unknown（查无跟进）"变成一张可处理的待办提醒。
+ * MVP71 修真因：判定从"只认 owner_entity_id"（88% 为空、永不命中）换成 isSelfCommitment 三信号
+ * （标题「（对X承诺）」/ executor∈selfSet / owner∈selfSet），并用稳健 self 身份集绕开身份碎裂。
+ * 其余门不动：够旧（overdue 或 创建满阈值）、无在场办结/进展/求助提案（helper 内兜）。
+ * 注意：这是「新鲜 unknown 即时升」路径；停查后才够旧的存量由 scanDanglingCommitments 静态扫描兜（§11.1）。
  */
 function maybeRaiseDanglingCommitment(matter: ReturnType<typeof getMatterById>, factLine: string): boolean {
   if (!matter) return false;
   if (!config.investigationDanglingReminderEnabled) return false;
-  const selfRaw = getSetting('self_person_entity_id') ?? '';
-  if (!selfRaw) return false;
-  const self = resolveAliased(selfRaw);
-  if (!matter.ownerEntityId || resolveAliased(matter.ownerEntityId) !== self) return false; // 仅你自己欠的
+  const selfSet = getSelfEntityIds();
+  if (selfSet.size === 0) return false;
+  const execIds = listMatterEntities(matter.id).filter((l) => String(l.role) === 'executor').map((l) => l.entityId);
+  if (!isSelfCommitment(matter, execIds, selfSet)) return false; // 仅你自己欠的（三信号高精度）
   const ageMs = Date.now() - new Date(matter.createdAt).getTime();
   const overdue = matter.dueAt ? new Date(matter.dueAt).getTime() < Date.now() : false;
   if (!overdue && !(ageMs >= config.investigationDanglingMinAgeMs)) return false; // 够旧才提醒

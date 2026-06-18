@@ -878,11 +878,18 @@ export type AiActivity = {
   matterTitle: string | null;
   createdAt: string;
 };
-export async function fetchAiActivity(limit = 60): Promise<AiActivity[]> {
+// MVP71 支柱D：「AI 帮你完成了多少」近 7 天完成度量盘。
+export type AiActivityTally = {
+  resolvedCount: number;
+  progressedCount: number;
+  pendingCount: number;
+  answeredCount: number;
+};
+export async function fetchAiActivity(limit = 60): Promise<{ items: AiActivity[]; tally: AiActivityTally | null }> {
   const r = await fetch(`/api/ai-activity?limit=${limit}`);
   if (!r.ok) throw new Error(`ai-activity ${r.status}`);
   const j = await r.json();
-  return (j.items ?? []) as AiActivity[];
+  return { items: (j.items ?? []) as AiActivity[], tally: (j.tally ?? null) as AiActivityTally | null };
 }
 
 // MVP69 P1：AI 此刻在排查哪件事（透明度）

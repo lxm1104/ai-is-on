@@ -1716,6 +1716,22 @@ export function getContextEntityById(id: string): ContextEntityRow | null {
   );
 }
 
+/** MVP71：按 name 取所有同名实体（self 身份集构造用：name 可对应多个 entity_id）。可限定 type。 */
+export function listContextEntitiesByName(name: string, type?: string): ContextEntityRow[] {
+  return (
+    type
+      ? db.prepare(`SELECT * FROM context_entities WHERE name = ? AND type = ?`).all(name, type)
+      : db.prepare(`SELECT * FROM context_entities WHERE name = ?`).all(name)
+  ) as ContextEntityRow[];
+}
+
+/** MVP71：取所有 alias_of==targetId 的实体 id（被合并进 self 的那些）。 */
+export function listEntityIdsAliasedTo(targetId: string): string[] {
+  return (
+    db.prepare(`SELECT id FROM entity_aliases WHERE alias_of = ?`).all(targetId) as Array<{ id: string }>
+  ).map((r) => r.id);
+}
+
 // -------- context_unit_entities --------
 
 export type ContextUnitEntityRow = {
@@ -2449,6 +2465,41 @@ export function listAiActivity(limit = 60): AiActivityRow[] {
   return rows;
 }
 
+/**
+ * MVP71 支柱D：「AI 帮你完成了多少」近 7 天完成度量盘——确定性聚合，零 LLM、零新表。
+ * 直接回答 North Star：AI 实际替你完成/推进了多少、还差你补几件。
+ * 计数去重（按 distinct matterId，避免同一 matter 多条 audit 重复计 —— 红队 P2-2）。
+ */
+export function getAiActivityTally(): {
+  resolvedCount: number;
+  progressedCount: number;
+  pendingCount: number;
+  answeredCount: number;
+} {
+  const since = new Date(Date.now() - 7 * 86_400_000).toISOString();
+  const one = (sql: string, ...args: unknown[]): number => ((db.prepare(sql).get(...args) as { n: number } | undefined)?.n ?? 0);
+  return {
+    // 办结：AI 高置信主动办结的 distinct matter
+    resolvedCount: one(
+      `SELECT COUNT(DISTINCT json_extract(payload_json,'$.matterId')) AS n FROM audit_logs
+       WHERE action='matter_auto_resolved' AND created_at > ?`, since
+    ),
+    // 推进：AI 自主排查查到 progressed 的 distinct matter（可见进展）
+    progressedCount: one(
+      `SELECT COUNT(DISTINCT json_extract(payload_json,'$.matterId')) AS n FROM audit_logs
+       WHERE action='investigation_written_back' AND json_extract(payload_json,'$.verdict')='progressed' AND created_at > ?`, since
+    ),
+    // 待你：当前在场「待你处理」卡（needhelp + dangling）
+    pendingCount: countLivePendingUserProposals(),
+    // 你已应答：近 7d 被 acted 的「待你处理」卡（你补了一手 = 闭环转化）
+    answeredCount: one(
+      `SELECT COUNT(*) AS n FROM attention_items
+       WHERE status='acted' AND updated_at > ?
+         AND (input_hash LIKE 'proposal:matter-needhelp:%' OR input_hash LIKE 'proposal:matter-dangling:%')`, since
+    ),
+  };
+}
+
 // -------- entity_aliases (MVP10) --------
 
 export type EntityAliasRow = {
@@ -2974,6 +3025,36 @@ export function countLiveNeedHelpProposals(): number {
   return r?.n ?? 0;
 }
 
+/**
+ * MVP71 降噪 P0-1：「待你处理」合并配额——needhelp + dangling 在场总数。
+ * 原 N 闸只数 needhelp，dangling 裸奔无上限；本方案主力放开的恰是 dangling+owned_by_other，必须合并计数。
+ */
+export function countLivePendingUserProposals(): number {
+  const r = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM attention_items
+       WHERE status='live'
+         AND (input_hash LIKE 'proposal:matter-needhelp:%' OR input_hash LIKE 'proposal:matter-dangling:%')`
+    )
+    .get() as { n: number };
+  return r?.n ?? 0;
+}
+
+/**
+ * MVP71 降噪 P0-3：同一 input_hash 的卡近期是否被 dismiss 过（防"升→dismiss→下轮又升"反复打扰）。
+ * 幂等键只挡 live；dismiss 后 hasLiveProposal 失效会重升，故升卡前查此。
+ */
+export function wasProposalRecentlyDismissed(inputHash: string, sinceIso: string): boolean {
+  const r = db
+    .prepare(
+      `SELECT 1 FROM attention_items
+       WHERE input_hash = ? AND status='dismissed' AND updated_at > ?
+       LIMIT 1`
+    )
+    .get(inputHash, sinceIso);
+  return r !== undefined;
+}
+
 export function hasLiveMatterProposal(matterId: string): boolean {
   return !!db
     .prepare(
@@ -3047,6 +3128,35 @@ export function hasNewExternalEvidenceSince(matterId: string, sinceIso: string):
     )
     .get(matterId, sinceIso, sinceIso);
   return r !== undefined;
+}
+
+/**
+ * MVP71 KEYSTONE：读取用户经「需要你帮忙」求助卡 inline 补给该 matter 的内容（origin=card_action 的证据 unit）。
+ *
+ * 背景（实测铁证）：MVP69 的协作闭环只做了"解封"半环——用户补一手 → `hasNewExternalEvidenceSince` 返回 true
+ * → 下一 tick 重查。但用户补的**内容本身从未进入重查的 LLM 上下文**（落 silent/no_change unit、不进 currentSummary、
+ * dispatcher 也不读它）。于是重查信息和上次一样 → 必然再 unknown。本函数取出这些补充内容，供 dispatcher 注入
+ * 重查 prompt 的 `<用户补充>` 段，让 need_credential / owned_by_other 的协作闭环**真正成立**。
+ *
+ * 只取 origin_kind='card_action'（用户主动补的，过回声门）、active、按时间倒序，cap 数量与长度由调用方控。
+ */
+export function listUserBackfillUnitsForMatter(
+  matterId: string,
+  limit = 5
+): Array<{ content: string; createdAt: string }> {
+  const rows = db
+    .prepare(
+      `SELECT cu.content AS content, cu.created_at AS createdAt
+       FROM matter_context_links mcl
+       JOIN context_units cu ON cu.id = mcl.context_unit_id
+       WHERE mcl.matter_id = ?
+         AND cu.status = 'active'
+         AND cu.origin_kind = 'card_action'
+       ORDER BY cu.created_at DESC
+       LIMIT ?`
+    )
+    .all(matterId, Math.max(1, limit)) as Array<{ content: string; createdAt: string }>;
+  return rows.filter((r) => typeof r.content === 'string' && r.content.trim().length > 0);
 }
 
 export function collapseDuplicateLiveCardsByMatter(updatedAt: string): number {

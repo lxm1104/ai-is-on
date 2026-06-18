@@ -108,14 +108,15 @@ test('MVP69 P0-3：live needhelp 卡 → hasLiveMatterProposal=true；acted 后=
   assert.equal(db.hasLiveMatterProposal(m.id), false, 'acted 后放行重查');
 });
 
-// ============ P0-9 防焦虑 N-cap ============
-test('MVP69 P0-9：needhelp 全局上限（默认 2）—— 第 3 件不升', () => {
+// ============ P0-9 防焦虑 N-cap（MVP71：合并「待你处理」配额，默认 3）============
+test('MVP69/71 P0-9：合并「待你处理」配额（默认 3）—— 第 4 件不升', () => {
   resetDb();
-  const a = mkMatter(), b = mkMatter(), c = mkMatter();
+  const a = mkMatter(), b = mkMatter(), c = mkMatter(), d = mkMatter();
   assert.equal(mrp.raiseMatterNeedHelpProposal(ms.getMatterById(a.id)!, { needFromUser: NEED_CRED }), true);
   assert.equal(mrp.raiseMatterNeedHelpProposal(ms.getMatterById(b.id)!, { needFromUser: NEED_CRED }), true);
-  assert.equal(mrp.raiseMatterNeedHelpProposal(ms.getMatterById(c.id)!, { needFromUser: NEED_CRED }), false, '超上限不升');
-  assert.equal(db.countLiveNeedHelpProposals(), 2);
+  assert.equal(mrp.raiseMatterNeedHelpProposal(ms.getMatterById(c.id)!, { needFromUser: NEED_CRED }), true);
+  assert.equal(mrp.raiseMatterNeedHelpProposal(ms.getMatterById(d.id)!, { needFromUser: NEED_CRED }), false, '超合并配额不升');
+  assert.equal(db.countLivePendingUserProposals(), 3);
 });
 
 // ============ P0-4 isStuckDeadEnd 逃生门（building blocks）============

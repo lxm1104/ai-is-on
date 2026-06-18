@@ -6,7 +6,7 @@ import {
   setRuleActive,
 } from '../boundary/boundaryStore.js';
 import { listRecentAudits } from '../boundary/auditLog.js';
-import { listAiActivity } from '../db.js';
+import { listAiActivity, getAiActivityTally } from '../db.js';
 import { getCurrentInvestigation } from '../investigation/investigationDispatcher.js';
 import type {
   BoundaryAction,
@@ -77,7 +77,8 @@ boundaryRouter.get('/audit-logs', (req, res) => {
 // MVP68：「AI 替你做了什么」——只取 AI 自主动作 + 事项标题，给用户一个可读的自主处理记录。
 boundaryRouter.get('/ai-activity', (req, res) => {
   const limit = clampInt(req.query.limit, 60, 1, 300);
-  res.json({ items: listAiActivity(limit) });
+  // MVP71 支柱D：附「近 7 天 AI 帮你完成了多少」度量盘（确定性聚合）。
+  res.json({ items: listAiActivity(limit), tally: getAiActivityTally() });
 });
 
 // MVP69 P1：「AI 此刻在做什么」——当前在飞的排查（透明度）。startedAt 超 10min 视为陈旧（崩溃残留），不显示。

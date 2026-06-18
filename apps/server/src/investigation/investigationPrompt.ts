@@ -106,6 +106,7 @@ export function buildInvestigateUserMessage(opts: {
   maxRounds: number;
   playbookHint?: string; // MVP37 召回：这类任务已学/用户教过的做法，优先照此排查
   projectProfile?: string; // MVP38 项目排查档案：代码库路径/trace 方法/术语等
+  userBackfills?: string[]; // MVP71 KEYSTONE：用户经求助卡补给该 matter 的内容（traceID/对方回复/真实状态）
 }): string {
   const lines = [
     '<matter>',
@@ -118,6 +119,18 @@ export function buildInvestigateUserMessage(opts: {
       : '',
     '</matter>',
   ];
+  // MVP71 KEYSTONE：用户此前就这件事**通过「需要你帮忙」求助卡补过信息**（贴的 traceID / 对方的回复 / 真实状态）。
+  // 这是你上次卡住后用户专门补给你的——务必据此重新判断，别再得出和上次一样的"查不到"。置顶且强语气。
+  if (opts.userBackfills && opts.userBackfills.length) {
+    lines.push(
+      '',
+      '<用户补充（你上次卡住，用户专门补给你的关键信息——务必据此重新判断）>',
+      ...opts.userBackfills.slice(0, 5).map((b, i) => `[补充${i + 1}] ${b.replace(/\s+/g, ' ').trim().slice(0, 500)}`),
+      '据此处理：若用户已告知对方确认完成/已办结 → verdict=resolved；给了 traceID/日志ID → 用 run_command 接着追；',
+      '给了关键事实 → 结合它重新查证。**不要无视用户补充再下"查不到"。**',
+      '</用户补充>'
+    );
+  }
   // MVP64 ⑥：决策类事项——不替用户拍板，而是用只读工具拉齐"决策信息包"。
   if (opts.matterType === 'decision') {
     lines.push(

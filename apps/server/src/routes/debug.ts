@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { db, getContextEntityById, listEvents, listTriageResults, matchMatterId } from '../db.js';
+import { db, getContextEntityById, listEvents, listTriageResults, matchMatterId, listUserBackfillUnitsForMatter } from '../db.js';
 import { raiseMatterProgressProposal } from '../matter/matterResolveProposal.js';
 import { backfillUnitRouting } from '../bootstrap/backfillUnitRouting.js';
 import { listInducers } from '../structure/inducerRegistry.js';
@@ -91,6 +91,7 @@ debugRouter.post('/debug/investigation/run', async (req, res) => {
       priority: true, // 手动验证：走 high 队列尽快拿 gate，不被 attention 饿死
       playbookHint: matchedPb ? renderPlaybookForPrompt(matchedPb) : undefined,
       projectProfile: (await resolveProjectProfileForMatter(m)) ?? undefined,
+      userBackfills: listUserBackfillUnitsForMatter(matterId, 5).map((u) => u.content), // MVP71 KEYSTONE：对齐真实派发
     });
     let writeback;
     if (body.apply === true) {

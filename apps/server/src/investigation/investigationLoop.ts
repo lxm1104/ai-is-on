@@ -34,6 +34,9 @@ export type InvestigationInput = {
   playbookHint?: string;
   /** MVP38 项目排查档案：所属项目的代码库路径/trace 方法/术语等。 */
   projectProfile?: string;
+  /** MVP71 KEYSTONE：用户经「需要你帮忙」求助卡补给该 matter 的内容（贴的 traceID / 对方回复 / 真实状态）。
+   *  注入每轮 prompt 的 `<用户补充>` 段——让"你补一手→AI 接着查"从假闭环变真闭环（重查真正读到你补的信息）。 */
+  userBackfills?: string[];
 };
 
 export type InvestigationToolLogEntry = {
@@ -115,6 +118,7 @@ export async function runInvestigation(
       maxRounds,
       playbookHint: input.playbookHint,
       projectProfile: input.projectProfile,
+      userBackfills: input.userBackfills,
     });
 
     let step;
