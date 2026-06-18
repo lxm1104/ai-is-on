@@ -125,11 +125,12 @@ export function defaultAttentionActions(item: AttentionItem): CardAction[] {
     ];
   }
 
-  // MVP67：「你欠的承诺，查无跟进」提醒 —— 你来决定：我处理/办结/不再跟进。
-  // 「我来跟进」走 ack（收下、保持跟进），「不再跟进」走 dismiss（卡片消失，MVP66 门防复发）。
+  // MVP67/71：「你欠的承诺，查无跟进」提醒 —— 你来决定：补一句进展(AI 接着办)/办结/不再跟进。
+  // MVP71：原「我来跟进」是空 ack（什么都没接住）→ 换成「补一句进展」走 mark_done(dangling 支路)：
+  // 把你补的真实状态落成 card_action 证据 → KEYSTONE 喂回重查 → AI 据此接着办（推进/办结）。空补则等同收下。
   if (item.inputHash.startsWith('proposal:matter-dangling:')) {
     return [
-      { id: 'ack', label: '我来跟进', kind: 'ack' },
+      { id: 'mark_done', label: '补一句进展，AI 接着办', kind: 'mark_done' },
       { id: 'matter_resolve', label: '标记办结', kind: 'matter_resolve' },
       { id: 'dismiss', label: '不再跟进', kind: 'dismiss' },
     ];

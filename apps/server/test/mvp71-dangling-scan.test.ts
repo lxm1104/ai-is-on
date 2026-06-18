@@ -21,6 +21,7 @@ const clf = await import('../src/investigation/needHelpClassifier.js');
 const { scanDanglingCommitments } = await import('../src/investigation/investigationWriteback.js');
 const { MATTER_DANGLING_PROPOSAL_PREFIX } = await import('../src/matter/matterResolveProposal.js');
 const { writeAudit } = await import('../src/boundary/auditLog.js');
+const { applyCardAction } = await import('../src/cards/cardsService.js');
 
 const DAY = 86_400_000;
 const SELF = 'self-' + randomUUID();
@@ -86,4 +87,34 @@ test('MVP71 扫描：幂等——已有 live dangling 再扫不重升', () => {
   recordUnknownInvestigation(m.id);
   assert.equal(scanDanglingCommitments(), 1);
   assert.equal(scanDanglingCommitments(), 0, '第二次扫描幂等不重升');
+});
+
+function liveDanglingId(matterId: string): string | undefined {
+  return (db.db.prepare(`SELECT id FROM attention_items WHERE input_hash=? AND status='live'`).get(`${MATTER_DANGLING_PROPOSAL_PREFIX}${matterId}`) as { id: string } | undefined)?.id;
+}
+
+test('MVP71 转化：dangling「补一句进展」mark_done → 落 card_action 证据、不办结、不重升（空 ack→真转化）', async () => {
+  reset();
+  const m = mkCommitment({ ageDays: 6 });
+  recordUnknownInvestigation(m.id);
+  scanDanglingCommitments();
+  const cardId = liveDanglingId(m.id);
+  assert.ok(cardId, '应有 live dangling 卡');
+
+  // 用户补一句进展（走 dangling mark_done 支路 = 不办结、落 card_action 证据、解封）
+  const r = await applyCardAction(cardId!, 'mark_done', { note: '已经在做了，对方说下周一上线' });
+  assert.equal(r.ok, true);
+
+  // ① 不办结：matter 仍 open（dangling 的"补一句"≠"已处理"）
+  assert.equal(ms.getMatterById(m.id)?.status, 'open', 'mark_done 补一句不应办结 matter');
+  // ② 落了 card_action 证据，KEYSTONE 重查能读到
+  const backfills = db.listUserBackfillUnitsForMatter(m.id, 5);
+  assert.equal(backfills.length, 1);
+  assert.match(backfills[0].content, /下周一上线/);
+  // ③ 卡已 acted
+  assert.equal(liveDanglingId(m.id), undefined, '卡应已 acted（不再 live）');
+
+  // ④ 防再催：用户刚补了进展，立刻再扫不应重升同一件（acted 冷却）
+  recordUnknownInvestigation(m.id, 0.6); // 即便重查仍 unknown
+  assert.equal(scanDanglingCommitments(), 0, '刚补过进展（acted）→冷却期内不重升，不烦人');
 });

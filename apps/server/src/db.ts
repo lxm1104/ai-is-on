@@ -3041,14 +3041,17 @@ export function countLivePendingUserProposals(): number {
 }
 
 /**
- * MVP71 降噪 P0-3：同一 input_hash 的卡近期是否被 dismiss 过（防"升→dismiss→下轮又升"反复打扰）。
- * 幂等键只挡 live；dismiss 后 hasLiveProposal 失效会重升，故升卡前查此。
+ * MVP71 降噪 P0-3：同一 input_hash 的卡近期是否被用户处理过（防"升→处理→下轮又升"反复打扰）。
+ * 幂等键只挡 live；dismiss/acted 后 hasLiveProposal 失效会重升，故升卡前查此。
+ * - includeActed=false（needhelp 默认）：只挡 dismiss，acted 不挡（允许多轮补一手再求助）；
+ * - includeActed=true（dangling）：dismiss + acted 都挡（你刚说"我来跟进/补了进展"，别立刻又催同一件）。
  */
-export function wasProposalRecentlyDismissed(inputHash: string, sinceIso: string): boolean {
+export function wasProposalRecentlyDismissed(inputHash: string, sinceIso: string, includeActed = false): boolean {
+  const statusClause = includeActed ? `status IN ('dismissed','acted')` : `status='dismissed'`;
   const r = db
     .prepare(
       `SELECT 1 FROM attention_items
-       WHERE input_hash = ? AND status='dismissed' AND updated_at > ?
+       WHERE input_hash = ? AND ${statusClause} AND updated_at > ?
        LIMIT 1`
     )
     .get(inputHash, sinceIso);

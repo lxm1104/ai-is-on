@@ -49,7 +49,7 @@ import {
   MATTER_REOPEN_PROPOSAL_PREFIX,
   scheduleMatterResolveVerification,
 } from '../matter/matterVerifyService.js';
-import { MATTER_NEEDHELP_PROPOSAL_PREFIX } from '../matter/matterResolveProposal.js';
+import { MATTER_NEEDHELP_PROPOSAL_PREFIX, MATTER_DANGLING_PROPOSAL_PREFIX } from '../matter/matterResolveProposal.js';
 import { kickInvestigation } from '../investigation/investigationKick.js';
 
 export function rowToCard(row: CardRow): SignalCard {
@@ -419,11 +419,15 @@ async function applyAttentionAction(
     // matter_id 可能是 LLM 截断前缀（MVP29D），canonical 化后再操作；解不出 → 按无 matter 卡兜底。
     const fullMatterId = attn.matterId ? matchMatterId(attn.matterId) : null;
 
-    // MVP69：needhelp 求助卡的 mark_done = 用户**补一手信息让 AI 接着查**，不是"已办结"。
+    // MVP69/71：needhelp 求助卡 + dangling「待你处理」卡的 mark_done = 用户**补一手信息让 AI 接着办**，不是"已办结"。
     // 走独立支路：①先置 acted（解 hasLiveMatterProposal skip 门，必须在落证据之前）②把补的内容落成
     // 挂该 matter 的**外部证据**(origin=card_action，过回声门；effect=no_change，不办结；mergeHint 带时间戳，
-    // 多轮不覆盖) ③kickInvestigation 近实时解封。下一 tick MVP66 看到新外部证据 → 自动带新证据重查。
-    if (attn.inputHash.startsWith(MATTER_NEEDHELP_PROPOSAL_PREFIX)) {
+    // 多轮不覆盖) ③kickInvestigation 近实时解封。下一 tick MVP66 看到新外部证据 → KEYSTONE 把内容喂回重查。
+    // MVP71：dangling 的「补一句进展」也走这条——把"我来跟进"从空 ack 变成真转化（你补的进展 AI 接着办）。
+    if (
+      attn.inputHash.startsWith(MATTER_NEEDHELP_PROPOSAL_PREFIX) ||
+      attn.inputHash.startsWith(MATTER_DANGLING_PROPOSAL_PREFIX)
+    ) {
       const updated = updateAttentionItemStatus(attn.id, 'acted', now);
       if (!updated) return { ok: false, error: 'update failed' };
       if (note && fullMatterId) {

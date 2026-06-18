@@ -30,12 +30,15 @@ function hasLiveProposal(prefix: string, matterId: string): boolean {
     .get(`${prefix}${matterId}`);
 }
 
-/** MVP71 降噪 P0-3：该 matter 同类「待你处理」卡近 cooldown 天内被 dismiss 过 → 不重升（防反复打扰）。 */
-function blockedByReRaiseCooldown(prefix: string, matterId: string): boolean {
+/**
+ * MVP71 降噪 P0-3：该 matter 同类「待你处理」卡近 cooldown 天内被处理过 → 不重升（防反复打扰）。
+ * includeActed：dangling 传 true（你刚说"我来跟进/补了进展"，别立刻又催）；needhelp 传 false（允许多轮补一手再求助）。
+ */
+function blockedByReRaiseCooldown(prefix: string, matterId: string, includeActed = false): boolean {
   const days = config.investigationPendingReRaiseCooldownDays;
   if (!days || days <= 0) return false;
   const sinceIso = new Date(Date.now() - days * 86_400_000).toISOString();
-  return wasProposalRecentlyDismissed(`${prefix}${matterId}`, sinceIso);
+  return wasProposalRecentlyDismissed(`${prefix}${matterId}`, sinceIso, includeActed);
 }
 
 /** 参数化内核：幂等查在场 + insertAttentionItem + broadcast。各提案类型转调它。 */
@@ -121,8 +124,9 @@ export function raiseMatterDanglingCommitmentProposal(
   if (hasLiveProposal(MATTER_RESOLVE_PROPOSAL_PREFIX, matter.id)) return false;
   if (hasLiveProposal(MATTER_PROGRESS_PROPOSAL_PREFIX, matter.id)) return false;
   if (hasLiveProposal(MATTER_NEEDHELP_PROPOSAL_PREFIX, matter.id)) return false; // MVP69：needhelp 顶 dangling
-  // MVP71 降噪：被 dismiss 过冷却期内不重升（P0-3）；合并「待你处理」配额（P0-1，dangling 不再裸奔无闸）。
-  if (blockedByReRaiseCooldown(MATTER_DANGLING_PROPOSAL_PREFIX, matter.id)) return false;
+  // MVP71 降噪：被 dismiss/acted 冷却期内不重升（P0-3，含"我刚补了进展"——别立刻又催同一件）；
+  // 合并「待你处理」配额（P0-1，dangling 不再裸奔无闸）。
+  if (blockedByReRaiseCooldown(MATTER_DANGLING_PROPOSAL_PREFIX, matter.id, true)) return false;
   if (!hasLiveProposal(MATTER_DANGLING_PROPOSAL_PREFIX, matter.id) && countLivePendingUserProposals() >= config.investigationNeedHelpMaxLive) {
     return false;
   }
