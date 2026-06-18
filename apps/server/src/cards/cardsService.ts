@@ -519,8 +519,10 @@ async function applyAttentionAction(
   const isReopenProposal = attn.inputHash.startsWith(MATTER_REOPEN_PROPOSAL_PREFIX);
   // MVP40：进展回执卡的「继续跟进」=裁决，不是说内容不相关 → 同样豁免 not_relevant 学习。
   const isProgressProposal = attn.inputHash.startsWith('proposal:matter-progress:');
+  // MVP67：「你欠的承诺查无跟进」提醒的「不再跟进」=裁决（这事不必再追），不是内容不相关 → 同样豁免。
+  const isDanglingProposal = attn.inputHash.startsWith('proposal:matter-dangling:');
 
-  if (action.kind === 'dismiss' && (isResolveProposal || isReopenProposal || isProgressProposal)) {
+  if (action.kind === 'dismiss' && (isResolveProposal || isReopenProposal || isProgressProposal || isDanglingProposal)) {
     // 提案卡的「还没完 / 确实已完成」≠ 内容不相关：只关卡片，不学 not_relevant 负反馈。
     recordAttentionInteraction(attn, 'dismiss', now);
     // MVP32：重开提案上的「确实已完成」是用户对核实结论的否决——把 verification 改记 user_confirmed。

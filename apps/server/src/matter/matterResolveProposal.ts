@@ -19,6 +19,7 @@ import type { AttentionPriority } from '../attention/attentionTypes.js';
 export const MATTER_RESOLVE_PROPOSAL_PREFIX = 'proposal:matter-resolve:';
 export const MATTER_PROGRESS_PROPOSAL_PREFIX = 'proposal:matter-progress:';
 export const MATTER_AUTORESOLVED_PREFIX = 'proposal:matter-autoresolved:'; // MVP55：AI 已主动办结回执（可重开）
+export const MATTER_DANGLING_PROPOSAL_PREFIX = 'proposal:matter-dangling:'; // MVP67：你自己欠的承诺，AI 查无跟进痕迹
 
 function hasLiveProposal(prefix: string, matterId: string): boolean {
   return !!db
@@ -92,6 +93,29 @@ export function raiseMatterProgressProposal(
     title: `AI 已查清进展：${matter.title.slice(0, 40)}`,
     why: `${lead}${evLines.length ? '\n证据：\n' + evLines.join('\n') : ''}`,
     suggestedAction: '知道了 / 办结 / 继续跟进',
+  });
+}
+
+/**
+ * MVP67 — 「你欠的承诺，查无跟进」提醒卡。AI 排查自己欠下的承诺（owner=自己），多轮查证仍找不到
+ * 任何跟进痕迹（verdict=unknown）→ 与其把这次 unknown 静默丢弃，不如把它变成一张可处理的待办：
+ * 提醒你这件你承诺过的事疑似一直没动。低噪：仅 owner=自己 + 够旧 + 无在场办结/进展提案才升；一次性。
+ * 不替你做任何对外动作——你来决定跟进/办结/不再跟进。
+ */
+export function raiseMatterDanglingCommitmentProposal(
+  matter: Matter,
+  opts: { ageDays: number; factSummary?: string }
+): boolean {
+  // 已有办结/进展提案在场 → 不叠（那些是更高信号的结论，别拿"查无跟进"盖过）。
+  if (hasLiveProposal(MATTER_RESOLVE_PROPOSAL_PREFIX, matter.id)) return false;
+  if (hasLiveProposal(MATTER_PROGRESS_PROPOSAL_PREFIX, matter.id)) return false;
+  const fact = (opts.factSummary ?? '').trim().slice(0, 140);
+  return raiseMatterProposal(matter, {
+    prefix: MATTER_DANGLING_PROPOSAL_PREFIX,
+    priority: 'P2', // 低噪：不与催办/attention 抢
+    title: `待你处理：${matter.title.slice(0, 40)}`,
+    why: `这是你欠下的承诺，但 AI 多轮查证后找不到任何跟进痕迹（已约 ${opts.ageDays} 天）。${fact ? `\n排查：${fact}` : ''}\n要不要现在推进，或它其实已不需要了？`,
+    suggestedAction: '我来跟进 / 标记办结 / 不再跟进',
   });
 }
 

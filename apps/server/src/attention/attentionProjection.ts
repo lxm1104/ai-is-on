@@ -116,6 +116,16 @@ export function defaultAttentionActions(item: AttentionItem): CardAction[] {
     ];
   }
 
+  // MVP67：「你欠的承诺，查无跟进」提醒 —— 你来决定：我处理/办结/不再跟进。
+  // 「我来跟进」走 ack（收下、保持跟进），「不再跟进」走 dismiss（卡片消失，MVP66 门防复发）。
+  if (item.inputHash.startsWith('proposal:matter-dangling:')) {
+    return [
+      { id: 'ack', label: '我来跟进', kind: 'ack' },
+      { id: 'matter_resolve', label: '标记办结', kind: 'matter_resolve' },
+      { id: 'dismiss', label: '不再跟进', kind: 'dismiss' },
+    ];
+  }
+
   // MVP55：AI 已主动办结回执 —— 透明 + 可逆。「知道了」收下，「重开」一键撤销自动办结。
   if (item.inputHash.startsWith('proposal:matter-autoresolved:')) {
     return [

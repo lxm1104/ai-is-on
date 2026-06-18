@@ -11,8 +11,10 @@ import { upsertContextUnit } from '../context/contextStore.js';
 import type { ContextEntityRef } from '../context/ContextUnit.js';
 import { attachMatterContextLink, getMatterById, saveMatter } from '../matter/matterStore.js';
 import { userResolveMatter } from '../matter/matterActions.js';
-import { raiseMatterResolveProposal, raiseMatterProgressProposal, raiseMatterAutoResolvedReceipt } from '../matter/matterResolveProposal.js';
+import { raiseMatterResolveProposal, raiseMatterProgressProposal, raiseMatterAutoResolvedReceipt, raiseMatterDanglingCommitmentProposal } from '../matter/matterResolveProposal.js';
 import { scheduleMatterResolveVerification } from '../matter/matterVerifyService.js';
+import { getSetting } from '../db.js';
+import { resolveAliased } from '../context/entityResolver.js';
 import { config } from '../config.js';
 import { writeAudit } from '../boundary/auditLog.js';
 import { broadcast } from '../ws.js';
@@ -167,6 +169,10 @@ export function applyInvestigationResult(input: {
       evidence: c.evidence,
       confidence: c.confidence,
     });
+  } else if (c.verdict === 'unknown' && c.confidence > 0) {
+    // MVP67：真实 unknown（conf>0，AI 确实查了但查无跟进）——若这是**你自己欠的承诺**，
+    // 别再静默丢弃这次排查，把它变成一张「待你处理」提醒（你欠的事疑似一直没动）。
+    proposalRaised = maybeRaiseDanglingCommitment(matter, factLine);
   }
 
   try {
@@ -174,4 +180,26 @@ export function applyInvestigationResult(input: {
   } catch {}
 
   return { ok: true, matterId: matter.id, resultUnitId, summaryUpdated: meaningful, proposalRaised, autoResolved };
+}
+
+/**
+ * MVP67：把"你自己欠的承诺被查得 unknown（查无跟进）"变成一张可处理的待办提醒。
+ * 高精度低噪门（实测：13 个被反复空查的元凶里仅 2 个 owner=自己，正是"对X承诺"的 dangling commitment）：
+ *  - owner=自己（你欠的，才由你处理；他人名下的不归你催）；
+ *  - 够旧：已过期 或 创建满阈值（避免刚承诺就被催）；
+ *  - 无在场办结/进展提案（raiseMatterDanglingCommitmentProposal 内部再兜一层）。
+ * 一次性：升后 MVP66「无新外部证据不重查」门会挡住后续重查 → 不复发。
+ */
+function maybeRaiseDanglingCommitment(matter: ReturnType<typeof getMatterById>, factLine: string): boolean {
+  if (!matter) return false;
+  if (!config.investigationDanglingReminderEnabled) return false;
+  const selfRaw = getSetting('self_person_entity_id') ?? '';
+  if (!selfRaw) return false;
+  const self = resolveAliased(selfRaw);
+  if (!matter.ownerEntityId || resolveAliased(matter.ownerEntityId) !== self) return false; // 仅你自己欠的
+  const ageMs = Date.now() - new Date(matter.createdAt).getTime();
+  const overdue = matter.dueAt ? new Date(matter.dueAt).getTime() < Date.now() : false;
+  if (!overdue && !(ageMs >= config.investigationDanglingMinAgeMs)) return false; // 够旧才提醒
+  const ageDays = Math.max(1, Math.round(ageMs / 86_400_000));
+  return raiseMatterDanglingCommitmentProposal(matter, { ageDays, factSummary: factLine });
 }

@@ -195,6 +195,10 @@ export const config = {
   investigationPriority: envBool('INVESTIGATION_PRIORITY', true),
   investigationCooldownMs: envInt('INVESTIGATION_COOLDOWN_MS', 21_600_000), // 同 matter 6h 内不重查
   investigationMaxRounds: envInt('INVESTIGATION_MAX_ROUNDS', 3),
+  // MVP67：你自己欠的承诺(owner=自己)被排查仍"查无跟进"(unknown) → 升一张"待你处理"提醒，而非静默丢弃。
+  investigationDanglingReminderEnabled: envBool('INVESTIGATION_DANGLING_REMINDER_ENABLED', true),
+  // 够旧才提醒（避免刚承诺就被催）：默认创建满 3 天（或已过期）才升。
+  investigationDanglingMinAgeMs: envInt('INVESTIGATION_DANGLING_MIN_AGE_MS', 259_200_000),
   // ---------- MVP49 run_command 本地只读命令工具 ----------
   // 自主排查可用的本地只读 CLI 白名单（逗号分隔，可配，不写死命令）。run_command 只放行这些可执行文件。
   // 安全模型见 investigation/runCommand.ts：argv 直 spawn 无 shell + 环境最小化 + 每 CLI 写面护栏 + 路径根限制。
