@@ -11,7 +11,8 @@ import { upsertContextUnit } from '../context/contextStore.js';
 import type { ContextEntityRef } from '../context/ContextUnit.js';
 import { attachMatterContextLink, getMatterById, saveMatter } from '../matter/matterStore.js';
 import { userResolveMatter } from '../matter/matterActions.js';
-import { raiseMatterResolveProposal, raiseMatterProgressProposal, raiseMatterAutoResolvedReceipt, raiseMatterDanglingCommitmentProposal } from '../matter/matterResolveProposal.js';
+import { raiseMatterResolveProposal, raiseMatterProgressProposal, raiseMatterAutoResolvedReceipt, raiseMatterDanglingCommitmentProposal, raiseMatterNeedHelpProposal } from '../matter/matterResolveProposal.js';
+import { isValidNeedFromUser } from './investigationPrompt.js';
 import { scheduleMatterResolveVerification } from '../matter/matterVerifyService.js';
 import { getSetting } from '../db.js';
 import { resolveAliased } from '../context/entityResolver.js';
@@ -40,6 +41,7 @@ export function applyInvestigationResult(input: {
   matterId: string;
   conclusion: InvestigationConclusion;
   toolSummary?: string; // 用了哪些只读工具的一行摘要，便于追溯
+  startedAt?: string; // MVP69 P0-5：本次排查派发起始时刻（写进 audit，供 getLastInvestigatedAt 当 since 用）
 }): InvestigationWritebackResult {
   const matter = getMatterById(input.matterId);
   if (!matter) return { ok: false, matterId: input.matterId, summaryUpdated: false, error: 'matter not found' };
@@ -119,7 +121,7 @@ export function applyInvestigationResult(input: {
   writeAudit({
     action: 'investigation_written_back',
     reason: `AI 排查结论回写 matter（${c.verdict}）：${clip(factLine, 60)}`,
-    payload: { matterId: matter.id, verdict: c.verdict, confidence: c.confidence, resultUnitId },
+    payload: { matterId: matter.id, verdict: c.verdict, confidence: c.confidence, resultUnitId, startedAt: input.startedAt },
   });
 
   // MVP39：resolved 高置信 → 把"AI 查到这件事疑似已完成"浮成「确认办结」提案卡（不再埋在摘要里）。
@@ -159,6 +161,21 @@ export function applyInvestigationResult(input: {
     proposalRaised = raiseMatterResolveProposal(proposalMatter, {
       why: `AI 自主排查发现这件事疑似已完成：${clip(factLine, 100)}。确认后该事项标记为已解决、相关催办卡自动清除。`,
       suggestedAction: '确认办结，或忽略保持跟进',
+    });
+  } else if (
+    (c.verdict === 'blocked' || c.verdict === 'unknown') &&
+    c.confidence >= 0.5 &&
+    config.investigationNeedHelpEnabled &&
+    isValidNeedFromUser(c.needFromUser) &&
+    config.investigationNeedHelpKinds.includes(c.needFromUser.kind)
+  ) {
+    // MVP69：AI 卡住且明确知道缺哪件具体的事（needFromUser 合法）→ 升「需要你帮忙」求助卡。
+    // 互斥顺序 resolve > needhelp > progress > dangling（插在 progress 前，否则 blocked 会被 progress 截胡）。
+    // 首轮降噪：config 默认只放 need_credential（traceID 场景，最高 ROI、最具体）。
+    proposalRaised = raiseMatterNeedHelpProposal(proposalMatter, {
+      needFromUser: c.needFromUser!,
+      factSummary: factLine,
+      evidence: c.evidence,
     });
   } else if ((c.verdict === 'progressed' || c.verdict === 'blocked') && c.confidence >= 0.6) {
     // MVP40：progressed/blocked 是 AI 对"跟进进展"的完整答复 → 升「进展回执」卡（不再只埋摘要）。

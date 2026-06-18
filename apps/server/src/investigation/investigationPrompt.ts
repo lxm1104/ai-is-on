@@ -33,7 +33,8 @@ B) 已能下结论 → action="conclude"：
     "verdict": "resolved | progressed | blocked | unknown",
     "confidence": 0.0-1.0,
     "factSummary": "<查到的关键事实，一两句，给用户看>",
-    "evidence": ["<支撑结论的具体证据：谁在何时说了什么 / 某文档某任务的状态，可带链接>"]
+    "evidence": ["<支撑结论的具体证据：谁在何时说了什么 / 某文档某任务的状态，可带链接>"],
+    "needFromUser": { "kind": "need_credential", "ask": "<一句话告诉用户你具体缺什么>" }
   }
 }
 
@@ -43,15 +44,46 @@ B) 已能下结论 → action="conclude"：
 - 证据要具体可追溯（引用真实消息/任务/文档），不要编。
 - 控制成本：最多查几轮就要 conclude；同一信息别反复查。
 
+needFromUser（可选，**仅当 verdict 是 blocked/unknown 且你明确知道缺哪一件具体的事**才填；说不出具体物就别填，宁可不求助也别把"我也不知道为啥没查到"包装成求助）：
+- "kind" 取一个：need_credential（缺 traceID/日志ID 才能继续追——很多在对方消息里，先自查，找不到才求助）｜need_info（缺一个可命名的关键事实：哪个版本/环境/对方是谁）｜need_decision（信息已齐需用户拍板，必须给 "options":["A","B"] 至少 2 项）｜need_outbound（需用户去发某条飞书消息，公司禁 AI 代发）｜owned_by_other（状态在别人名下、你查不到，须在 ask 里点名是谁）｜tool_gap（某系统你够不到只读入口）。
+- "ask"：一句话、对用户说、点明缺的具体物，例如"要继续追这个 badcase，我需要那条 traceID/日志ID"。
+
 可用的只读工具（只有这些，参数照给）：
 {{TOOLS}}`;
 
 export type ToolCallRequest = { tool: string; params: Record<string, unknown>; why?: string };
+
+// MVP69：AI 卡住时结构化说明"缺哪一件具体的事"——用来升「需要你帮忙」求助卡。仅 blocked/unknown 读。
+export type NeedKind =
+  | 'need_credential' // 缺 traceID/日志ID 才能 run_command 追
+  | 'need_info' // 缺一个可命名的关键事实（哪个版本/环境/对方是谁）
+  | 'need_decision' // 信息已齐，需你拍板（options≥2）
+  | 'need_outbound' // 需对外发飞书消息推进（公司禁 AI 代发）
+  | 'owned_by_other' // 状态在他人名下，list_my_tasks 看不到（须 name 出是谁）
+  | 'tool_gap'; // 某系统 AI 够不到只读入口
+export const NEED_KINDS = new Set<NeedKind>([
+  'need_credential', 'need_info', 'need_decision', 'need_outbound', 'owned_by_other', 'tool_gap',
+]);
+export type NeedFromUser = {
+  kind: NeedKind;
+  ask: string; // 给用户看的一句话："要继续追，我需要那条 traceID"
+  options?: string[]; // 仅 need_decision：拍板选项（长度≥2 才合法）
+};
+/** 升求助卡前置：kind 在枚举 + ask 非空 + kind 专属结构校验（不靠 confidence 单维度——它度量 verdict 把握）。 */
+export function isValidNeedFromUser(n: NeedFromUser | undefined | null): n is NeedFromUser {
+  if (!n || typeof n !== 'object') return false;
+  if (!NEED_KINDS.has(n.kind)) return false;
+  if (typeof n.ask !== 'string' || !n.ask.trim()) return false;
+  if (n.kind === 'need_decision' && !(Array.isArray(n.options) && n.options.length >= 2)) return false;
+  return true;
+}
+
 export type InvestigationConclusion = {
   verdict: 'resolved' | 'progressed' | 'blocked' | 'unknown';
   confidence: number;
   factSummary: string;
   evidence: string[];
+  needFromUser?: NeedFromUser; // MVP69：仅 blocked/unknown 时可能有
 };
 export type InvestigationStep =
   | { action: 'investigate'; reason?: string; toolCalls: ToolCallRequest[] }
@@ -205,6 +237,21 @@ function clamp01(v: unknown): number {
 
 const VERDICTS = new Set(['resolved', 'progressed', 'blocked', 'unknown']);
 
+/** MVP69：防御式解析 needFromUser，非法即降级 undefined（绝不让脏数据穿透到升卡）。 */
+function parseNeedFromUser(raw: unknown): NeedFromUser | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const kind = o.kind as NeedKind;
+  if (!NEED_KINDS.has(kind)) return undefined;
+  const ask = typeof o.ask === 'string' ? o.ask.trim() : '';
+  if (!ask) return undefined;
+  const options = Array.isArray(o.options)
+    ? o.options.filter((x): x is string => typeof x === 'string' && x.trim().length > 0).map((x) => x.trim()).slice(0, 6)
+    : undefined;
+  const n: NeedFromUser = { kind, ask: ask.slice(0, 280), options };
+  return isValidNeedFromUser(n) ? n : undefined;
+}
+
 /** 解析一步；非法或缺字段时按保守降级（解析失败→当作 unknown 结论，由调用方决定）。 */
 export function parseInvestigationStep(text: string): InvestigationStep {
   const obj = extractJson(text);
@@ -220,6 +267,7 @@ export function parseInvestigationStep(text: string): InvestigationStep {
         confidence: clamp01(c.confidence),
         factSummary: typeof c.factSummary === 'string' ? c.factSummary : '',
         evidence: Array.isArray(c.evidence) ? c.evidence.filter((x) => typeof x === 'string') : [],
+        needFromUser: parseNeedFromUser(c.needFromUser), // MVP69：非法/缺失 → undefined，严格向后兼容
       },
     };
   }

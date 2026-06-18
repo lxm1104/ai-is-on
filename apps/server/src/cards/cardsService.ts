@@ -49,6 +49,8 @@ import {
   MATTER_REOPEN_PROPOSAL_PREFIX,
   scheduleMatterResolveVerification,
 } from '../matter/matterVerifyService.js';
+import { MATTER_NEEDHELP_PROPOSAL_PREFIX } from '../matter/matterResolveProposal.js';
+import { kickInvestigation } from '../investigation/investigationKick.js';
 
 export function rowToCard(row: CardRow): SignalCard {
   let actions: CardAction[] = [];
@@ -417,6 +419,46 @@ async function applyAttentionAction(
     // matter_id 可能是 LLM 截断前缀（MVP29D），canonical 化后再操作；解不出 → 按无 matter 卡兜底。
     const fullMatterId = attn.matterId ? matchMatterId(attn.matterId) : null;
 
+    // MVP69：needhelp 求助卡的 mark_done = 用户**补一手信息让 AI 接着查**，不是"已办结"。
+    // 走独立支路：①先置 acted（解 hasLiveMatterProposal skip 门，必须在落证据之前）②把补的内容落成
+    // 挂该 matter 的**外部证据**(origin=card_action，过回声门；effect=no_change，不办结；mergeHint 带时间戳，
+    // 多轮不覆盖) ③kickInvestigation 近实时解封。下一 tick MVP66 看到新外部证据 → 自动带新证据重查。
+    if (attn.inputHash.startsWith(MATTER_NEEDHELP_PROPOSAL_PREFIX)) {
+      const updated = updateAttentionItemStatus(attn.id, 'acted', now);
+      if (!updated) return { ok: false, error: 'update failed' };
+      if (note && fullMatterId) {
+        try {
+          const { unit } = upsertContextUnit({
+            kind: 'action_result',
+            origin: { kind: 'card_action', refId: attn.id }, // ★ 不被 hasNewExternalEvidenceSince 回声门排除
+            title: `补充：${attn.title.slice(0, 60)}`,
+            content: note,
+            scope: 'work',
+            actionability: 'record',
+            confidence: 1,
+            mergeHint: `needhelp-backfill:${attn.id}:${now}:${randomUUID().slice(0, 8)}`, // ★ 唯一键：多轮补位各落新 unit，不互相覆盖（同毫秒也不撞）
+            silent: true,
+          });
+          attachMatterContextLink({
+            matterId: fullMatterId,
+            contextUnitId: unit.id,
+            relation: 'evidence',
+            effect: 'no_change', // ★ 只补证据，绝不办结
+            confidence: 1,
+            reason: '用户应答「需要你帮忙」求助卡补充的信息',
+            now,
+          });
+        } catch (err) {
+          console.warn('[needhelp-backfill] note unit write failed:', err instanceof Error ? err.message : String(err));
+        }
+      }
+      recordAttentionInteraction(attn, 'mark_done', now);
+      kickInvestigation(); // ★ 叶子信号，绕开 cardsService→dispatcher 循环依赖
+      const card = projectAttentionItemToCard(updated);
+      broadcast({ type: 'card_updated', card });
+      return { ok: true, card };
+    }
+
     // ① Matter → resolved（幂等：已 resolved/dropped 跳过，不写重复 transition）
     if (fullMatterId) {
       const m = getMatterById(fullMatterId);
@@ -521,8 +563,10 @@ async function applyAttentionAction(
   const isProgressProposal = attn.inputHash.startsWith('proposal:matter-progress:');
   // MVP67：「你欠的承诺查无跟进」提醒的「不再跟进」=裁决（这事不必再追），不是内容不相关 → 同样豁免。
   const isDanglingProposal = attn.inputHash.startsWith('proposal:matter-dangling:');
+  // MVP69：「需要你帮忙」求助卡的「不用了」=裁决（这件不用我继续追），不是内容不相关 → 同样豁免。
+  const isNeedHelpProposal = attn.inputHash.startsWith(MATTER_NEEDHELP_PROPOSAL_PREFIX);
 
-  if (action.kind === 'dismiss' && (isResolveProposal || isReopenProposal || isProgressProposal || isDanglingProposal)) {
+  if (action.kind === 'dismiss' && (isResolveProposal || isReopenProposal || isProgressProposal || isDanglingProposal || isNeedHelpProposal)) {
     // 提案卡的「还没完 / 确实已完成」≠ 内容不相关：只关卡片，不学 not_relevant 负反馈。
     recordAttentionInteraction(attn, 'dismiss', now);
     // MVP32：重开提案上的「确实已完成」是用户对核实结论的否决——把 verification 改记 user_confirmed。

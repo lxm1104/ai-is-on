@@ -10,16 +10,19 @@
  * 幂等：同事项已有在场同类提案则跳过。办结 > 进展：升办结时顶掉在场进展卡；已有办结时不叠升进展卡。
  */
 import { randomUUID } from 'node:crypto';
-import { db } from '../db.js';
+import { db, countLiveNeedHelpProposals } from '../db.js';
+import { config } from '../config.js';
 import { insertAttentionItem, markAttentionItemsSupersededByHash } from '../attention/attentionStore.js';
 import { broadcast } from '../ws.js';
 import type { Matter } from './matterTypes.js';
 import type { AttentionPriority } from '../attention/attentionTypes.js';
+import type { NeedFromUser } from '../investigation/investigationPrompt.js';
 
 export const MATTER_RESOLVE_PROPOSAL_PREFIX = 'proposal:matter-resolve:';
 export const MATTER_PROGRESS_PROPOSAL_PREFIX = 'proposal:matter-progress:';
 export const MATTER_AUTORESOLVED_PREFIX = 'proposal:matter-autoresolved:'; // MVP55：AI 已主动办结回执（可重开）
 export const MATTER_DANGLING_PROPOSAL_PREFIX = 'proposal:matter-dangling:'; // MVP67：你自己欠的承诺，AI 查无跟进痕迹
+export const MATTER_NEEDHELP_PROPOSAL_PREFIX = 'proposal:matter-needhelp:'; // MVP69：AI 卡住，结构化求助（你补一手→自动接着查）
 
 function hasLiveProposal(prefix: string, matterId: string): boolean {
   return !!db
@@ -106,9 +109,10 @@ export function raiseMatterDanglingCommitmentProposal(
   matter: Matter,
   opts: { ageDays: number; factSummary?: string }
 ): boolean {
-  // 已有办结/进展提案在场 → 不叠（那些是更高信号的结论，别拿"查无跟进"盖过）。
+  // 已有办结/进展/求助提案在场 → 不叠（那些是更高信号的结论，别拿"查无跟进"盖过）。
   if (hasLiveProposal(MATTER_RESOLVE_PROPOSAL_PREFIX, matter.id)) return false;
   if (hasLiveProposal(MATTER_PROGRESS_PROPOSAL_PREFIX, matter.id)) return false;
+  if (hasLiveProposal(MATTER_NEEDHELP_PROPOSAL_PREFIX, matter.id)) return false; // MVP69：needhelp 顶 dangling
   const fact = (opts.factSummary ?? '').trim().slice(0, 140);
   return raiseMatterProposal(matter, {
     prefix: MATTER_DANGLING_PROPOSAL_PREFIX,
@@ -116,6 +120,38 @@ export function raiseMatterDanglingCommitmentProposal(
     title: `待你处理：${matter.title.slice(0, 40)}`,
     why: `这是你欠下的承诺，但 AI 多轮查证后找不到任何跟进痕迹（已约 ${opts.ageDays} 天）。${fact ? `\n排查：${fact}` : ''}\n要不要现在推进，或它其实已不需要了？`,
     suggestedAction: '我来跟进 / 标记办结 / 不再跟进',
+  });
+}
+
+/**
+ * MVP69 — 「需要你帮忙」求助卡。AI 排查到 blocked/unknown 且明确知道缺哪件具体的事（needFromUser）→
+ * 把卡点结构化交给用户：你补一手（贴 traceID / 答一句 / 拍板）→ 回填落成挂该 matter 的外部证据 →
+ * MVP66 下一 tick 自动解封重查，AI 带新证据接着干。互斥：办结优先；needhelp 顶在场的 progress/dangling。
+ */
+export function raiseMatterNeedHelpProposal(
+  matter: Matter,
+  opts: { needFromUser: NeedFromUser; factSummary?: string; evidence?: string[] }
+): boolean {
+  if (hasLiveProposal(MATTER_RESOLVE_PROPOSAL_PREFIX, matter.id)) return false; // 办结已在场，不叠
+  // MVP69 防焦虑闸：已有同事项 needhelp 卡则走幂等更新（kernel 内 hasLiveProposal 拦）；否则受全局上限约束。
+  if (!hasLiveProposal(MATTER_NEEDHELP_PROPOSAL_PREFIX, matter.id) && countLiveNeedHelpProposals() >= config.investigationNeedHelpMaxLive) {
+    return false;
+  }
+  const now = new Date().toISOString();
+  // needhelp > progress/dangling：顶掉在场的进展/查无跟进卡，避免同事项并存多卡。
+  markAttentionItemsSupersededByHash(`${MATTER_PROGRESS_PROPOSAL_PREFIX}${matter.id}`, now);
+  markAttentionItemsSupersededByHash(`${MATTER_DANGLING_PROPOSAL_PREFIX}${matter.id}`, now);
+  const fact = (opts.factSummary ?? '').trim().slice(0, 140);
+  const evLines = (opts.evidence ?? [])
+    .slice(0, 3)
+    .map((e) => `· ${e.trim().slice(0, 120)}`)
+    .filter((l) => l.length > 2);
+  return raiseMatterProposal(matter, {
+    prefix: MATTER_NEEDHELP_PROPOSAL_PREFIX,
+    priority: 'P2', // 低噪：不与催办抢；防焦虑闸另在 writeback 侧把关
+    title: `🙋 需要你：${matter.title.slice(0, 38)}`,
+    why: `${opts.needFromUser.ask.trim()}${fact ? `\n排查：${fact}` : ''}${evLines.length ? '\n证据：\n' + evLines.join('\n') : ''}`,
+    suggestedAction: '补充给我接着查 / 不用了',
   });
 }
 

@@ -2964,11 +2964,22 @@ export function markAttentionItemsSupersededByHash(
  * 返回清理掉的卡数。
  */
 /** MVP42：该 matter 是否已有 live 的办结/进展提案卡（结论已交用户裁决 → 排查不必重查）。 */
+// MVP69 防焦虑闸：当前在场的 needhelp 求助卡数量（超过上限就不再新升，避免一次刷屏）。
+export function countLiveNeedHelpProposals(): number {
+  const r = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM attention_items WHERE status='live' AND input_hash LIKE 'proposal:matter-needhelp:%'`
+    )
+    .get() as { n: number };
+  return r?.n ?? 0;
+}
+
 export function hasLiveMatterProposal(matterId: string): boolean {
   return !!db
     .prepare(
       `SELECT 1 FROM attention_items WHERE status='live' AND matter_id=?
-         AND (input_hash LIKE 'proposal:matter-resolve:%' OR input_hash LIKE 'proposal:matter-progress:%') LIMIT 1`
+         AND (input_hash LIKE 'proposal:matter-resolve:%' OR input_hash LIKE 'proposal:matter-progress:%'
+              OR input_hash LIKE 'proposal:matter-needhelp:%') LIMIT 1`
     )
     .get(matterId);
 }
@@ -3000,16 +3011,19 @@ export function getRecentInvestigationVerdicts(
  * 否则一次工具打嗝会让从没真查过的 matter 被"无新证据"门永久跳过（对抗审查 P0）。重启安全（audit_logs 派生）。
  */
 export function getLastInvestigatedAt(matterId: string): string | null {
+  // MVP69 P0-5：优先取 payload.startedAt（排查**起始**时刻）当 since，覆盖 in-flight 期到达的新证据/回填；
+  // 旧记录无 startedAt → 回落 created_at（排查结束时刻），严格向后兼容。
   const r = db
     .prepare(
-      `SELECT created_at FROM audit_logs
+      `SELECT created_at, json_extract(payload_json,'$.startedAt') AS started_at FROM audit_logs
        WHERE action='investigation_written_back'
          AND json_extract(payload_json,'$.matterId')=?
          AND NOT (json_extract(payload_json,'$.verdict')='unknown' AND json_extract(payload_json,'$.confidence')<=0)
        ORDER BY created_at DESC LIMIT 1`
     )
-    .get(matterId) as { created_at: string } | undefined;
-  return r?.created_at ?? null;
+    .get(matterId) as { created_at: string; started_at: string | null } | undefined;
+  if (!r) return null;
+  return r.started_at ?? r.created_at;
 }
 
 /**

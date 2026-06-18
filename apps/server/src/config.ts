@@ -199,6 +199,11 @@ export const config = {
   investigationDanglingReminderEnabled: envBool('INVESTIGATION_DANGLING_REMINDER_ENABLED', true),
   // 够旧才提醒（避免刚承诺就被催）：默认创建满 3 天（或已过期）才升。
   investigationDanglingMinAgeMs: envInt('INVESTIGATION_DANGLING_MIN_AGE_MS', 259_200_000),
+  // MVP69：AI 卡住→结构化求助卡（needFromUser）。首轮降噪：默认只对 need_credential 升卡（最高 ROI、最具体）。
+  investigationNeedHelpEnabled: envBool('INVESTIGATION_NEEDHELP_ENABLED', true),
+  investigationNeedHelpKinds: envList('INVESTIGATION_NEEDHELP_KINDS', ['need_credential']),
+  // 同一时刻最多浮多少张 needhelp 求助卡（防焦虑闸）。
+  investigationNeedHelpMaxLive: envInt('INVESTIGATION_NEEDHELP_MAX_LIVE', 2),
   // ---------- MVP49 run_command 本地只读命令工具 ----------
   // 自主排查可用的本地只读 CLI 白名单（逗号分隔，可配，不写死命令）。run_command 只放行这些可执行文件。
   // 安全模型见 investigation/runCommand.ts：argv 直 spawn 无 shell + 环境最小化 + 每 CLI 写面护栏 + 路径根限制。

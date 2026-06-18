@@ -116,6 +116,15 @@ export function defaultAttentionActions(item: AttentionItem): CardAction[] {
     ];
   }
 
+  // MVP69：「需要你帮忙」求助卡 —— AI 卡住、明确缺一件具体的事。「补充给 AI」走 mark_done(needhelp 支路)：
+  // 把用户补的内容落成挂该 matter 的外部证据 → MVP66 下一 tick 自动解封重查。「不用了」走 dismiss(豁免负反馈)。
+  if (item.inputHash.startsWith('proposal:matter-needhelp:')) {
+    return [
+      { id: 'mark_done', label: '补充给 AI 接着查', kind: 'mark_done' },
+      { id: 'dismiss', label: '不用了', kind: 'dismiss' },
+    ];
+  }
+
   // MVP67：「你欠的承诺，查无跟进」提醒 —— 你来决定：我处理/办结/不再跟进。
   // 「我来跟进」走 ack（收下、保持跟进），「不再跟进」走 dismiss（卡片消失，MVP66 门防复发）。
   if (item.inputHash.startsWith('proposal:matter-dangling:')) {

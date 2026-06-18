@@ -213,9 +213,12 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
     (id) => isCoolingDown(id, now),
     // 止损（省配额给新事项）：已有 live 提案（结论已交用户）｜近 2 次都死胡同（查不清/解不了）
     // ｜MVP66 上次排查后无新外部证据（对同一份没变的证据反复空查，实测 88% 浪费的元凶）。
+    // MVP69：死胡同退避也要给**新证据逃生门**——否则用户补一手后，isStuckDeadEnd 仍 true 会把它挡死，
+    // 「你补了 AI 接着查」的闭环在 55% unknown 主力场景下不转（与 isCoolingDown 侧的逃生门对称）。
     (id) =>
       hasLiveMatterProposal(id) ||
-      isStuckDeadEnd(getRecentInvestigationVerdicts(id, 3)) ||
+      (isStuckDeadEnd(getRecentInvestigationVerdicts(id, 3)) &&
+        !hasNewExternalEvidenceSince(id, getLastInvestigatedAt(id) ?? '')) ||
       shouldSkipNoNewEvidence(getLastInvestigatedAt(id), (since) => hasNewExternalEvidenceSince(id, since))
   );
   if (!candidate) return false;
@@ -236,7 +239,9 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
       projectProfile: (await resolveProjectProfileForMatter(candidate)) ?? undefined,
     });
     const toolSummary = result.toolLog.map((l) => `${l.tool}:${l.ok ? l.summary : '失败'}`).join('；');
-    const wb = applyInvestigationResult({ matterId: candidate.id, conclusion: result.conclusion, toolSummary });
+    // MVP69 P0-5：把"派发起始时刻"透传给 writeback 写进 audit payload.startedAt，
+    // 让 getLastInvestigatedAt 的 since 用排查**起始**而非结束——覆盖 in-flight 期到达的回填/新证据。
+    const wb = applyInvestigationResult({ matterId: candidate.id, conclusion: result.conclusion, toolSummary, startedAt: new Date(now).toISOString() });
     // MVP51：诊断结论吸纳进「问题类聚合」（case→根因类台账，fire-and-forget，过诊断门才落）
     void ingestConclusion({
       matterId: candidate.id,
