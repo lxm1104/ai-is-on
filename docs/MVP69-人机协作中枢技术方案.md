@@ -1,5 +1,10 @@
 # MVP69 — 「AI 替你做了什么」→ 人机协作中枢 技术方案
 
+> **实现状态（2026-06-18）**：**P0 全部落地 + P1 透明度落地**，全量 752/752 测试过。
+> - P0 闭环（commit 44b900b）：AI 卡住→升「需要你帮忙」求助卡(首轮 need_credential)→用户 inline 补一手→落 card_action 外部证据→MVP66 自动解封重查。**已在真实库经真实 UI 端到端验证**：贴 traceID→卡 acted→证据 unit(effect=no_change 不办结)→has_new=1 下一 tick 自动带新证据重查。8 个 P0 测试覆盖全部审查断点。
+> - P1 透明度（commit 413dbac/c281744）：面板「AI 正在排查：X」脉动条 + 结论置信 chip + 「看 AI 查了哪几步」行内下钻(工具名友好化、失败步不露 CLI 原文)。
+> - 未做（按设计延后）：P1-3 其余 needFromUser kind(need_decision/outbound/owned_by_other) config 门控、默认关，待 need_credential 填充率实测后放宽；P2 系列。
+>
 > 状态：设计定稿（已吸收三轮对抗审查的修订）
 > 落点：apps/server（投查/卡片/db）+ apps/web（AiActivityPanel/SignalCard）
 > 前置：MVP66（无新证据不重查 + 新证据解封）、MVP67（dangling 承诺）、MVP68（AiActivityPanel 自主动作流）
