@@ -846,6 +846,8 @@ export function SignalCardView(props: {
               return null; // 交给行尾 endAsk
             }
             if (a.kind === 'mark_done') {
+              // MVP69：needhelp 求助卡的 mark_done = 把 AI 缺的信息补给它（不是"我办完了"）→ 文案不同。
+              const isNeedHelp = a.label.includes('补充给 AI');
               if (!markDoneOpen) {
                 return (
                   <button
@@ -853,7 +855,7 @@ export function SignalCardView(props: {
                     className="btn btn--card btn--mark_done"
                     onClick={() => setMarkDoneOpen(true)}
                     disabled={!!busy || taskBusy}
-                    title="我已在外部处理完——标记办结、记录处理结果、停掉这类催办"
+                    title={isNeedHelp ? '把 AI 缺的信息补给它（贴 traceID / 答一句），它会自动接着查' : '我已在外部处理完——标记办结、记录处理结果、停掉这类催办'}
                   >
                     {a.label}
                   </button>
@@ -864,7 +866,7 @@ export function SignalCardView(props: {
                   <input
                     type="text"
                     className="card__ask-input"
-                    placeholder="（可选）一句话：怎么处理的？"
+                    placeholder={isNeedHelp ? '贴给 AI：traceID / 一句话答复…（回车提交）' : '（可选）一句话：怎么处理的？'}
                     value={markDoneNote}
                     autoFocus
                     onChange={(e) => setMarkDoneNote(e.target.value)}
