@@ -1155,6 +1155,12 @@ body { background: var(--bg); color: var(--text); }
   border-left: 2px solid var(--accent, #6b8afd);
 }
 .ai-activity__inflight--idle { color: var(--text-dim); background: transparent; border-left-color: var(--border); }
+.ai-activity__trace { margin-top: 4px; }
+.ai-activity__trace-toggle { background: none; border: none; color: var(--accent, #6b8afd); font-size: 11px; cursor: pointer; padding: 2px 0; font-family: inherit; }
+.ai-activity__trace-empty { font-size: 11px; color: var(--text-dim); padding: 2px 0 0 8px; }
+.ai-activity__trace-steps { margin: 4px 0 0; padding-left: 18px; font-size: 11px; color: var(--text-dim); }
+.ai-activity__trace-steps li { margin-bottom: 3px; }
+.ai-activity__trace-tool { color: var(--text); font-weight: 600; }
 .ai-activity__inflight-dot {
   width: 7px; height: 7px; border-radius: 50%; background: var(--accent, #6b8afd);
   animation: ai-pulse 1.2s ease-in-out infinite; flex: 0 0 auto;

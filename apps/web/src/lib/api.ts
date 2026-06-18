@@ -425,6 +425,13 @@ export async function fetchInvestigationTrace(cardId: string): Promise<Investiga
   return (await r.json()).trace ?? null;
 }
 
+// MVP69 P1：按 matterId 取最近一次排查轨迹（活动流行内下钻"AI 查了哪几步"）。
+export async function fetchMatterInvestigationTrace(matterId: string): Promise<InvestigationTrace | null> {
+  const r = await fetch(`/api/matters/${encodeURIComponent(matterId)}/investigation-trace`);
+  if (!r.ok) throw new Error(`trace ${r.status}`);
+  return (await r.json()).trace ?? null;
+}
+
 export async function fetchCollectors(): Promise<CollectorStatus[]> {
   const r = await fetch('/api/collectors');
   if (!r.ok) throw new Error(`collectors ${r.status}`);

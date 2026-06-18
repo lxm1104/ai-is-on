@@ -1,5 +1,28 @@
 import { useEffect, useState } from 'react';
-import { fetchAiActivity, fetchAiActivityNow, type AiActivity, type AiInFlight } from '../lib/api';
+import { fetchAiActivity, fetchAiActivityNow, fetchMatterInvestigationTrace, type AiActivity, type AiInFlight, type InvestigationTrace } from '../lib/api';
+
+// MVP69 P1：把内部工具名映射成用户能懂的说法；**只做术语层**，不展示 run_command 原始命令/路径（防泄漏）。
+const TOOL_LABEL: Record<string, string> = {
+  search_im_messages: '搜飞书消息',
+  im_search: '搜飞书消息',
+  get_chat_history: '看群聊记录',
+  list_my_tasks: '查我的待办',
+  read_doc: '读文档',
+  fetch_doc: '读文档',
+  run_command: '本地查代码/数据',
+};
+function friendlyTool(s: { tool?: string; kind: string }): string {
+  const t = s.tool ?? s.kind;
+  return TOOL_LABEL[t] ?? t;
+}
+// 失败/含 CLI 原文的步骤 summary 不直接展示原始错误（防泄漏内部命令/路径），归一为一句话。
+const LEAK_RE = /lark-cli|exit \d|command not found|traceback|\/Users\/|node_modules|stderr|panic|undefined is not/i;
+function friendlySummary(raw: string): string {
+  const s = (raw || '').trim();
+  if (!s) return '（无结果）';
+  if (s.startsWith('（失败') || LEAK_RE.test(s)) return '（这步没成功，AI 已跳过）';
+  return s.slice(0, 100);
+}
 
 /**
  * MVP68「AI 替你做了什么」——把 AI 自主动作（主动办结 / 自主排查 / 从对话更新事项）做成用户可读的记录流。
@@ -113,11 +136,59 @@ export function AiActivityPanel() {
                   </div>
                   {a.matterTitle && <div className="ai-activity__matter">「{a.matterTitle}」</div>}
                   <div className="ai-activity__detail">{detailOf(a)}</div>
+                  {a.matterId && a.action === 'investigation_written_back' && <TraceExpander matterId={a.matterId} />}
                 </li>
               );
             })}
           </ul>
         </div>
+      )}
+    </div>
+  );
+}
+
+/** MVP69 P1：行内下钻"AI 查了哪几步"——按需拉该 matter 最近一次排查轨迹，友好工具名，不露 CLI 原文。 */
+function TraceExpander({ matterId }: { matterId: string }) {
+  const [open, setOpen] = useState(false);
+  const [trace, setTrace] = useState<InvestigationTrace | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function toggle() {
+    const next = !open;
+    setOpen(next);
+    if (next && !loaded) {
+      setBusy(true);
+      try {
+        setTrace(await fetchMatterInvestigationTrace(matterId));
+      } catch {
+        setTrace(null);
+      } finally {
+        setLoaded(true);
+        setBusy(false);
+      }
+    }
+  }
+
+  const steps = trace?.steps ?? [];
+  return (
+    <div className="ai-activity__trace">
+      <button type="button" className="ai-activity__trace-toggle" onClick={() => void toggle()}>
+        {open ? '▾' : '▸'} {busy ? '加载中…' : open ? '收起排查过程' : '看 AI 查了哪几步'}
+      </button>
+      {open && loaded && (
+        steps.length === 0 ? (
+          <div className="ai-activity__trace-empty">没有这次排查的工具链记录（可能是据已知信息直接判断的）。</div>
+        ) : (
+          <ol className="ai-activity__trace-steps">
+            {steps.map((s) => (
+              <li key={s.order}>
+                <span className="ai-activity__trace-tool">{friendlyTool(s)}</span>
+                <span className="ai-activity__trace-sum"> → {friendlySummary(s.summary)}</span>
+              </li>
+            ))}
+          </ol>
+        )
       )}
     </div>
   );
