@@ -49,7 +49,14 @@ export function CardList(props: {
   onRunOnce: () => Promise<RunOnceResult[]>;
   collectorsHint?: string;
 }) {
-  const open = props.cards.filter((c) => c.status === 'new');
+  // MVP72：「🙋 需要你」求助卡 = AI 卡住、在等你补一手，价值最高 → 置顶，别埋在列表里让你找不到。
+  //  稳定排序：needhelp 优先，其余保持后端原序（优先级+时间）。
+  const isNeedHelp = (c: SignalCard) => (c.title ?? '').startsWith('🙋');
+  const open = props.cards
+    .filter((c) => c.status === 'new')
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => (isNeedHelp(b.c) ? 1 : 0) - (isNeedHelp(a.c) ? 1 : 0) || a.i - b.i)
+    .map((x) => x.c);
   // MVP32：'done'（已处理且事项办结）也进已处理抽屉——带「已完成」pill、「✓已核实」章与撤销入口。
   const processed = props.cards.filter(
     (c) => c.status === 'acknowledged' || c.status === 'snoozed' || c.status === 'done'
