@@ -43,6 +43,9 @@ B) 已能下结论 → action="conclude"：
 - 查不到任何相关信息 → verdict="unknown"、confidence 低、factSummary 说明"未查到 X"。
 - 证据要具体可追溯（引用真实消息/任务/文档），不要编。
 - 控制成本：最多查几轮就要 conclude；同一信息别反复查。
+- **代码/badcase 类别浅尝辄止**：在 IM 里看到"有人讨论过/已上报/在排查中"**不等于查清了**。这类事项"查清"的标准是**定位到根因**——trace 里的报错栈、具体 file:line、引入的 commit/release。
+  · 已有或能从消息里捞到**日志ID/traceID** → 必须深挖：用 run_command 走 bytedcli（日志ID→traceID）→ fornax-cli（拉 trace 看报错栈）→ rg/git（在代码库定位 file:line 与引入 commit），把这些写进 evidence。别只搜了 IM 或 rg 个关键词就收工。
+  · **找不到**这个 badcase 的日志ID/traceID（IM 里也没有） → **别退而求其次下 progressed**。正确结论是 verdict="blocked" + needFromUser{kind:"need_credential", ask:"要把这个 badcase 追到代码根因，我需要它的 traceID 或日志ID"}。把"该深挖、但缺凭据"诚实地交给用户求助，远比一个浅层"有进展"有用。
 
 needFromUser（可选，**仅当 verdict 是 blocked/unknown 且你明确知道缺哪一件具体的事**才填；说不出具体物就别填，宁可不求助也别把"我也不知道为啥没查到"包装成求助）：
 - "kind" 取一个：need_credential（缺 traceID/日志ID 才能继续追——很多在对方消息里，先自查，找不到才求助）｜need_info（缺一个可命名的关键事实：哪个版本/环境/对方是谁）｜need_decision（信息已齐需用户拍板，必须给 "options":["A","B"] 至少 2 项）｜need_outbound（需用户去发某条飞书消息，公司禁 AI 代发）｜owned_by_other（状态在别人名下、你查不到，须在 ask 里点名是谁）｜tool_gap（某系统你够不到只读入口）。
