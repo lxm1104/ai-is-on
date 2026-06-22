@@ -152,8 +152,12 @@ export function raiseMatterNeedHelpProposal(
   if (hasLiveProposal(MATTER_RESOLVE_PROPOSAL_PREFIX, matter.id)) return false; // 办结已在场，不叠
   // MVP71 降噪：被 dismiss 过冷却期内不重升（P0-3，否则升→dismiss→下轮又升）。
   if (blockedByReRaiseCooldown(MATTER_NEEDHELP_PROPOSAL_PREFIX, matter.id)) return false;
-  // 防焦虑闸：已有同事项 needhelp 卡走幂等更新；否则受**合并「待你处理」配额**约束（needhelp+dangling 总数，P0-1）。
-  if (!hasLiveProposal(MATTER_NEEDHELP_PROPOSAL_PREFIX, matter.id) && countLivePendingUserProposals() >= config.investigationNeedHelpMaxLive) {
+  // 防焦虑闸：已占「待你处理」槽位的同事项（needhelp 幂等更新 / dangling 将被 needhelp 升级顶替）豁免配额——
+  // 它不新增 pending 数（下面会 supersede 掉 dangling），净额不变。否则配额满时更具体的 needhelp 无法升级
+  // 同事项已在场的泛 dangling（MVP72 实证：dacd120c 有 dangling，3 槽被 dangling 占满 → 求助卡升不上来）。
+  const alreadyOccupiesPendingSlot =
+    hasLiveProposal(MATTER_NEEDHELP_PROPOSAL_PREFIX, matter.id) || hasLiveProposal(MATTER_DANGLING_PROPOSAL_PREFIX, matter.id);
+  if (!alreadyOccupiesPendingSlot && countLivePendingUserProposals() >= config.investigationNeedHelpMaxLive) {
     return false;
   }
   const now = new Date().toISOString();

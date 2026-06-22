@@ -222,9 +222,28 @@ function resolveNeedFromUser(
 ): NeedFromUser | undefined {
   if (isValidNeedFromUser(c.needFromUser)) return c.needFromUser;
   if (!matter) return undefined;
+  // MVP72：内容信号兜底——AI 在 factSummary 里说自己"缺日志ID/traceID"却没填结构化 needFromUser，
+  // 实体分类器(deriveNeedFromUser)也只认 owned_by_other → 这类"该深挖代码却缺凭据"的 badcase 漏掉。
+  // dacd120c 实证：blocked@0.7 + "未能捞到那两个日志 ID"，既不深挖也不求助。这里从内容识别并合成 need_credential。
+  const credNeed = deriveCredentialNeed(c.verdict, c.confidence, c.factSummary);
+  if (credNeed) return credNeed;
   const selfSet = getSelfEntityIds();
   const entities = buildMatterEntitiesForClassifier(matter.id);
   return deriveNeedFromUser({ verdict: c.verdict, confidence: c.confidence }, { entities, selfSet });
+}
+
+// MVP72：factSummary 里"缺(日志ID/traceID)"的内容信号——「missing 动词 + 凭据名词」近邻匹配。
+// 只挡 missing 语境（已用/已拿到 不命中），下游又是 blocked/unknown + 待审卡，偶发过命中无害。
+const MISSING_CRED_RE = /(?:需要|缺|未|无法|没有|找不到|拿不到)[^。；\n]{0,22}(?:日志\s*ID|日志号|trace\s*?id)/i;
+/** 从结论内容识别"缺日志ID/traceID"→合成 need_credential（LLM 与实体分类器都漏的内容信号）。导出供测试。 */
+export function deriveCredentialNeed(verdict: string, confidence: number, factSummary?: string): NeedFromUser | undefined {
+  if (verdict !== 'blocked' && verdict !== 'unknown') return undefined;
+  if (confidence <= 0) return undefined;
+  if (!MISSING_CRED_RE.test((factSummary || '').trim())) return undefined;
+  return {
+    kind: 'need_credential',
+    ask: '要把这个 badcase 追到代码根因，我需要它的 traceID 或日志ID——你有的话发我，我就用 bytedcli/fornax 拉 trace 接着追。',
+  };
 }
 
 /**

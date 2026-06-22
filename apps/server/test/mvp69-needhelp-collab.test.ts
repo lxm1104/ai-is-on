@@ -174,3 +174,53 @@ test('MVP69 闭环：mark_done needhelp 支路 → acted + card_action 证据(�
   const cardActionUnits = (db.db.prepare(`SELECT cu.content FROM matter_context_links mcl JOIN context_units cu ON cu.id=mcl.context_unit_id WHERE mcl.matter_id=? AND cu.origin_kind='card_action'`).all(m.id) as any[]);
   assert.equal(cardActionUnits.length, 2, '两手补位各落一条，不互相覆盖');
 });
+
+// ============ MVP72：factSummary 内容信号兜底 → need_credential（修代码 badcase 漏求助）============
+test('MVP72 deriveCredentialNeed：blocked + "缺日志ID/traceID" 内容 → 合成 need_credential', async () => {
+  const { deriveCredentialNeed } = await import('../src/investigation/investigationWriteback.js');
+  // dacd120c 实证文案
+  const n = deriveCredentialNeed('blocked', 0.7, '已定位功能层根因，但未能在 IM 中捞到那两个待排查的日志 ID，无法下钻到代码级根因');
+  assert.ok(n, '应合成 need_credential');
+  assert.equal(n!.kind, 'need_credential');
+  // traceID 措辞
+  assert.ok(deriveCredentialNeed('unknown', 0.4, '缺 traceID 无法继续追'));
+  assert.ok(deriveCredentialNeed('blocked', 0.6, '需要这个 badcase 的日志ID才能 fornax 拉 trace'));
+  // 负例：没提缺凭据 → 不合成
+  assert.equal(deriveCredentialNeed('blocked', 0.7, '对方还没回复，等他确认'), undefined);
+  // 负例：已用日志ID追到（positive 语境）→ 不合成
+  assert.equal(deriveCredentialNeed('progressed', 0.7, '已用日志ID追到 file:line'), undefined, 'progressed 不合成');
+  assert.equal(deriveCredentialNeed('blocked', 0, '缺日志ID', ), undefined, 'conf=0 哨兵不合成');
+});
+
+test('MVP72 端到端：blocked 但模型没填 needFromUser + factSummary 说缺日志ID → 升 needhelp 卡', () => {
+  resetDb();
+  const m = mkMatter();
+  // 模型没给 needFromUser（实测常态），但 factSummary 自陈缺日志ID
+  const r = applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'blocked', confidence: 0.7, factSummary: '已定位功能层根因，但未能捞到那两个待排查的日志 ID，无法下钻代码', evidence: ['功能层根因：定时触发不带用户信息'] } });
+  assert.equal(r.proposalRaised, true);
+  assert.ok(liveCard(NEEDHELP, m.id), '内容信号兜底 → 升 needhelp 求助卡');
+  assert.equal(liveCard(PROGRESS, m.id), undefined, '不再退而求其次升 progress');
+});
+
+test('MVP72：同事项已有 dangling 卡 → needhelp 可升级顶替它（不被合并配额挡）', async () => {
+  resetDb();
+  const { insertAttentionItem } = await import('../src/attention/attentionStore.js');
+  // 占满 3 个 pending 槽（dangling，用真实 insert 助手填默认列）
+  const fillers = [mkMatter(), mkMatter(), mkMatter()];
+  for (const f of fillers) {
+    insertAttentionItem({
+      id: randomUUID(), generation: 0, llmRunId: null,
+      inputHash: `proposal:matter-dangling:${f.id}`,
+      llmItem: { priority: 'P2', title: '待你处理', why: 'x', suggestedAction: 'x', signalIds: [], matterId: f.id },
+      now: new Date().toISOString(),
+    });
+  }
+  assert.equal(db.countLivePendingUserProposals(), 3, '3 槽占满');
+  // 其中一件 dangling 的 matter 现在要升 needhelp（更具体）→ 应允许（升级顶替，不被配额挡）
+  const upgradeMatter = fillers[0];
+  const ok = mrp.raiseMatterNeedHelpProposal(ms.getMatterById(upgradeMatter.id)!, { needFromUser: NEED_CRED, factSummary: 'x' });
+  assert.equal(ok, true, '同事项 dangling→needhelp 升级豁免配额');
+  assert.equal(liveCard(NEEDHELP, upgradeMatter.id)?.status, 'live');
+  assert.equal(db.db.prepare(`SELECT status FROM attention_items WHERE input_hash=?`).get(`proposal:matter-dangling:${upgradeMatter.id}`)?.status, 'superseded', 'dangling 被顶替');
+  assert.equal(db.countLivePendingUserProposals(), 3, '净额仍 3（升级不新增）');
+});
