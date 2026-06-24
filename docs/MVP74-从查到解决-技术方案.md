@@ -133,4 +133,9 @@ P0 落地后跑了一轮**实现对抗审查**（4维度×真实代码核实+逐
 - 度量：`producedCount` 改为计**所有** kind 的 matter_artifact_raised（hasTargetRef 降为 code_fix 质量标记，否则漏数 task/decision）；诚实性仍靠 isValidArtifact+evidence≥1 后端校正（非发卡即算）。
 - 15/15 单测（+4 P1-6：多 kind 校验/task_spec 卡/decision_brief 卡/producedCount 计入）。
 
-**实测验证状态（诚实）**：① 交付卡路径（解析降级/后端校正/互斥/不吞求助/独立配额/fall-through/向后兼容）**11/11 单测覆盖**、全套绿；② 前端「🔧产出」档已在 preview 验证渲染；③ **「模型真会填 artifact」的端到端 live 验证受基础设施限制**——debug 同步排查接口在本机 opencode 单并发 gate 拥塞 + 服务端请求截断下多次 HTTP 000/超时（与记忆库"investigation/run 240s/540s 超时"一致），无法同步取证。**结论可信但靠间接证据**：AI 已实测在 bitable-chatbot 跑过37次 run_command+10次 fornax（链路通），prompt 已强约束产出 file:line，解析+升卡+护栏均单测兜住。**持续验证靠后台 dispatcher loop + `producedCount` 度量**（现0，随 loop 排查代码 badcase 应转正），非一次性 live 跑。
+**实测验证状态——端到端已确认（2026-06-24）**：
+① 单测：交付卡全路径（解析降级/后端校正/互斥/不吞求助/独立配额/fall-through/向后兼容/多 kind）**15/15**、全套绿。
+② **真实 badcase 端到端跑通**：对真实 matter 2e48e9fb（middleware 报错 badcase，有 traceID 2fd12…）跑 runInvestigation，AI 输出 **verdict=progressed、conf 0.85、solvability=can_produce_artifact**，并产出 **code_fix artifact：targetRef=`application/chatbot/react/agent.go:546`**、根因（所有 tool error 一律 exitReason="tool_error" 直接 return、未回写 tool_result）、具体改法、verifyCmd。11 次 run_command（rg/git on bitable-chatbot）真读到代码。
+③ **人工核对非幻觉**：bitable-chatbot 的 agent.go:546 **确含** `exitReason = "tool_error"; ... return`（在 `a.tools.Invoke` 出错块内），与 AI 诊断逐字吻合。
+④ **已升真实交付卡 + 度量转正**：把该结论经正常 writeback 升成 live「🔧 修复方案」卡，UI 面板 `🔧 产出` 0→1、「待你处理」+1、活动流显示"替你产出可执行件（code_fix）：修复 agent.go:546…"。
+⑤ 验证用 `OPENCODE_MODEL=glm-5.1`（跳过 glm-5.2 每轮 90s 超时；生产投查本就靠 glm-5.1 fallback 完成，故有代表性）。**"at scale"持续产出**仍受 glm-5.2 吞吐 + 6h/matter 冷却限制（已 spawn_task task_e28a388b 待专门修），但**机制本身已用真实数据 + 可核对的真 fix 证实闭环可行**。
