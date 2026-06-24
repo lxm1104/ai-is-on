@@ -32,7 +32,8 @@ export type AuditAction =
   | 'problem_class_edited'               // MVP51：用户校正问题类（升权威）
   | 'problem_class_approved'
   | 'investigation_clis_edited'          // MVP53：用户在前端改自主排查只读 CLI 白名单
-  | 'matter_auto_resolved';              // MVP55：AI 自主办结（高置信、可逆）——独立审计便于复查
+  | 'matter_auto_resolved'               // MVP55：AI 自主办结（高置信、可逆）——独立审计便于复查
+  | 'matter_artifact_raised';            // MVP74：AI 替你产出修复方案交付件（hasTargetRef 可审）——"已产出件"度量口径
 
 export function writeAudit(input: {
   action: AuditAction;

@@ -34,6 +34,9 @@ function actionMeta(a: AiActivity): ActionMeta {
   switch (a.action) {
     case 'matter_auto_resolved':
       return { icon: '✅', label: '替你办结', isResult: true };
+    case 'matter_artifact_raised':
+      return { icon: '🔧', label: '替你产出修复方案', isResult: true }; // MVP74：真有 file:line 的推进结果
+
     case 'chat_conclusion_written_back':
       return { icon: '💬', label: '从对话替你更新', isResult: true };
     case 'lark_task_created':
@@ -135,6 +138,7 @@ export function AiActivityPanel() {
           {tally && (
             <div className="ai-activity__tally" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', padding: '6px 10px', fontSize: 12 }}>
               <span title="近 7 天 AI 高置信主动办结的事项数">✅ 办结 <b>{tally.resolvedCount}</b></span>
+              <span title="近 7 天 AI 替你产出修复方案（真有 file:line，可一键复制去改）的事项数">🔧 产出 <b>{tally.producedCount}</b></span>
               <span title="近 7 天 AI 自主查到进展的事项数">📈 推进 <b>{tally.progressedCount}</b></span>
               <span title="当前需要你补一手才能接着办的事项数" style={{ color: tally.pendingCount > 0 ? '#b45309' : undefined }}>🙋 待你 <b>{tally.pendingCount}</b></span>
               <span title="近 7 天你已应答的求助/待办卡（人机协作转化）">🤝 已应答 <b>{tally.answeredCount}</b></span>

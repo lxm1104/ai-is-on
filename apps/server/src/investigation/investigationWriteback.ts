@@ -11,8 +11,8 @@ import { upsertContextUnit } from '../context/contextStore.js';
 import type { ContextEntityRef } from '../context/ContextUnit.js';
 import { attachMatterContextLink, getMatterById, saveMatter, listMatterEntities, listMatters } from '../matter/matterStore.js';
 import { userResolveMatter } from '../matter/matterActions.js';
-import { raiseMatterResolveProposal, raiseMatterProgressProposal, raiseMatterAutoResolvedReceipt, raiseMatterDanglingCommitmentProposal, raiseMatterNeedHelpProposal } from '../matter/matterResolveProposal.js';
-import { isValidNeedFromUser, type NeedFromUser } from './investigationPrompt.js';
+import { raiseMatterResolveProposal, raiseMatterProgressProposal, raiseMatterAutoResolvedReceipt, raiseMatterDanglingCommitmentProposal, raiseMatterNeedHelpProposal, raiseMatterArtifactProposal } from '../matter/matterResolveProposal.js';
+import { isValidNeedFromUser, isValidArtifact, type NeedFromUser } from './investigationPrompt.js';
 import { getSelfEntityIds, deriveNeedFromUser, isSelfCommitment } from './needHelpClassifier.js';
 import { scheduleMatterResolveVerification } from '../matter/matterVerifyService.js';
 import { getContextEntityById, getRecentInvestigationVerdicts } from '../db.js';
@@ -164,6 +164,29 @@ export function applyInvestigationResult(input: {
       why: `AI 自主排查发现这件事疑似已完成：${clip(factLine, 100)}。确认后该事项标记为已解决、相关催办卡自动清除。`,
       suggestedAction: '确认办结，或忽略保持跟进',
     });
+  } else if (
+    // MVP74「从查到解决」：AI 自评 can_produce_artifact 且**真定位到代码根因**（artifact 合法 + 有证据兜底）→
+    // 升「修复方案」交付卡（不停在"查到X"）。互斥序 resolve > artifact > needhelp > progress > dangling：
+    // 插在 needhelp 前；进入门比 needhelp 严（强制 targetRef + evidence≥1），缺则落到下面 needhelp/progress，
+    // 绝不吞掉本该求助的 badcase（保护缺 traceID→need_credential 闭环）。verdict 无关（progressed/blocked 皆可）。
+    c.solvability === 'can_produce_artifact' &&
+    isValidArtifact(c.artifact) &&
+    c.evidence.length >= 1 &&
+    config.investigationArtifactEnabled
+  ) {
+    proposalRaised = raiseMatterArtifactProposal(proposalMatter, {
+      artifact: c.artifact,
+      factSummary: factLine,
+      evidence: c.evidence,
+    });
+    if (proposalRaised) {
+      // 诚实可审度量（对抗审查 P0-A）：payload 只落确定性可审字段，"已产出件"档只数 hasTargetRef=true。
+      writeAudit({
+        action: 'matter_artifact_raised',
+        reason: `AI 替你产出修复方案：${clip(c.artifact.title, 80)}（${c.artifact.targetRef.slice(0, 60)}）`,
+        payload: { matterId: matter.id, hasTargetRef: !!c.artifact.targetRef.trim(), artifactKind: c.artifact.kind },
+      });
+    }
   } else if (
     (c.verdict === 'blocked' || c.verdict === 'unknown') &&
     c.confidence >= 0.5 &&

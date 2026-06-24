@@ -2440,6 +2440,7 @@ export type AiActivityRow = {
 };
 const AI_ACTIVITY_ACTIONS = [
   'matter_auto_resolved', // AI 高置信主动办结
+  'matter_artifact_raised', // MVP74：AI 替你产出修复方案交付件（真有 file:line 的推进结果）
   'investigation_written_back', // AI 自主排查写回结论
   'chat_conclusion_written_back', // AI 从对话里替你更新事项
   'lark_task_created', // AI 替你建了飞书任务
@@ -2493,6 +2494,7 @@ export function listAiActivity(limit = 60): AiActivityRow[] {
  */
 export function getAiActivityTally(): {
   resolvedCount: number;
+  producedCount: number;
   progressedCount: number;
   pendingCount: number;
   answeredCount: number;
@@ -2505,18 +2507,25 @@ export function getAiActivityTally(): {
       `SELECT COUNT(DISTINCT json_extract(payload_json,'$.matterId')) AS n FROM audit_logs
        WHERE action='matter_auto_resolved' AND created_at > ?`, since
     ),
+    // MVP74 产出：AI 替你产出"可执行件"（真有 file:line 的修复方案）的 distinct matter。
+    // 诚实口径（对抗审查 P0-A）：只数 hasTargetRef=true，不凭"发了卡"刷高；这是北极星②推进/产出率的分子。
+    producedCount: one(
+      `SELECT COUNT(DISTINCT json_extract(payload_json,'$.matterId')) AS n FROM audit_logs
+       WHERE action='matter_artifact_raised' AND json_extract(payload_json,'$.hasTargetRef')=1 AND created_at > ?`, since
+    ),
     // 推进：AI 自主排查查到 progressed 的 distinct matter（可见进展）
     progressedCount: one(
       `SELECT COUNT(DISTINCT json_extract(payload_json,'$.matterId')) AS n FROM audit_logs
        WHERE action='investigation_written_back' AND json_extract(payload_json,'$.verdict')='progressed' AND created_at > ?`, since
     ),
-    // 待你：当前在场「待你处理」卡（needhelp + dangling）
+    // 待你：当前在场「待你处理」卡（needhelp + dangling + artifact 交付卡）
     pendingCount: countLivePendingUserProposals(),
-    // 你已应答：近 7d 被 acted 的「待你处理」卡（你补了一手 = 闭环转化）
+    // 你已应答：近 7d 被 acted 的「待你处理」卡（你补了一手/改完办结 = 闭环转化）
     answeredCount: one(
       `SELECT COUNT(*) AS n FROM attention_items
        WHERE status='acted' AND updated_at > ?
-         AND (input_hash LIKE 'proposal:matter-needhelp:%' OR input_hash LIKE 'proposal:matter-dangling:%')`, since
+         AND (input_hash LIKE 'proposal:matter-needhelp:%' OR input_hash LIKE 'proposal:matter-dangling:%'
+              OR input_hash LIKE 'proposal:matter-artifact:%')`, since
     ),
   };
 }
@@ -3055,7 +3064,8 @@ export function countLivePendingUserProposals(): number {
     .prepare(
       `SELECT COUNT(*) AS n FROM attention_items
        WHERE status='live'
-         AND (input_hash LIKE 'proposal:matter-needhelp:%' OR input_hash LIKE 'proposal:matter-dangling:%')`
+         AND (input_hash LIKE 'proposal:matter-needhelp:%' OR input_hash LIKE 'proposal:matter-dangling:%'
+              OR input_hash LIKE 'proposal:matter-artifact:%')`
     )
     .get() as { n: number };
   return r?.n ?? 0;
@@ -3084,7 +3094,7 @@ export function hasLiveMatterProposal(matterId: string): boolean {
     .prepare(
       `SELECT 1 FROM attention_items WHERE status='live' AND matter_id=?
          AND (input_hash LIKE 'proposal:matter-resolve:%' OR input_hash LIKE 'proposal:matter-progress:%'
-              OR input_hash LIKE 'proposal:matter-needhelp:%') LIMIT 1`
+              OR input_hash LIKE 'proposal:matter-needhelp:%' OR input_hash LIKE 'proposal:matter-artifact:%') LIMIT 1`
     )
     .get(matterId);
 }
@@ -3306,7 +3316,7 @@ export function markAttentionItemsExpired(
       `UPDATE attention_items
          SET status = 'expired', updated_at = ?
        WHERE status = 'live' AND (
-         created_at < ?
+         (created_at < ? AND input_hash NOT LIKE 'proposal:matter-artifact:%')
          OR (expires_at IS NOT NULL AND expires_at <= ?)
        )`
     )

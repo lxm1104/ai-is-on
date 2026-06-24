@@ -52,6 +52,7 @@ export type CardActionKind =
   | 'ask_agent'
   | 'draft_reply'
   | 'open_source'
+  | 'copy'           // MVP74：纯前端复制卡正文（修复方案 file:line+改法）到剪贴板，不经后端
   | 'mark_done'
   | 'auto_henceforth'
   | 'create_task'    // MVP23 M2：处理角度的结构化执行器，前端路由到建任务通道

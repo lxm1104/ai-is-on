@@ -34,7 +34,9 @@ B) 已能下结论 → action="conclude"：
     "confidence": 0.0-1.0,
     "factSummary": "<查到的关键事实，一两句，给用户看>",
     "evidence": ["<支撑结论的具体证据：谁在何时说了什么 / 某文档某任务的状态，可带链接>"],
-    "needFromUser": { "kind": "need_credential", "ask": "<一句话告诉用户你具体缺什么>" }
+    "solvability": "can_close | can_produce_artifact | need_user | cant",
+    "needFromUser": { "kind": "need_credential", "ask": "<一句话告诉用户你具体缺什么>" },
+    "artifact": { "kind": "code_fix", "title": "...", "rootCause": "一句话根因", "targetRef": "文件:行号(真实定位到的)", "body": "改法草案", "verifyCmd": "验证命令(只读,可选)" }
   }
 }
 
@@ -46,6 +48,8 @@ B) 已能下结论 → action="conclude"：
 - **代码/badcase 类别浅尝辄止**：在 IM 里看到"有人讨论过/已上报/在排查中"**不等于查清了**。这类事项"查清"的标准是**定位到根因**——trace 里的报错栈、具体 file:line、引入的 commit/release。
   · 已有或能从消息里捞到**日志ID/traceID** → 必须深挖：用 run_command 走 bytedcli（日志ID→traceID）→ fornax-cli（拉 trace 看报错栈）→ rg/git（在代码库定位 file:line 与引入 commit），把这些写进 evidence。别只搜了 IM 或 rg 个关键词就收工。
   · **找不到**这个 badcase 的日志ID/traceID（IM 里也没有） → **别退而求其次下 progressed**。正确结论是 verdict="blocked" + needFromUser{kind:"need_credential", ask:"要把这个 badcase 追到代码根因，我需要它的 traceID 或日志ID"}。把"该深挖、但缺凭据"诚实地交给用户求助，远比一个浅层"有进展"有用。
+- **别只查、要往解决推一步**：conclude 时先自评 solvability（你能把这件事解到哪一步）：can_close（你已查到内部可逆且完成的证据，能直接判办结）｜can_produce_artifact（你**已定位到代码根因**、能给出具体修复方案）｜need_user（缺具体物，填 needFromUser）｜cant（够不到）。
+  · 若 **can_produce_artifact**（仅当你真在 trace/代码里定位到了 file:line）→ 填 artifact{kind:"code_fix"}：title 一句话、rootCause 根因、targetRef **真实定位到的 文件:行号**（**严禁编造**，必须是你 rg/读代码看到的）、body 具体改法（改哪里、改成什么、为什么）、verifyCmd 验证命令。**只在你真定位到代码时填**；只是"知道大概在哪个模块"不算，那填 progressed 或 need_user。
 
 needFromUser（可选，**仅当 verdict 是 blocked/unknown 且你明确知道缺哪一件具体的事**才填；说不出具体物就别填，宁可不求助也别把"我也不知道为啥没查到"包装成求助）：
 - "kind" 取一个：need_credential（缺 traceID/日志ID 才能继续追——很多在对方消息里，先自查，找不到才求助）｜need_info（缺一个可命名的关键事实：哪个版本/环境/对方是谁）｜need_decision（信息已齐需用户拍板，必须给 "options":["A","B"] 至少 2 项）｜need_outbound（需用户去发某条飞书消息，公司禁 AI 代发）｜owned_by_other（状态在别人名下、你查不到，须在 ask 里点名是谁）｜tool_gap（某系统你够不到只读入口）。
@@ -81,12 +85,35 @@ export function isValidNeedFromUser(n: NeedFromUser | undefined | null): n is Ne
   return true;
 }
 
+// MVP74：从"查"到"解决"——AI 自评能解到哪一步 + 产出"最推进一步的可执行件"。
+export type Solvability = 'can_close' | 'can_produce_artifact' | 'need_user' | 'cant';
+export type InvestigationArtifact = {
+  kind: 'code_fix'; // P0 只认这一种（代码 badcase 修复方案）
+  title: string;
+  rootCause: string; // 一句话根因
+  targetRef: string; // file:line（必填，多个用分号隔）—— 后端校正硬门，不得编造
+  body: string; // 改法草案（文字版）
+  verifyCmd?: string; // 验证命令（只读）
+};
+/** 升「交付卡」前置硬门：kind 合法 + targetRef 非空（必须是真定位到的 file:line）+ title/rootCause/body 非空。 */
+export function isValidArtifact(a: InvestigationArtifact | undefined | null): a is InvestigationArtifact {
+  if (!a || typeof a !== 'object') return false;
+  if (a.kind !== 'code_fix') return false;
+  if (typeof a.targetRef !== 'string' || !a.targetRef.trim()) return false;
+  if (typeof a.title !== 'string' || !a.title.trim()) return false;
+  if (typeof a.rootCause !== 'string' || !a.rootCause.trim()) return false;
+  if (typeof a.body !== 'string' || !a.body.trim()) return false;
+  return true;
+}
+
 export type InvestigationConclusion = {
   verdict: 'resolved' | 'progressed' | 'blocked' | 'unknown';
   confidence: number;
   factSummary: string;
   evidence: string[];
   needFromUser?: NeedFromUser; // MVP69：仅 blocked/unknown 时可能有
+  solvability?: Solvability; // MVP74：AI 自评能解到哪一步
+  artifact?: InvestigationArtifact; // MVP74：最推进一步的可执行件（仅 can_produce_artifact 时）
 };
 export type InvestigationStep =
   | { action: 'investigate'; reason?: string; toolCalls: ToolCallRequest[] }
@@ -268,6 +295,26 @@ function parseNeedFromUser(raw: unknown): NeedFromUser | undefined {
   return isValidNeedFromUser(n) ? n : undefined;
 }
 
+const SOLVABILITIES = new Set<Solvability>(['can_close', 'can_produce_artifact', 'need_user', 'cant']);
+function parseSolvability(raw: unknown): Solvability | undefined {
+  return typeof raw === 'string' && SOLVABILITIES.has(raw as Solvability) ? (raw as Solvability) : undefined;
+}
+/** MVP74：防御式解析 artifact，非法即降级 undefined（绝不让脏数据穿透到升卡）。 */
+function parseArtifact(raw: unknown): InvestigationArtifact | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const s = (k: string, n: number) => (typeof o[k] === 'string' ? (o[k] as string).trim().slice(0, n) : '');
+  const a: InvestigationArtifact = {
+    kind: 'code_fix',
+    title: s('title', 120),
+    rootCause: s('rootCause', 400),
+    targetRef: s('targetRef', 300),
+    body: s('body', 4000),
+    verifyCmd: s('verifyCmd', 300) || undefined,
+  };
+  return isValidArtifact(a) ? a : undefined;
+}
+
 /** 解析一步；非法或缺字段时按保守降级（解析失败→当作 unknown 结论，由调用方决定）。 */
 export function parseInvestigationStep(text: string): InvestigationStep {
   const obj = extractJson(text);
@@ -284,6 +331,8 @@ export function parseInvestigationStep(text: string): InvestigationStep {
         factSummary: typeof c.factSummary === 'string' ? c.factSummary : '',
         evidence: Array.isArray(c.evidence) ? c.evidence.filter((x) => typeof x === 'string') : [],
         needFromUser: parseNeedFromUser(c.needFromUser), // MVP69：非法/缺失 → undefined，严格向后兼容
+        solvability: parseSolvability(c.solvability), // MVP74
+        artifact: parseArtifact(c.artifact), // MVP74：非法→undefined，绝不脏数据穿透
       },
     };
   }

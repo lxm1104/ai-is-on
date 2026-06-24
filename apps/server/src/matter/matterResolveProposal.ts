@@ -16,13 +16,14 @@ import { insertAttentionItem, markAttentionItemsSupersededByHash } from '../atte
 import { broadcast } from '../ws.js';
 import type { Matter } from './matterTypes.js';
 import type { AttentionPriority } from '../attention/attentionTypes.js';
-import type { NeedFromUser } from '../investigation/investigationPrompt.js';
+import type { NeedFromUser, InvestigationArtifact } from '../investigation/investigationPrompt.js';
 
 export const MATTER_RESOLVE_PROPOSAL_PREFIX = 'proposal:matter-resolve:';
 export const MATTER_PROGRESS_PROPOSAL_PREFIX = 'proposal:matter-progress:';
 export const MATTER_AUTORESOLVED_PREFIX = 'proposal:matter-autoresolved:'; // MVP55：AI 已主动办结回执（可重开）
 export const MATTER_DANGLING_PROPOSAL_PREFIX = 'proposal:matter-dangling:'; // MVP67：你自己欠的承诺，AI 查无跟进痕迹
 export const MATTER_NEEDHELP_PROPOSAL_PREFIX = 'proposal:matter-needhelp:'; // MVP69：AI 卡住，结构化求助（你补一手→自动接着查）
+export const MATTER_ARTIFACT_PROPOSAL_PREFIX = 'proposal:matter-artifact:'; // MVP74：AI 替你定位代码根因，给出修复方案（你一键复制/应用/办结）
 
 function hasLiveProposal(prefix: string, matterId: string): boolean {
   return !!db
@@ -44,7 +45,7 @@ function blockedByReRaiseCooldown(prefix: string, matterId: string, includeActed
 /** 参数化内核：幂等查在场 + insertAttentionItem + broadcast。各提案类型转调它。 */
 function raiseMatterProposal(
   matter: Matter,
-  opts: { prefix: string; priority: AttentionPriority; title: string; why: string; suggestedAction: string }
+  opts: { prefix: string; priority: AttentionPriority; title: string; why: string; suggestedAction: string; expiresAt?: string }
 ): boolean {
   if (matter.status === 'resolved' || matter.status === 'dropped') return false;
   if (hasLiveProposal(opts.prefix, matter.id)) return false;
@@ -60,6 +61,7 @@ function raiseMatterProposal(
       suggestedAction: opts.suggestedAction,
       signalIds: [],
       matterId: matter.id,
+      expiresAt: opts.expiresAt, // MVP74：交付卡设 7 天 TTL（且豁免 24h 兜底扫），高价值不蒸发
     },
     now: new Date().toISOString(),
   });
@@ -175,6 +177,53 @@ export function raiseMatterNeedHelpProposal(
     title: `🙋 需要你：${matter.title.slice(0, 38)}`,
     why: `${opts.needFromUser.ask.trim()}${fact ? `\n排查：${fact}` : ''}${evLines.length ? '\n证据：\n' + evLines.join('\n') : ''}`,
     suggestedAction: '补充给我接着查 / 不用了',
+  });
+}
+
+/**
+ * MVP74 — 「交付提案卡」：AI 已替你定位到代码根因，给出具体修复方案（file:line + 改法 + 验证命令）。
+ * 这是"从查到解决"的核心出口：不再停在"查到X"，而是把最推进一步的可执行件交到你手里，一键复制/办结。
+ * 互斥序 resolve > artifact > needhelp > progress > dangling：办结在场不叠；升起时顶掉同事项的求助/进展/查无跟进卡
+ *（artifact 比它们都更推进）。纳入「待你处理」配额（已占槽位的同事项豁免，允许从 needhelp/dangling 升级）。
+ */
+export function raiseMatterArtifactProposal(
+  matter: Matter,
+  opts: { artifact: InvestigationArtifact; factSummary?: string; evidence?: string[] }
+): boolean {
+  if (hasLiveProposal(MATTER_RESOLVE_PROPOSAL_PREFIX, matter.id)) return false; // 办结已在场，不叠
+  if (blockedByReRaiseCooldown(MATTER_ARTIFACT_PROPOSAL_PREFIX, matter.id)) return false;
+  // 防焦虑闸：已占「待你处理」槽位的同事项（artifact 幂等更新 / 从 needhelp/dangling 升级顶替）豁免配额——
+  // 净 pending 数不增（下面 supersede 掉旧卡）。否则配额满时更推进的交付卡升不上来。
+  const alreadyOccupiesPendingSlot =
+    hasLiveProposal(MATTER_ARTIFACT_PROPOSAL_PREFIX, matter.id) ||
+    hasLiveProposal(MATTER_NEEDHELP_PROPOSAL_PREFIX, matter.id) ||
+    hasLiveProposal(MATTER_DANGLING_PROPOSAL_PREFIX, matter.id);
+  if (!alreadyOccupiesPendingSlot && countLivePendingUserProposals() >= config.investigationNeedHelpMaxLive) {
+    return false;
+  }
+  const now = new Date().toISOString();
+  // artifact > needhelp/progress/dangling：顶掉同事项在场的它们（避免并存多卡；交付件最推进）。
+  markAttentionItemsSupersededByHash(`${MATTER_NEEDHELP_PROPOSAL_PREFIX}${matter.id}`, now);
+  markAttentionItemsSupersededByHash(`${MATTER_PROGRESS_PROPOSAL_PREFIX}${matter.id}`, now);
+  markAttentionItemsSupersededByHash(`${MATTER_DANGLING_PROPOSAL_PREFIX}${matter.id}`, now);
+  const a = opts.artifact;
+  const fact = (opts.factSummary ?? '').trim().slice(0, 120);
+  const why = [
+    'AI 已替你定位到代码根因，给出修复方案（建议你核实后应用，AI 不会自动改代码）：',
+    `📍 位置 ${a.targetRef}`,
+    `🔧 根因 ${a.rootCause}`,
+    `✍️ 改法 ${a.body.slice(0, 600)}`,
+    a.verifyCmd ? `✅ 验证 ${a.verifyCmd}` : '',
+    fact ? `\n排查：${fact}` : '',
+  ].filter((l) => l && l.length > 0).join('\n');
+  return raiseMatterProposal(matter, {
+    prefix: MATTER_ARTIFACT_PROPOSAL_PREFIX,
+    priority: 'P1', // 高价值信号：真有 file:line，置顶露出（别淹没在泛进展里）
+    title: `🔧 修复方案：${matter.title.slice(0, 36)}`,
+    why,
+    suggestedAction: '复制方案去改 / 办结',
+    // 7 天 TTL：高价值交付件不该 24h 蒸发（实测泛进展卡 64% expired），又设有限期避免永占配额槽。
+    expiresAt: new Date(Date.now() + 7 * 86_400_000).toISOString(),
   });
 }
 

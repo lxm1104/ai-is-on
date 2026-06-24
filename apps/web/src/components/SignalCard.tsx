@@ -85,6 +85,7 @@ export function SignalCardView(props: {
   const { card } = props;
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null); // MVP74：复制修复方案的瞬时反馈
   // MVP11.0-b：ask_agent / draft_reply 类 action，用户可输入额外指令覆盖默认 prompt
   const [askPrompts, setAskPrompts] = useState<Record<string, string>>({});
   const [ctxOpen, setCtxOpen] = useState(false);
@@ -296,6 +297,17 @@ export function SignalCardView(props: {
   async function run(actionId: string, kind: string) {
     if (kind === 'open_source' && card.sourceUrl) {
       window.open(card.sourceUrl, '_blank', 'noreferrer');
+      return;
+    }
+    // MVP74：「复制修复方案」纯前端复制卡正文（含 file:line+根因+改法+验证命令），不经后端、不改卡状态。
+    if (kind === 'copy') {
+      try {
+        await navigator.clipboard.writeText(card.reason ?? card.title ?? '');
+        setCopied(actionId);
+        window.setTimeout(() => setCopied((c) => (c === actionId ? null : c)), 1800);
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : '复制失败，请手动选择卡片内容复制');
+      }
       return;
     }
     setBusy(actionId);
@@ -926,9 +938,9 @@ export function SignalCardView(props: {
                 key={a.id}
                 className={`btn btn--card btn--${a.kind} ${a.id === '__reopen' ? 'btn--reopen' : ''}`}
                 onClick={() => run(a.id, a.kind)}
-                disabled={!!busy}
+                disabled={a.kind === 'copy' ? false : !!busy}
               >
-                {busy === a.id ? '…' : a.label}
+                {a.kind === 'copy' && copied === a.id ? '✓ 已复制' : busy === a.id ? '…' : a.label}
               </button>
             );
           };

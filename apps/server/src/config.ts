@@ -202,6 +202,7 @@ export const config = {
   // MVP69/71：AI 卡住→结构化求助卡（needFromUser，LLM 给或确定性兜底推导）。
   // MVP71：默认放 need_credential（贴 traceID 接着查）+ owned_by_other（进展在他人名下，帮你起草去问/你告诉我）。
   investigationNeedHelpEnabled: envBool('INVESTIGATION_NEEDHELP_ENABLED', true),
+  investigationArtifactEnabled: envBool('INVESTIGATION_ARTIFACT_ENABLED', true), // MVP74：从查到解决——升「修复方案」交付卡
   investigationNeedHelpKinds: envList('INVESTIGATION_NEEDHELP_KINDS', ['need_credential', 'owned_by_other']),
   // 「待你处理」合并配额（MVP71 降噪 P0-1）：needhelp + dangling 同时在场总数上限（防 dangling 裸奔无闸）。
   investigationNeedHelpMaxLive: envInt('INVESTIGATION_NEEDHELP_MAX_LIVE', 3),

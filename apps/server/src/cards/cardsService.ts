@@ -569,8 +569,10 @@ async function applyAttentionAction(
   const isDanglingProposal = attn.inputHash.startsWith('proposal:matter-dangling:');
   // MVP69：「需要你帮忙」求助卡的「不用了」=裁决（这件不用我继续追），不是内容不相关 → 同样豁免。
   const isNeedHelpProposal = attn.inputHash.startsWith(MATTER_NEEDHELP_PROPOSAL_PREFIX);
+  // MVP74：「修复方案」交付卡的「继续跟进」=裁决（先不办结/还没改），不是说内容不相关 → 同样豁免。
+  const isArtifactProposal = attn.inputHash.startsWith('proposal:matter-artifact:');
 
-  if (action.kind === 'dismiss' && (isResolveProposal || isReopenProposal || isProgressProposal || isDanglingProposal || isNeedHelpProposal)) {
+  if (action.kind === 'dismiss' && (isResolveProposal || isReopenProposal || isProgressProposal || isDanglingProposal || isNeedHelpProposal || isArtifactProposal)) {
     // 提案卡的「还没完 / 确实已完成」≠ 内容不相关：只关卡片，不学 not_relevant 负反馈。
     recordAttentionInteraction(attn, 'dismiss', now);
     // MVP32：重开提案上的「确实已完成」是用户对核实结论的否决——把 verification 改记 user_confirmed。

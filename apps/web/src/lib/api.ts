@@ -881,6 +881,7 @@ export type AiActivity = {
 // MVP71 支柱D：「AI 帮你完成了多少」近 7 天完成度量盘。
 export type AiActivityTally = {
   resolvedCount: number;
+  producedCount: number; // MVP74：AI 替你产出修复方案（真有 file:line）的事项数
   progressedCount: number;
   pendingCount: number;
   answeredCount: number;
