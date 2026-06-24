@@ -36,7 +36,7 @@ B) 已能下结论 → action="conclude"：
     "evidence": ["<支撑结论的具体证据：谁在何时说了什么 / 某文档某任务的状态，可带链接>"],
     "solvability": "can_close | can_produce_artifact | need_user | cant",
     "needFromUser": { "kind": "need_credential", "ask": "<一句话告诉用户你具体缺什么>" },
-    "artifact": { "kind": "code_fix", "title": "...", "rootCause": "一句话根因", "targetRef": "文件:行号(真实定位到的)", "body": "改法草案", "verifyCmd": "验证命令(只读,可选)" }
+    "artifact": { "kind": "code_fix | task_spec | decision_brief", "title": "...", "body": "主体内容", "rootCause": "(code_fix)根因", "targetRef": "(code_fix)文件:行号", "verifyCmd": "(code_fix)验证命令", "assignee": "(task_spec)建议负责人,可选" }
   }
 }
 
@@ -48,8 +48,12 @@ B) 已能下结论 → action="conclude"：
 - **代码/badcase 类别浅尝辄止**：在 IM 里看到"有人讨论过/已上报/在排查中"**不等于查清了**。这类事项"查清"的标准是**定位到根因**——trace 里的报错栈、具体 file:line、引入的 commit/release。
   · 已有或能从消息里捞到**日志ID/traceID** → 必须深挖：用 run_command 走 bytedcli（日志ID→traceID）→ fornax-cli（拉 trace 看报错栈）→ rg/git（在代码库定位 file:line 与引入 commit），把这些写进 evidence。别只搜了 IM 或 rg 个关键词就收工。
   · **找不到**这个 badcase 的日志ID/traceID（IM 里也没有） → **别退而求其次下 progressed**。正确结论是 verdict="blocked" + needFromUser{kind:"need_credential", ask:"要把这个 badcase 追到代码根因，我需要它的 traceID 或日志ID"}。把"该深挖、但缺凭据"诚实地交给用户求助，远比一个浅层"有进展"有用。
-- **别只查、要往解决推一步**：conclude 时先自评 solvability（你能把这件事解到哪一步）：can_close（你已查到内部可逆且完成的证据，能直接判办结）｜can_produce_artifact（你**已定位到代码根因**、能给出具体修复方案）｜need_user（缺具体物，填 needFromUser）｜cant（够不到）。
-  · 若 **can_produce_artifact**（仅当你真在 trace/代码里定位到了 file:line）→ 填 artifact{kind:"code_fix"}：title 一句话、rootCause 根因、targetRef **真实定位到的 文件:行号**（**严禁编造**，必须是你 rg/读代码看到的）、body 具体改法（改哪里、改成什么、为什么）、verifyCmd 验证命令。**只在你真定位到代码时填**；只是"知道大概在哪个模块"不算，那填 progressed 或 need_user。
+- **别只查、要往解决推一步**：conclude 时先自评 solvability（你能把这件事解到哪一步）：can_close（你已查到内部可逆且完成的证据，能直接判办结）｜can_produce_artifact（你能产出"最推进一步的可执行件"，填 artifact）｜need_user（缺具体物，填 needFromUser）｜cant（够不到）。
+  · **can_produce_artifact** 按事项类型选 artifact.kind（只在你真有料时填，别硬凑）：
+    - **code_fix**（代码 badcase 且你真在 trace/代码里定位到了 file:line）：title 一句话、rootCause 根因、targetRef **真实定位到的 文件:行号**（**严禁编造**，必须是你 rg/读代码看到的）、body 具体改法（改哪里·改成什么·为什么）、verifyCmd 验证命令。只是"知道大概在哪个模块"不算 → 那填 progressed 或 need_user。
+    - **task_spec**（你查到某事**方案已确认采用/已拍板要做，但还没人建任务跟进**，如"TEA 方案已确认采用、要带 LogID 给邓贵羊"）：title=任务名、body=做什么·为什么·验收，assignee 建议负责人(可选)。让用户一键把它建成飞书任务。
+    - **decision_brief**（**决策类**事项，信息已拉齐到能拍板）：title=决策点、body 结构化写【各方立场】【约束】【尚缺】【我的建议】。**不替用户拍板**，只把信息凝成一页让他决。
+    · 共同要求：必须有 evidence 支撑（后端会校正，无证据不升卡）。能 code_fix 就别退而求其次。
 
 needFromUser（可选，**仅当 verdict 是 blocked/unknown 且你明确知道缺哪一件具体的事**才填；说不出具体物就别填，宁可不求助也别把"我也不知道为啥没查到"包装成求助）：
 - "kind" 取一个：need_credential（缺 traceID/日志ID 才能继续追——很多在对方消息里，先自查，找不到才求助）｜need_info（缺一个可命名的关键事实：哪个版本/环境/对方是谁）｜need_decision（信息已齐需用户拍板，必须给 "options":["A","B"] 至少 2 项）｜need_outbound（需用户去发某条飞书消息，公司禁 AI 代发）｜owned_by_other（状态在别人名下、你查不到，须在 ask 里点名是谁）｜tool_gap（某系统你够不到只读入口）。
@@ -87,25 +91,31 @@ export function isValidNeedFromUser(n: NeedFromUser | undefined | null): n is Ne
 
 // MVP74：从"查"到"解决"——AI 自评能解到哪一步 + 产出"最推进一步的可执行件"。
 export type Solvability = 'can_close' | 'can_produce_artifact' | 'need_user' | 'cant';
+// P1-6：交付件不止代码修复——也支持 task_spec（已确认采用X→该建的任务）/ decision_brief（决策类→信息包+建议）。
+export type ArtifactKind = 'code_fix' | 'task_spec' | 'decision_brief';
 export type InvestigationArtifact = {
-  kind: 'code_fix'; // P0 只认这一种（代码 badcase 修复方案）
+  kind: ArtifactKind;
   title: string;
-  rootCause: string; // 一句话根因
-  targetRef: string; // file:line（必填，多个用分号隔）—— 后端校正硬门，不得编造
-  body: string; // 改法草案（文字版）
-  verifyCmd?: string; // 验证命令（只读）
+  body: string; // 通用主体：code_fix=改法草案 / task_spec=任务描述(做什么·为什么) / decision_brief=立场·约束·缺口·建议
+  rootCause?: string; // code_fix：一句话根因
+  targetRef?: string; // code_fix：file:line（必填，多个用分号隔）—— 后端校正硬门，不得编造
+  verifyCmd?: string; // code_fix：验证命令（只读）
+  assignee?: string; // task_spec：建议负责人（可选）
 };
-// 后端校正硬门：targetRef 必须含至少一处真正的 file:line 形态（如 src/foo.ts:42）。
+export const ARTIFACT_KINDS = new Set<ArtifactKind>(['code_fix', 'task_spec', 'decision_brief']);
+// 后端校正硬门：code_fix 的 targetRef 必须含至少一处真正的 file:line 形态（如 src/foo.ts:42）。
 // MVP74 审查 P2：挡住 LLM 自评虚高时编造的"大概在 formula 模块/没行号"这类非定位文本，与 prompt「严禁编造、必须是真定位到的 文件:行号」对齐。
 const FILE_LINE_RE = /[^\s:;]+:\d+/;
-/** 升「交付卡」前置硬门：kind 合法 + targetRef 是真 file:line 形态 + title/rootCause/body 非空。 */
+/** 升「交付卡」前置硬门：kind 合法 + title/body 非空；code_fix 额外要求 targetRef 是真 file:line + rootCause 非空。 */
 export function isValidArtifact(a: InvestigationArtifact | undefined | null): a is InvestigationArtifact {
   if (!a || typeof a !== 'object') return false;
-  if (a.kind !== 'code_fix') return false;
-  if (typeof a.targetRef !== 'string' || !FILE_LINE_RE.test(a.targetRef)) return false;
+  if (!ARTIFACT_KINDS.has(a.kind)) return false;
   if (typeof a.title !== 'string' || !a.title.trim()) return false;
-  if (typeof a.rootCause !== 'string' || !a.rootCause.trim()) return false;
   if (typeof a.body !== 'string' || !a.body.trim()) return false;
+  if (a.kind === 'code_fix') {
+    if (typeof a.targetRef !== 'string' || !FILE_LINE_RE.test(a.targetRef)) return false;
+    if (typeof a.rootCause !== 'string' || !a.rootCause.trim()) return false;
+  }
   return true;
 }
 
@@ -302,18 +312,21 @@ const SOLVABILITIES = new Set<Solvability>(['can_close', 'can_produce_artifact',
 function parseSolvability(raw: unknown): Solvability | undefined {
   return typeof raw === 'string' && SOLVABILITIES.has(raw as Solvability) ? (raw as Solvability) : undefined;
 }
-/** MVP74：防御式解析 artifact，非法即降级 undefined（绝不让脏数据穿透到升卡）。 */
+/** MVP74：防御式解析 artifact，非法即降级 undefined（绝不让脏数据穿透到升卡）。P1-6：多 kind。 */
 function parseArtifact(raw: unknown): InvestigationArtifact | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const o = raw as Record<string, unknown>;
   const s = (k: string, n: number) => (typeof o[k] === 'string' ? (o[k] as string).trim().slice(0, n) : '');
+  const kind = o.kind as ArtifactKind;
+  if (!ARTIFACT_KINDS.has(kind)) return undefined;
   const a: InvestigationArtifact = {
-    kind: 'code_fix',
+    kind,
     title: s('title', 120),
-    rootCause: s('rootCause', 400),
-    targetRef: s('targetRef', 300),
-    body: s('body', 2000), // 与卡正文展示/复制对齐（审查 P2），不留"解析留4000、展示截600"的静默丢尾
+    body: s('body', 2000), // 与卡正文展示/复制对齐（审查 P2），不留"解析留长、展示截短"的静默丢尾
+    rootCause: s('rootCause', 400) || undefined,
+    targetRef: s('targetRef', 300) || undefined,
     verifyCmd: s('verifyCmd', 300) || undefined,
+    assignee: s('assignee', 60) || undefined,
   };
   return isValidArtifact(a) ? a : undefined;
 }

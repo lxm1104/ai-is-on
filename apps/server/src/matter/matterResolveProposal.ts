@@ -206,21 +206,45 @@ export function raiseMatterArtifactProposal(
   markAttentionItemsSupersededByHash(`${MATTER_DANGLING_PROPOSAL_PREFIX}${matter.id}`, now);
   const a = opts.artifact;
   const fact = (opts.factSummary ?? '').trim().slice(0, 120);
-  // MVP74 审查 P2：改法正文与 parse 上限对齐（均 2000），避免复制到的方案被静默截断丢尾部改点。
-  const why = [
-    'AI 已替你定位到代码根因，给出修复方案（建议你核实后应用，AI 不会自动改代码）：',
-    `📍 位置 ${a.targetRef}`,
-    `🔧 根因 ${a.rootCause}`,
-    `✍️ 改法 ${a.body}`,
-    a.verifyCmd ? `✅ 验证 ${a.verifyCmd}` : '',
-    fact ? `\n排查：${fact}` : '',
-  ].filter((l) => l && l.length > 0).join('\n');
+  const factLine = fact ? `\n排查：${fact}` : '';
+  // P1-6：按 kind 渲染卡正文/标题。正文 body 不二次截（已在 parse 对齐 2000 上限，复制无损·审查 P2）。
+  let title: string;
+  let why: string;
+  if (a.kind === 'task_spec') {
+    title = `📋 待建任务：${(a.title || matter.title).slice(0, 36)}`;
+    why = [
+      'AI 查到这件事已拍板要做、但还没人建任务跟进，替你拟好了任务（你来一键建/指派）：',
+      `📋 任务 ${a.title}`,
+      `✍️ 内容 ${a.body}`,
+      a.assignee ? `👤 建议负责人 ${a.assignee}` : '',
+      factLine,
+    ].filter((l) => l && l.length > 0).join('\n');
+  } else if (a.kind === 'decision_brief') {
+    title = `🧭 决策信息包：${(a.title || matter.title).slice(0, 34)}`;
+    why = [
+      'AI 把这个决策点的信息替你拉齐成一页（不替你拍板，你来定）：',
+      `🧭 决策点 ${a.title}`,
+      a.body,
+      factLine,
+    ].filter((l) => l && l.length > 0).join('\n');
+  } else {
+    // code_fix（默认）：审查 P2 已让 body 与 parse 上限对齐，复制无损。
+    title = `🔧 修复方案：${matter.title.slice(0, 36)}`;
+    why = [
+      'AI 已替你定位到代码根因，给出修复方案（建议你核实后应用，AI 不会自动改代码）：',
+      `📍 位置 ${a.targetRef}`,
+      `🔧 根因 ${a.rootCause}`,
+      `✍️ 改法 ${a.body}`,
+      a.verifyCmd ? `✅ 验证 ${a.verifyCmd}` : '',
+      factLine,
+    ].filter((l) => l && l.length > 0).join('\n');
+  }
   return raiseMatterProposal(matter, {
     prefix: MATTER_ARTIFACT_PROPOSAL_PREFIX,
-    priority: 'P1', // 高价值信号：真有 file:line，置顶露出（别淹没在泛进展里）
-    title: `🔧 修复方案：${matter.title.slice(0, 36)}`,
+    priority: 'P1', // 高价值信号：真有可执行件，置顶露出（别淹没在泛进展里）
+    title,
     why,
-    suggestedAction: '复制方案去改 / 办结',
+    suggestedAction: '复制去用 / 办结',
     // 7 天 TTL：高价值交付件不该 24h 蒸发（实测泛进展卡 64% expired），又设有限期避免永占配额槽。
     expiresAt: new Date(Date.now() + 7 * 86_400_000).toISOString(),
   });

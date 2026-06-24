@@ -136,14 +136,15 @@ export function defaultAttentionActions(item: AttentionItem): CardAction[] {
     ];
   }
 
-  // MVP74：「修复方案」交付卡 —— AI 已替你定位代码根因+给出改法（卡正文已含 file:line+改法+验证命令）。
-  // 「复制修复方案」纯前端 clipboard（kind:'copy'，零后端、零 sourceUrl 依赖，不用死的 open_source）；
-  // 「让 AI 起草补丁」走 ask_agent 把改法展开成可应用补丁；「改完了·办结」=matter_resolve；「继续跟进」走 dismiss（豁免负反馈）。
+  // MVP74/P1-6：「交付件」卡 —— AI 产出最推进一步的可执行件（code_fix 修复方案 / task_spec 待建任务 /
+  // decision_brief 决策信息包），卡正文已含全部内容。动作通用于三种 kind：
+  // 「复制」纯前端 clipboard（kind:'copy'，零后端、不用死的 open_source）；「让 AI 接着办」走 ask_agent
+  //（起草补丁/帮建任务/继续拉齐）；「办结」=matter_resolve；「继续跟进」走 dismiss（豁免负反馈）。
   if (item.inputHash.startsWith('proposal:matter-artifact:')) {
     return [
-      { id: 'copy_fix', label: '复制修复方案', kind: 'copy' },
-      { id: 'ask_agent', label: '让 AI 起草补丁', kind: 'ask_agent' },
-      { id: 'matter_resolve', label: '改完了，办结', kind: 'matter_resolve' },
+      { id: 'copy_fix', label: '复制内容', kind: 'copy' },
+      { id: 'ask_agent', label: '让 AI 接着办', kind: 'ask_agent' },
+      { id: 'matter_resolve', label: '办结', kind: 'matter_resolve' },
       { id: 'dismiss', label: '继续跟进', kind: 'dismiss' },
     ];
   }

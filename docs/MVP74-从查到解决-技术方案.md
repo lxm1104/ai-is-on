@@ -124,4 +124,13 @@ P0 落地后跑了一轮**实现对抗审查**（4维度×真实代码核实+逐
 | 5 | P2（不改） | supersede 旧卡在状态门拒绝前发生——继承既有 raiseMatterResolve/NeedHelp 模式、resolved matter 极难到达此处且下 tick 必清，无害 | 不改（既定模式） |
 | 6 | P2（已修） | 交付卡因冷却/配额满没升起时，else-if 链被占→该轮 progressed 不落进展卡（pre-MVP74 会落） | artifact 分支内 fall-through：升不起则落回进展卡兜底 |
 
+## 9. P1-6 扩产出到更多场景（2026-06-24，用户选定方向）
+
+把 artifact 从单一 `code_fix` 扩成 3 kind（`InvestigationArtifact.kind: 'code_fix'|'task_spec'|'decision_brief'`），让 AI 不只在代码 badcase 上推进：
+- **task_spec**：查到"方案已确认采用/已拍板要做、但没人建任务"→产出待建任务（title/body/assignee）→「📋 待建任务」卡。
+- **decision_brief**：决策类事项信息拉齐→产出【立场/约束/缺口/建议】信息包→「🧭 决策信息包」卡（**不替用户拍板**）。
+- 复用 P0 框架：同一 writeback 分支（isValidArtifact 按 kind 校验：code_fix 才要 file:line+rootCause；task/decision 只要 title+body）、同一独立配额/冷却/TTL/supersede、同一卡动作（复制/让AI接着办/办结/继续跟进，**未用未经验证的 create_task 通道**，规避死按钮风险）。
+- 度量：`producedCount` 改为计**所有** kind 的 matter_artifact_raised（hasTargetRef 降为 code_fix 质量标记，否则漏数 task/decision）；诚实性仍靠 isValidArtifact+evidence≥1 后端校正（非发卡即算）。
+- 15/15 单测（+4 P1-6：多 kind 校验/task_spec 卡/decision_brief 卡/producedCount 计入）。
+
 **实测验证状态（诚实）**：① 交付卡路径（解析降级/后端校正/互斥/不吞求助/独立配额/fall-through/向后兼容）**11/11 单测覆盖**、全套绿；② 前端「🔧产出」档已在 preview 验证渲染；③ **「模型真会填 artifact」的端到端 live 验证受基础设施限制**——debug 同步排查接口在本机 opencode 单并发 gate 拥塞 + 服务端请求截断下多次 HTTP 000/超时（与记忆库"investigation/run 240s/540s 超时"一致），无法同步取证。**结论可信但靠间接证据**：AI 已实测在 bitable-chatbot 跑过37次 run_command+10次 fornax（链路通），prompt 已强约束产出 file:line，解析+升卡+护栏均单测兜住。**持续验证靠后台 dispatcher loop + `producedCount` 度量**（现0，随 loop 排查代码 badcase 应转正），非一次性 live 跑。

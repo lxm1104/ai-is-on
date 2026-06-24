@@ -35,7 +35,7 @@ function actionMeta(a: AiActivity): ActionMeta {
     case 'matter_auto_resolved':
       return { icon: '✅', label: '替你办结', isResult: true };
     case 'matter_artifact_raised':
-      return { icon: '🔧', label: '替你产出修复方案', isResult: true }; // MVP74：真有 file:line 的推进结果
+      return { icon: '🔧', label: '替你产出可执行件', isResult: true }; // MVP74/P1-6：修复方案/待建任务/决策信息包
 
     case 'chat_conclusion_written_back':
       return { icon: '💬', label: '从对话替你更新', isResult: true };

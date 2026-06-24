@@ -2507,11 +2507,13 @@ export function getAiActivityTally(): {
       `SELECT COUNT(DISTINCT json_extract(payload_json,'$.matterId')) AS n FROM audit_logs
        WHERE action='matter_auto_resolved' AND created_at > ?`, since
     ),
-    // MVP74 产出：AI 替你产出"可执行件"（真有 file:line 的修复方案）的 distinct matter。
-    // 诚实口径（对抗审查 P0-A）：只数 hasTargetRef=true，不凭"发了卡"刷高；这是北极星②推进/产出率的分子。
+    // MVP74/P1-6 产出：AI 替你产出"可执行件"（code_fix 修复方案 / task_spec 待建任务 / decision_brief 信息包）
+    // 的 distinct matter。诚实口径（对抗审查 P0-A）：每条 matter_artifact_raised 都过了 isValidArtifact+evidence≥1
+    // 后端校正，非"发卡即算"；这是北极星②推进/产出率的分子。（hasTargetRef 仅作 code_fix 质量标记，不再当门槛，
+    // 否则 task_spec/decision_brief 会被漏数。）
     producedCount: one(
       `SELECT COUNT(DISTINCT json_extract(payload_json,'$.matterId')) AS n FROM audit_logs
-       WHERE action='matter_artifact_raised' AND json_extract(payload_json,'$.hasTargetRef')=1 AND created_at > ?`, since
+       WHERE action='matter_artifact_raised' AND created_at > ?`, since
     ),
     // 推进：AI 自主排查查到 progressed 的 distinct matter（可见进展）
     progressedCount: one(

@@ -196,3 +196,45 @@ test('MVP74 审查P2：targetRef 无 file:line 形态（编造"大概在X模块"
   assert.equal(isValidArtifact({ ...goodArtifact, targetRef: 'src/a.ts:42' }), true);
   assert.equal(isValidArtifact({ ...goodArtifact, targetRef: 'a.py:10; b.py:20' }), true, '多个 file:line→true');
 });
+
+// ---- P1-6：扩 task_spec / decision_brief ----
+const taskSpec = { kind: 'task_spec' as const, title: '带 LogID 给邓贵羊', body: '整理本周 badcase 的 LogID 发邓贵羊跟进 TEA 方案', assignee: '我' };
+const decisionBrief = { kind: 'decision_brief' as const, title: '是否含图片引用功能', body: '【立场】A要B不要【约束】排期紧【尚缺】无【建议】本期不做' };
+
+test('P1-6 isValidArtifact：task_spec/decision_brief 不需 targetRef；code_fix 仍需', () => {
+  assert.equal(isValidArtifact(taskSpec), true);
+  assert.equal(isValidArtifact(decisionBrief), true);
+  assert.equal(isValidArtifact({ kind: 'task_spec', title: '', body: 'x' } as any), false, 'title 空→false');
+  assert.equal(isValidArtifact({ kind: 'task_spec', title: 'x', body: '' } as any), false, 'body 空→false');
+  assert.equal(isValidArtifact({ ...taskSpec, kind: 'code_fix' } as any), false, 'code_fix 缺 targetRef→false');
+  assert.equal(isValidArtifact({ kind: 'whatever', title: 'x', body: 'y' } as any), false, '非法 kind→false');
+});
+
+test('P1-6 task_spec → 升「待建任务」卡 + audit artifactKind=task_spec/hasTargetRef=false', () => {
+  resetDb();
+  const m = mkMatter();
+  const r = applyInvestigationResult({ matterId: m.id, conclusion: concl({ solvability: 'can_produce_artifact', artifact: taskSpec }) });
+  assert.equal(r.proposalRaised, true);
+  const card = artifactCard(m.id);
+  assert.match(card!.title, /待建任务/);
+  assert.match(card!.why, /带 LogID/);
+  const audit = JSON.parse((db.db.prepare(`SELECT payload_json FROM audit_logs WHERE action='matter_artifact_raised' LIMIT 1`).get() as any).payload_json);
+  assert.equal(audit.artifactKind, 'task_spec');
+  assert.equal(audit.hasTargetRef, false, 'task_spec 无 file:line');
+});
+
+test('P1-6 decision_brief → 升「决策信息包」卡（不替用户拍板）', () => {
+  resetDb();
+  const m = mkMatter();
+  const r = applyInvestigationResult({ matterId: m.id, conclusion: concl({ solvability: 'can_produce_artifact', artifact: decisionBrief }) });
+  assert.equal(r.proposalRaised, true);
+  assert.match(artifactCard(m.id)!.title, /决策信息包/);
+  assert.match(artifactCard(m.id)!.why, /建议/);
+});
+
+test('P1-6 producedCount 计入 task_spec/decision_brief（无 targetRef 也算真产出）', () => {
+  resetDb();
+  const m1 = mkMatter(); applyInvestigationResult({ matterId: m1.id, conclusion: concl({ solvability: 'can_produce_artifact', artifact: taskSpec }) });
+  const m2 = mkMatter(); applyInvestigationResult({ matterId: m2.id, conclusion: concl({ solvability: 'can_produce_artifact', artifact: decisionBrief }) });
+  assert.equal(db.getAiActivityTally().producedCount, 2, '两个非 code_fix 交付件都计入产出率');
+});

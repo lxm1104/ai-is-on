@@ -180,11 +180,12 @@ export function applyInvestigationResult(input: {
       evidence: c.evidence,
     });
     if (proposalRaised) {
-      // 诚实可审度量（对抗审查 P0-A）：payload 只落确定性可审字段，"已产出件"档只数 hasTargetRef=true。
+      // 诚实可审度量（对抗审查 P0-A）：payload 只落确定性可审字段。hasTargetRef 是 code_fix 质量标记（task_spec/decision_brief 无）。
+      const ref = (c.artifact.targetRef ?? '').trim();
       writeAudit({
         action: 'matter_artifact_raised',
-        reason: `AI 替你产出修复方案：${clip(c.artifact.title, 80)}（${c.artifact.targetRef.slice(0, 60)}）`,
-        payload: { matterId: matter.id, hasTargetRef: !!c.artifact.targetRef.trim(), artifactKind: c.artifact.kind },
+        reason: `AI 替你产出可执行件（${c.artifact.kind}）：${clip(c.artifact.title, 80)}${ref ? `（${ref.slice(0, 60)}）` : ''}`,
+        payload: { matterId: matter.id, hasTargetRef: !!ref, artifactKind: c.artifact.kind },
       });
     } else if ((c.verdict === 'progressed' || c.verdict === 'blocked') && c.confidence >= 0.6) {
       // MVP74 审查 P2：交付卡因冷却/独立配额满没升起 → 别静默吞掉这次结论，落回进展卡兜底
