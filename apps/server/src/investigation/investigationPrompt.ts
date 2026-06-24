@@ -95,11 +95,14 @@ export type InvestigationArtifact = {
   body: string; // 改法草案（文字版）
   verifyCmd?: string; // 验证命令（只读）
 };
-/** 升「交付卡」前置硬门：kind 合法 + targetRef 非空（必须是真定位到的 file:line）+ title/rootCause/body 非空。 */
+// 后端校正硬门：targetRef 必须含至少一处真正的 file:line 形态（如 src/foo.ts:42）。
+// MVP74 审查 P2：挡住 LLM 自评虚高时编造的"大概在 formula 模块/没行号"这类非定位文本，与 prompt「严禁编造、必须是真定位到的 文件:行号」对齐。
+const FILE_LINE_RE = /[^\s:;]+:\d+/;
+/** 升「交付卡」前置硬门：kind 合法 + targetRef 是真 file:line 形态 + title/rootCause/body 非空。 */
 export function isValidArtifact(a: InvestigationArtifact | undefined | null): a is InvestigationArtifact {
   if (!a || typeof a !== 'object') return false;
   if (a.kind !== 'code_fix') return false;
-  if (typeof a.targetRef !== 'string' || !a.targetRef.trim()) return false;
+  if (typeof a.targetRef !== 'string' || !FILE_LINE_RE.test(a.targetRef)) return false;
   if (typeof a.title !== 'string' || !a.title.trim()) return false;
   if (typeof a.rootCause !== 'string' || !a.rootCause.trim()) return false;
   if (typeof a.body !== 'string' || !a.body.trim()) return false;
@@ -309,7 +312,7 @@ function parseArtifact(raw: unknown): InvestigationArtifact | undefined {
     title: s('title', 120),
     rootCause: s('rootCause', 400),
     targetRef: s('targetRef', 300),
-    body: s('body', 4000),
+    body: s('body', 2000), // 与卡正文展示/复制对齐（审查 P2），不留"解析留4000、展示截600"的静默丢尾
     verifyCmd: s('verifyCmd', 300) || undefined,
   };
   return isValidArtifact(a) ? a : undefined;

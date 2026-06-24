@@ -186,6 +186,15 @@ export function applyInvestigationResult(input: {
         reason: `AI 替你产出修复方案：${clip(c.artifact.title, 80)}（${c.artifact.targetRef.slice(0, 60)}）`,
         payload: { matterId: matter.id, hasTargetRef: !!c.artifact.targetRef.trim(), artifactKind: c.artifact.kind },
       });
+    } else if ((c.verdict === 'progressed' || c.verdict === 'blocked') && c.confidence >= 0.6) {
+      // MVP74 审查 P2：交付卡因冷却/独立配额满没升起 → 别静默吞掉这次结论，落回进展卡兜底
+      //（保留 pre-MVP74 行为：有进展就有可认可的回执）。
+      proposalRaised = raiseMatterProgressProposal(proposalMatter, {
+        verdict: c.verdict,
+        factSummary: factLine,
+        evidence: c.evidence,
+        confidence: c.confidence,
+      });
     }
   } else if (
     (c.verdict === 'blocked' || c.verdict === 'unknown') &&

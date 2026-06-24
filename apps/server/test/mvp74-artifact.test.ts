@@ -161,3 +161,38 @@ test('MVP74 向后兼容：solvability 缺失 → 等价今天 verdict 级联（
   assert.ok(prog, '落回进展卡');
   void r;
 });
+
+// ---- 审查 P1：交付卡独立配额，不饿死安全求助 ----
+test('MVP74 审查P1：3张交付卡占满后，第4个matter的求助卡仍能升（artifact独立配额，安全>交付）', () => {
+  resetDb();
+  for (let i = 0; i < 3; i++) {
+    const m = mkMatter();
+    const r = applyInvestigationResult({ matterId: m.id, conclusion: concl({ solvability: 'can_produce_artifact', artifact: goodArtifact }) });
+    assert.equal(r.proposalRaised, true, `第${i + 1}张交付卡应升`);
+  }
+  assert.equal(db.countLiveArtifactProposals(), 3);
+  assert.equal(db.countLivePendingUserProposals(), 0, '安全求助池不被交付卡占用');
+  // 第4个 matter 缺 traceID 求助 → 仍应升 needhelp（pre-fix 会被饿死）
+  const m4 = mkMatter();
+  applyInvestigationResult({ matterId: m4.id, conclusion: { verdict: 'blocked', confidence: 0.6, factSummary: '要追代码根因但拿不到 traceID', evidence: ['IM里没有日志ID'], solvability: 'need_user' } });
+  const help = db.db.prepare(`SELECT 1 FROM attention_items WHERE input_hash=?`).get(`${MATTER_NEEDHELP_PROPOSAL_PREFIX}${m4.id}`);
+  assert.ok(help, '求助卡不被交付卡饿死');
+});
+
+test('MVP74 审查P2：交付卡满独立cap后第4张落回进展卡（fall-through，不静默吞）', () => {
+  resetDb();
+  for (let i = 0; i < 3; i++) { const m = mkMatter(); applyInvestigationResult({ matterId: m.id, conclusion: concl({ solvability: 'can_produce_artifact', artifact: goodArtifact }) }); }
+  const m4 = mkMatter();
+  const r = applyInvestigationResult({ matterId: m4.id, conclusion: concl({ solvability: 'can_produce_artifact', artifact: goodArtifact }) });
+  assert.equal(artifactCard(m4.id), undefined, '第4张交付卡被独立cap挡');
+  const prog = db.db.prepare(`SELECT 1 FROM attention_items WHERE input_hash=?`).get(`${MATTER_PROGRESS_PROPOSAL_PREFIX}${m4.id}`);
+  assert.ok(prog, 'fall-through 到进展卡，不静默吞');
+  assert.equal(r.proposalRaised, true);
+});
+
+test('MVP74 审查P2：targetRef 无 file:line 形态（编造"大概在X模块"）→ isValidArtifact false', () => {
+  assert.equal(isValidArtifact({ ...goodArtifact, targetRef: 'formula 模块大概' }), false, '无行号纯文本→false');
+  assert.equal(isValidArtifact({ ...goodArtifact, targetRef: 'formula.ts' }), false, '只有文件无行号→false');
+  assert.equal(isValidArtifact({ ...goodArtifact, targetRef: 'src/a.ts:42' }), true);
+  assert.equal(isValidArtifact({ ...goodArtifact, targetRef: 'a.py:10; b.py:20' }), true, '多个 file:line→true');
+});

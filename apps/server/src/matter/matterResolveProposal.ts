@@ -10,7 +10,7 @@
  * 幂等：同事项已有在场同类提案则跳过。办结 > 进展：升办结时顶掉在场进展卡；已有办结时不叠升进展卡。
  */
 import { randomUUID } from 'node:crypto';
-import { db, countLivePendingUserProposals, wasProposalRecentlyDismissed } from '../db.js';
+import { db, countLivePendingUserProposals, countLiveArtifactProposals, wasProposalRecentlyDismissed } from '../db.js';
 import { config } from '../config.js';
 import { insertAttentionItem, markAttentionItemsSupersededByHash } from '../attention/attentionStore.js';
 import { broadcast } from '../ws.js';
@@ -192,13 +192,11 @@ export function raiseMatterArtifactProposal(
 ): boolean {
   if (hasLiveProposal(MATTER_RESOLVE_PROPOSAL_PREFIX, matter.id)) return false; // 办结已在场，不叠
   if (blockedByReRaiseCooldown(MATTER_ARTIFACT_PROPOSAL_PREFIX, matter.id)) return false;
-  // 防焦虑闸：已占「待你处理」槽位的同事项（artifact 幂等更新 / 从 needhelp/dangling 升级顶替）豁免配额——
-  // 净 pending 数不增（下面 supersede 掉旧卡）。否则配额满时更推进的交付卡升不上来。
-  const alreadyOccupiesPendingSlot =
-    hasLiveProposal(MATTER_ARTIFACT_PROPOSAL_PREFIX, matter.id) ||
-    hasLiveProposal(MATTER_NEEDHELP_PROPOSAL_PREFIX, matter.id) ||
-    hasLiveProposal(MATTER_DANGLING_PROPOSAL_PREFIX, matter.id);
-  if (!alreadyOccupiesPendingSlot && countLivePendingUserProposals() >= config.investigationNeedHelpMaxLive) {
+  // MVP74 审查 P1：交付卡用**独立**配额（countLiveArtifactProposals + investigationArtifactMaxLive），
+  // 不挤占 needhelp/dangling 安全求助池——否则几张 7 天长寿交付卡会跨 matter 把求助卡饿死。
+  // 同 matter 已有交付卡则幂等更新，豁免配额。
+  const alreadyHasArtifact = hasLiveProposal(MATTER_ARTIFACT_PROPOSAL_PREFIX, matter.id);
+  if (!alreadyHasArtifact && countLiveArtifactProposals() >= config.investigationArtifactMaxLive) {
     return false;
   }
   const now = new Date().toISOString();
@@ -208,11 +206,12 @@ export function raiseMatterArtifactProposal(
   markAttentionItemsSupersededByHash(`${MATTER_DANGLING_PROPOSAL_PREFIX}${matter.id}`, now);
   const a = opts.artifact;
   const fact = (opts.factSummary ?? '').trim().slice(0, 120);
+  // MVP74 审查 P2：改法正文与 parse 上限对齐（均 2000），避免复制到的方案被静默截断丢尾部改点。
   const why = [
     'AI 已替你定位到代码根因，给出修复方案（建议你核实后应用，AI 不会自动改代码）：',
     `📍 位置 ${a.targetRef}`,
     `🔧 根因 ${a.rootCause}`,
-    `✍️ 改法 ${a.body.slice(0, 600)}`,
+    `✍️ 改法 ${a.body}`,
     a.verifyCmd ? `✅ 验证 ${a.verifyCmd}` : '',
     fact ? `\n排查：${fact}` : '',
   ].filter((l) => l && l.length > 0).join('\n');

@@ -110,3 +110,18 @@ reply_draft（复用 previewImReply 只起草不发）、dangling 升级成"我�
 排查 loop/run_command、`raiseMatterProposal` 内核、ask_agent/matter_resolve/dismiss kind、`opt:`+actionOptions 角度通道(P1-6)、autoResolveEligible门+二档核实+可重开、`countLivePendingUserProposals`/冷却/顶替降噪闸、`getAiActivityTally` 骨架、lark task/doc/im 现成动手能力。**唯一真新造**：artifact 字段+parseArtifact+raiseMatterArtifactProposal+前缀+一个卡分支(复制类纯前端)+漏斗 SQL+`matter_artifact_raised` audit。
 
 ## 7. 实现落点（绝对路径）见 workflow 产出（investigationPrompt.ts / investigationWriteback.ts / matterResolveProposal.ts / attentionProjection.ts / db.ts / config.ts / SignalCard.tsx）。
+
+## 8. 实现复盘（P0 落地 + 实现对抗审查，2026-06-24）
+
+P0 落地后跑了一轮**实现对抗审查**（4维度×真实代码核实+逐条对抗验证），确认 6 条真发现，已修关键项（commit 见 git log MVP74）：
+
+| # | 严重度 | 发现 | 修法 |
+|---|---|---|---|
+| 1 | **P1（已修）** | 交付卡7天TTL+豁免24h扫，却与 needhelp/dangling **共享3槽配额** → 3张交付卡跨 matter 把 need_credential 求助卡饿死最长7天，削弱「绝不吞求助」P0 护栏 | 交付卡用**独立配额** `investigationArtifactMaxLive`(默认3) + `countLiveArtifactProposals`；`countLivePendingUserProposals` 还原为 needhelp+dangling（安全池），tally pendingCount=两池相加。回归测试：3交付卡满后第4 matter 求助仍升 |
+| 2 | P2（已修） | 改法 body 卡正文截到600字（parse留4000）→ 复制到的方案静默丢尾部改点 | parse cap 与卡正文对齐到 2000，卡正文不再二次截 body，复制无损 |
+| 3 | P2（已修） | isValidArtifact 只验 targetRef 非空，不验 file:line 形态 → 挡不住编造"大概在X模块" | 加 `FILE_LINE_RE=/[^\s:;]+:\d+/` 硬门，与 prompt「严禁编造」对齐 |
+| 4 | P2（=#2） | 同 #2（第二审查者独立复现） | 同上 |
+| 5 | P2（不改） | supersede 旧卡在状态门拒绝前发生——继承既有 raiseMatterResolve/NeedHelp 模式、resolved matter 极难到达此处且下 tick 必清，无害 | 不改（既定模式） |
+| 6 | P2（已修） | 交付卡因冷却/配额满没升起时，else-if 链被占→该轮 progressed 不落进展卡（pre-MVP74 会落） | artifact 分支内 fall-through：升不起则落回进展卡兜底 |
+
+**实测验证状态（诚实）**：① 交付卡路径（解析降级/后端校正/互斥/不吞求助/独立配额/fall-through/向后兼容）**11/11 单测覆盖**、全套绿；② 前端「🔧产出」档已在 preview 验证渲染；③ **「模型真会填 artifact」的端到端 live 验证受基础设施限制**——debug 同步排查接口在本机 opencode 单并发 gate 拥塞 + 服务端请求截断下多次 HTTP 000/超时（与记忆库"investigation/run 240s/540s 超时"一致），无法同步取证。**结论可信但靠间接证据**：AI 已实测在 bitable-chatbot 跑过37次 run_command+10次 fornax（链路通），prompt 已强约束产出 file:line，解析+升卡+护栏均单测兜住。**持续验证靠后台 dispatcher loop + `producedCount` 度量**（现0，随 loop 排查代码 badcase 应转正），非一次性 live 跑。

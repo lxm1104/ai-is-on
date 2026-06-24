@@ -2518,8 +2518,9 @@ export function getAiActivityTally(): {
       `SELECT COUNT(DISTINCT json_extract(payload_json,'$.matterId')) AS n FROM audit_logs
        WHERE action='investigation_written_back' AND json_extract(payload_json,'$.verdict')='progressed' AND created_at > ?`, since
     ),
-    // 待你：当前在场「待你处理」卡（needhelp + dangling + artifact 交付卡）
-    pendingCount: countLivePendingUserProposals(),
+    // 待你：当前在场「待你处理」卡——展示口径含 artifact（它也要你处理）；
+    // 但配额闸把 artifact 与安全求助池分开计数（审查 P1），故这里显式相加。
+    pendingCount: countLivePendingUserProposals() + countLiveArtifactProposals(),
     // 你已应答：近 7d 被 acted 的「待你处理」卡（你补了一手/改完办结 = 闭环转化）
     answeredCount: one(
       `SELECT COUNT(*) AS n FROM attention_items
@@ -3064,9 +3065,19 @@ export function countLivePendingUserProposals(): number {
     .prepare(
       `SELECT COUNT(*) AS n FROM attention_items
        WHERE status='live'
-         AND (input_hash LIKE 'proposal:matter-needhelp:%' OR input_hash LIKE 'proposal:matter-dangling:%'
-              OR input_hash LIKE 'proposal:matter-artifact:%')`
+         AND (input_hash LIKE 'proposal:matter-needhelp:%' OR input_hash LIKE 'proposal:matter-dangling:%')`
     )
+    .get() as { n: number };
+  return r?.n ?? 0;
+}
+
+/**
+ * MVP74 审查 P1：交付卡(artifact)的**独立**在场计数。它有 7 天 TTL + 豁免 24h 兜底扫，若与上面
+ * needhelp/dangling 安全求助池共享配额，会跨 matter 把 need_credential 求助卡饿死最长 7 天（安全>交付）。
+ */
+export function countLiveArtifactProposals(): number {
+  const r = db
+    .prepare(`SELECT COUNT(*) AS n FROM attention_items WHERE status='live' AND input_hash LIKE 'proposal:matter-artifact:%'`)
     .get() as { n: number };
   return r?.n ?? 0;
 }

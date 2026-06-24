@@ -203,8 +203,12 @@ export const config = {
   // MVP71：默认放 need_credential（贴 traceID 接着查）+ owned_by_other（进展在他人名下，帮你起草去问/你告诉我）。
   investigationNeedHelpEnabled: envBool('INVESTIGATION_NEEDHELP_ENABLED', true),
   investigationArtifactEnabled: envBool('INVESTIGATION_ARTIFACT_ENABLED', true), // MVP74：从查到解决——升「修复方案」交付卡
+  // MVP74 审查 P1：交付卡(7天TTL、豁免24h扫)用**独立**配额，不与下面安全求助池共享——
+  // 否则几张长寿交付卡会跨 matter 饿死 need_credential 求助卡(安全>交付)。
+  investigationArtifactMaxLive: envInt('INVESTIGATION_ARTIFACT_MAX_LIVE', 3),
   investigationNeedHelpKinds: envList('INVESTIGATION_NEEDHELP_KINDS', ['need_credential', 'owned_by_other']),
-  // 「待你处理」合并配额（MVP71 降噪 P0-1）：needhelp + dangling 同时在场总数上限（防 dangling 裸奔无闸）。
+  // 「待你处理」安全求助配额（MVP71 降噪 P0-1）：needhelp + dangling 同时在场总数上限（防 dangling 裸奔无闸）。
+  // MVP74：artifact **不**计入此闸（它有独立 investigationArtifactMaxLive），保证求助永有槽。
   investigationNeedHelpMaxLive: envInt('INVESTIGATION_NEEDHELP_MAX_LIVE', 3),
   // 升过的 needhelp/dangling 被 dismiss 后，多少天内不就同一 matter 同类重升（MVP71 降噪 P0-3 防重复打扰）。
   investigationPendingReRaiseCooldownDays: envInt('INVESTIGATION_PENDING_RERAISE_COOLDOWN_DAYS', 7),
