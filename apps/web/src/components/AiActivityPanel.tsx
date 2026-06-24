@@ -29,22 +29,38 @@ function friendlySummary(raw: string): string {
  * 常驻在待处理区上方（不再埋进 Rules & Audit 技术面板），默认折叠、一键展开。
  */
 
-type ActionMeta = { icon: string; label: string };
+type ActionMeta = { icon: string; label: string; isResult: boolean };
 function actionMeta(a: AiActivity): ActionMeta {
   switch (a.action) {
     case 'matter_auto_resolved':
-      return { icon: '✅', label: '主动办结' };
+      return { icon: '✅', label: '替你办结', isResult: true };
     case 'chat_conclusion_written_back':
-      return { icon: '💬', label: '从对话更新' };
+      return { icon: '💬', label: '从对话替你更新', isResult: true };
+    case 'lark_task_created':
+      return { icon: '☑️', label: '替你建了飞书任务', isResult: true };
+    case 'lark_doc_created':
+      return { icon: '📄', label: '替你建了飞书文档', isResult: true };
+    // MVP73：除排查外的其它 agent 交付物
+    case 'meeting_brief':
+      return { icon: '🤝', label: '会前替你拉齐', isResult: true };
+    case 'meeting_action_items':
+      return { icon: '📋', label: '纪要替你抽待办', isResult: true };
+    case 'daily_digest':
+      return { icon: '🗞', label: '替你做了日报', isResult: true };
+    case 'reminder':
+      return { icon: '⏰', label: '到期提醒', isResult: true };
+    case 'caring_note':
+      return { icon: '💗', label: '关心提醒', isResult: true };
     case 'investigation_written_back':
+      // MVP73：把排查"结果"和"过程"分开标——查到东西的是结果，暂未查到的才是过程。
       switch (a.verdict) {
-        case 'resolved': return { icon: '🔍', label: '排查·疑似已完成' };
-        case 'progressed': return { icon: '🔍', label: '排查·有进展' };
-        case 'blocked': return { icon: '🔍', label: '排查·受阻' };
-        default: return { icon: '🔍', label: '排查·暂未查到' };
+        case 'resolved': return { icon: '✅', label: '排查·疑似已完成', isResult: true };
+        case 'progressed': return { icon: '🔍', label: '替你查清进展', isResult: true };
+        case 'blocked': return { icon: '🔍', label: '查清·暂时受阻', isResult: true };
+        default: return { icon: '🔭', label: '排查·暂未查到', isResult: false };
       }
     default:
-      return { icon: '🤖', label: a.action };
+      return { icon: '🤖', label: a.action, isResult: false };
   }
 }
 
@@ -146,7 +162,7 @@ export function AiActivityPanel() {
             {items.map((a) => {
               const meta = actionMeta(a);
               return (
-                <li key={a.id} className="ai-activity__row">
+                <li key={a.id} className={`ai-activity__row ${meta.isResult ? 'ai-activity__row--result' : 'ai-activity__row--process'}`}>
                   <div className="ai-activity__head">
                     <span className="ai-activity__icon">{meta.icon}</span>
                     <span className="ai-activity__action">{meta.label}</span>

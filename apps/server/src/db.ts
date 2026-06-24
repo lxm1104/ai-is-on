@@ -2442,26 +2442,47 @@ const AI_ACTIVITY_ACTIONS = [
   'matter_auto_resolved', // AI 高置信主动办结
   'investigation_written_back', // AI 自主排查写回结论
   'chat_conclusion_written_back', // AI 从对话里替你更新事项
+  'lark_task_created', // AI 替你建了飞书任务
+  'lark_doc_created', // AI 替你建了飞书文档
+] as const;
+// MVP73：除了排查，AI 还替你做这些（action_proposals 里的 agent 产出）——之前面板只收录排查、
+// 让用户以为"只有排查"。排除 doc_comment_attention（仅"注意到一条评论"、量大噪声、非交付物）。
+const AI_ACTIVITY_PROPOSAL_TYPES = [
+  'meeting_brief', // 会前拉齐
+  'meeting_action_items', // 纪要→待办
+  'daily_digest', // 日报
+  'reminder', // 承诺到期提醒
+  'caring_note', // 关心提醒
+  // 不含 sync_draft：量大且是"待你发的草稿"，用户明确devalue草稿类（MVP68 移除草稿按钮）。
 ] as const;
 export function listAiActivity(limit = 60): AiActivityRow[] {
-  const placeholders = AI_ACTIVITY_ACTIONS.map(() => '?').join(',');
+  const aPlace = AI_ACTIVITY_ACTIONS.map(() => '?').join(',');
+  const pPlace = AI_ACTIVITY_PROPOSAL_TYPES.map(() => '?').join(',');
+  // UNION：① audit_logs 的自主动作（排查/办结/建任务文档）② action_proposals 的 agent 交付物（会前/日报/纪要/草稿/提醒）。
   const rows = db
     .prepare(
-      `SELECT a.id AS id, a.action AS action, a.reason AS reason, a.created_at AS createdAt,
-              json_extract(a.payload_json,'$.matterId') AS matterId,
-              json_extract(a.payload_json,'$.verdict') AS verdict,
-              json_extract(a.payload_json,'$.confidence') AS confidence,
-              m.title AS matterTitle
-       FROM audit_logs a
-       LEFT JOIN matters m ON m.id = json_extract(a.payload_json,'$.matterId')
-       WHERE a.action IN (${placeholders})
-         -- 排除 conf=0 退化哨兵（排查器空转/工具报错，不是真做了事）
-         AND NOT (a.action='investigation_written_back'
-                  AND json_extract(a.payload_json,'$.verdict')='unknown'
-                  AND json_extract(a.payload_json,'$.confidence')<=0)
-       ORDER BY a.created_at DESC LIMIT ?`
+      `SELECT id, action, reason, createdAt, matterId, verdict, confidence, matterTitle FROM (
+         SELECT a.id AS id, a.action AS action, a.reason AS reason, a.created_at AS createdAt,
+                json_extract(a.payload_json,'$.matterId') AS matterId,
+                json_extract(a.payload_json,'$.verdict') AS verdict,
+                json_extract(a.payload_json,'$.confidence') AS confidence,
+                m.title AS matterTitle
+         FROM audit_logs a
+         LEFT JOIN matters m ON m.id = json_extract(a.payload_json,'$.matterId')
+         WHERE a.action IN (${aPlace})
+           AND NOT (a.action='investigation_written_back'
+                    AND json_extract(a.payload_json,'$.verdict')='unknown'
+                    AND json_extract(a.payload_json,'$.confidence')<=0)
+         UNION ALL
+         SELECT p.id AS id, p.proposal_type AS action, p.title AS reason, p.created_at AS createdAt,
+                json_extract(p.payload_json,'$.matterId') AS matterId,
+                NULL AS verdict, NULL AS confidence, NULL AS matterTitle
+         FROM action_proposals p
+         WHERE p.proposal_type IN (${pPlace})
+       )
+       ORDER BY createdAt DESC LIMIT ?`
     )
-    .all(...AI_ACTIVITY_ACTIONS, limit) as AiActivityRow[];
+    .all(...AI_ACTIVITY_ACTIONS, ...AI_ACTIVITY_PROPOSAL_TYPES, limit) as AiActivityRow[];
   return rows;
 }
 

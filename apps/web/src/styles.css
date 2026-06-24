@@ -1140,6 +1140,8 @@ body { background: var(--bg); color: var(--text); }
   border-radius: 4px;
   padding: 6px 8px;
 }
+.ai-activity__row--result { border-left-color: var(--accent, #6b8afd); }
+.ai-activity__row--process { border-left-color: var(--border); opacity: 0.72; }
 .ai-activity__head { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .ai-activity__icon { font-size: 13px; }
 .ai-activity__action { font-weight: 600; color: var(--text); }
