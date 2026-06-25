@@ -56,6 +56,12 @@ export const config = {
     'zai-coding-plan/glm-5.1',
     'zai-coding-plan/glm-5-turbo',
   ]),
+  // 模型熔断（吞吐修复）：某模型连续失败 N 次 → 冷却窗内跳过它、直奔下一个，避免每轮白等 90s 超时
+  // （实测 glm-5.2 简单 prompt 7s 但大 investigation prompt 常 90s 超时，间歇性）。冷却后半开探活一次，成则恢复。
+  // 永不全跳（至少留最后一个兜底）。自适应：健康时仍优先用主模型。
+  opencodeModelCircuitEnabled: envBool('OPENCODE_MODEL_CIRCUIT_ENABLED', true),
+  opencodeModelCircuitThreshold: envInt('OPENCODE_MODEL_CIRCUIT_THRESHOLD', 2),
+  opencodeModelCircuitCooldownMs: envInt('OPENCODE_MODEL_CIRCUIT_COOLDOWN_MS', 120_000),
   opencodeAgentDir: path.resolve(
     REPO_ROOT,
     envStr('OPENCODE_AGENT_DIR', '.opencode/agent')

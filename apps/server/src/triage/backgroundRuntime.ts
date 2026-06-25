@@ -77,6 +77,57 @@ export function getLlmGateStats(): { active: number; queuedHigh: number; queued:
   return gate.stats();
 }
 
+// ───── 模型熔断（吞吐修复）─────
+// 某模型连续失败 N 次 → 冷却窗内跳过它、直奔下一个，避免每轮白等 90s 超时；冷却后半开探活一次，成则恢复。
+// 纯函数（now 注入、状态 module-level），可单测；永不全跳（至少留兜底）。
+type ModelHealth = { fails: number; skipUntil: number };
+const modelHealth = new Map<string, ModelHealth>();
+
+/** 测试用：清空熔断状态。 */
+export function _resetModelCircuit(): void {
+  modelHealth.clear();
+}
+/** 观测用：当前各模型熔断状态快照。 */
+export function getModelCircuitState(): Array<{ model: string; fails: number; skipUntil: number; open: boolean }> {
+  const now = Date.now();
+  return [...modelHealth.entries()].map(([model, h]) => ({ model, fails: h.fails, skipUntil: h.skipUntil, open: h.skipUntil > now }));
+}
+
+function isCircuitOpen(model: string, now: number): boolean {
+  const h = modelHealth.get(model);
+  return !!h && h.skipUntil > now;
+}
+
+/** 选本次实际尝试链：跳过熔断未恢复的模型；保证至少留一个兜底（永不全跳）。 */
+export function selectEffectiveChain(modelChain: string[], now: number): string[] {
+  if (!config.opencodeModelCircuitEnabled || modelChain.length <= 1) return modelChain;
+  const usable = modelChain.filter((m) => !isCircuitOpen(m, now));
+  // 全熔断 → 仍试最后一个（链尾通常是最稳的 turbo 兜底），绝不返回空。
+  return usable.length > 0 ? usable : [modelChain[modelChain.length - 1]];
+}
+
+/** 记录某模型一次结果，更新熔断状态。 */
+export function recordModelResult(model: string, ok: boolean, now: number): void {
+  if (!config.opencodeModelCircuitEnabled) return;
+  const h = modelHealth.get(model) ?? { fails: 0, skipUntil: 0 };
+  if (ok) {
+    if (h.fails > 0 || h.skipUntil > 0) console.log(`[opencode] 模型 ${model} 已恢复，熔断关闭`);
+    modelHealth.set(model, { fails: 0, skipUntil: 0 });
+    return;
+  }
+  h.fails += 1;
+  if (h.fails >= config.opencodeModelCircuitThreshold) {
+    const wasOpen = h.skipUntil > now;
+    h.skipUntil = now + config.opencodeModelCircuitCooldownMs;
+    if (!wasOpen) {
+      console.warn(
+        `[opencode] 模型 ${model} 连续失败 ${h.fails} 次 → 熔断 ${Math.round(config.opencodeModelCircuitCooldownMs / 1000)}s（期间跳过、直接用下一个），到点半开探活`
+      );
+    }
+  }
+  modelHealth.set(model, h);
+}
+
 function runOpencodeOnce(
   userMessage: string,
   agentName: string,
@@ -180,9 +231,11 @@ export async function runOneShot(
   const primaryModel = opts.model ?? config.opencodeModel;
   const fallbackModels = opts.fallbackModels ?? config.opencodeFallbackModels;
   // 按序尝试的模型链：主模型 → 各级 fallback（去重，保持优先级顺序）。
-  const modelChain = [primaryModel, ...fallbackModels].filter(
+  const fullChain = [primaryModel, ...fallbackModels].filter(
     (m, i, arr) => arr.indexOf(m) === i
   );
+  // 熔断：跳过近期连续失败、仍在冷却的模型（避免每轮白等 90s 超时）；永不全跳。
+  const modelChain = selectEffectiveChain(fullChain, Date.now());
 
   const activeGate = gateFor(opts.lane);
   const waitStart = Date.now();
@@ -206,10 +259,13 @@ export async function runOneShot(
     for (let i = 0; i < modelChain.length; i++) {
       const model = modelChain[i];
       try {
-        return withTiming(
+        const r = withTiming(
           await runOpencodeOnce(userMessage, opts.agentName, model, timeoutMs)
         );
+        recordModelResult(model, true, Date.now()); // 成功 → 关闭/重置该模型熔断
+        return r;
       } catch (err) {
+        recordModelResult(model, false, Date.now()); // 失败 → 累计，达阈值则熔断
         const msg = err instanceof Error ? err.message : String(err);
         failures.push(`[${model}]: ${msg}`);
         const next = modelChain[i + 1];

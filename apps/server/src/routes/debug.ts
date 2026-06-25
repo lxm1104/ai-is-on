@@ -5,6 +5,7 @@ import { backfillUnitRouting } from '../bootstrap/backfillUnitRouting.js';
 import { listInducers } from '../structure/inducerRegistry.js';
 import { getMatterById, listMatterEntities } from '../matter/matterStore.js';
 import { runInvestigation } from '../investigation/investigationLoop.js';
+import { getModelCircuitState, getLlmGateStats } from '../triage/backgroundRuntime.js';
 import { applyInvestigationResult } from '../investigation/investigationWriteback.js';
 import { runInvestigationDispatchTick } from '../investigation/investigationDispatcher.js';
 import { captureInvestigationTrace } from '../playbook/playbookCapture.js';
@@ -50,6 +51,19 @@ debugRouter.get('/debug/investigation/status', (_req, res) => {
     tickMs: config.investigationTickMs,
     cooldownMs: config.investigationCooldownMs,
     maxRounds: config.investigationMaxRounds,
+  });
+});
+
+// 吞吐观测：opencode 模型熔断状态 + LLM 闸门排队（看 glm-5.2 是否被熔断跳过、当前用哪个）。
+debugRouter.get('/debug/model-circuit', (_req, res) => {
+  res.json({
+    enabled: config.opencodeModelCircuitEnabled,
+    threshold: config.opencodeModelCircuitThreshold,
+    cooldownMs: config.opencodeModelCircuitCooldownMs,
+    primary: config.opencodeModel,
+    chain: [config.opencodeModel, ...config.opencodeFallbackModels],
+    circuit: getModelCircuitState(),
+    gate: getLlmGateStats(),
   });
 });
 
