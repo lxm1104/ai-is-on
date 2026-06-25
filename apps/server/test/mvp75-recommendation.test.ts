@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto';
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiio-mvp75-'));
 process.env.SQLITE_PATH = path.join(tmpDir, 'test.sqlite');
 process.env.COLLECTOR_ENABLED = 'false';
+process.env.INVESTIGATION_AUTO_PUSH_ENABLED = 'false'; // 单测不真 spawn opencode（只测开会话+硬闸）
 
 const cs = await import('../src/context/contextStore.js');
 const ms = await import('../src/matter/matterStore.js');

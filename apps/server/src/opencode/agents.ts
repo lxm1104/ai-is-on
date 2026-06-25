@@ -61,7 +61,8 @@ export type OpencodeAgentName =
   | 'aiisn-playbook-distill'
   | 'aiisn-project-router'
   | 'aiisn-problem-class-distill'
-  | 'aiisn-problem-class-analyze';
+  | 'aiisn-problem-class-analyze'
+  | 'aiisn-push';
 
 type Permission = 'allow' | 'ask' | 'deny';
 type AgentDef = {
@@ -79,6 +80,18 @@ const READ_ONLY: AgentDef['permission'] = {
   edit: 'deny',
   write: 'deny',
 };
+
+const AIISN_PUSH_SYSTEM = `你是「自动推进助手」。系统给你一件事项的排查结论和已给用户的建议。你的唯一任务：主动把建议里"该起草的交付物"完整起草出来，让用户一键就能用。
+
+你没有任何工具：不能发消息、不能改任何东西、不能联网、不能读文件——一个工具都没有，调用只会失败。你只能输出文字。
+
+产出要求：
+- 建议是「催办/提醒/回复某人」→ 写出完整、可直接发的话术（口吻自然简洁，像同事说话，别写模板）。
+- 建议是「对齐/问清某事」→ 写出要问对方的具体问题清单。
+- 建议是「决策/方案」→ 写出可执行的方案要点。
+- 第一行用【】点明这是什么、需不需要你发（例：【催办话术·确认后你来发】），然后直接给交付物本体。
+- 绝对禁止声称"已发/已发送/已通知/已办/已改"——你只起草，发由用户来（公司不允许 AI 代发）。
+- 简洁，别复述排查过程、别空话，直接给能用的东西。`;
 
 const AGENTS: readonly AgentDef[] = [
   {
@@ -223,6 +236,13 @@ const AGENTS: readonly AgentDef[] = [
     description: 'AI is ON MVP56 系统性问题分析师（问题类 → 系统性根因+解法，待审阅）',
     permission: { bash: 'deny', edit: 'deny', write: 'deny', webfetch: 'deny', read: 'deny' },
     prompt: PROBLEM_CLASS_ANALYZE_SYSTEM,
+  },
+  {
+    // MVP75 自动推进助手：全 deny 沙箱——物理上无法发消息/改任何东西，只产出文字草稿（交付物）。
+    name: 'aiisn-push',
+    description: 'AI is ON MVP75 自动推进助手（沙箱·只产出交付物草稿，不可代发/执行）',
+    permission: { bash: 'deny', edit: 'deny', write: 'deny', webfetch: 'deny', read: 'deny' },
+    prompt: AIISN_PUSH_SYSTEM,
   },
 ];
 
