@@ -18,6 +18,7 @@ import { matchPlaybookForMatter, renderPlaybookForPrompt } from '../playbook/pla
 import { resolveProjectProfileForMatter } from './projectProfile.js';
 import { resolveProjectSpaceDeterministic } from './projectRouter.js';
 import { ingestConclusion, syncClassStatusForResolvedMatter } from '../problemClass/problemClassService.js';
+import { classCompletionImpactOfResolving } from '../problemClass/problemClassStore.js';
 import { onInvestigationKick } from './investigationKick.js';
 import { maybeAlertReadToolHealth } from './readToolHealth.js';
 
@@ -268,8 +269,12 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
       confidence: result.conclusion.confidence,
     })
       .then(() => {
-        // MVP55：若本轮 AI 主动办结了该 matter，且它所属问题类的成员都已办结 → 自动标记该类已修复
-        if (wb.autoResolved) syncClassStatusForResolvedMatter(candidate.id);
+        // MVP55：若本轮 AI 主动办结了该 matter，且它所属问题类的成员都已办结 → 自动标记该类已修复。
+        // 审查 P1-4：闭合 TOCTOU——cascade 跑在 async 段，若此刻并发的兄弟办结让"这次翻牌"变成完成一个**多成员**类
+        //（含他人成员），不自动翻（与 auto-resolve 级联护栏同策略，留人确认），避免绕过护栏静默翻整类。
+        if (wb.autoResolved && !classCompletionImpactOfResolving(candidate.id).willComplete) {
+          syncClassStatusForResolvedMatter(candidate.id);
+        }
       })
       .catch(() => {});
     // 能力二：把"这次怎么查的"落成操作轨迹（纯采集，供后续蒸馏 playbook）

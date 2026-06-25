@@ -221,7 +221,7 @@ test('MVP55 自主办结：resolved 高置信(≥0.85) → matter 办结 + autoR
   const m = mkMatter();
   const r = applyInvestigationResult({
     matterId: m.id,
-    conclusion: { verdict: 'resolved', confidence: 0.9, factSummary: '已确认对方收到评测集', evidence: ['6/13 群里发了并 @ 了对方'] },
+    conclusion: { verdict: 'resolved', confidence: 0.9, solvability: 'can_close', factSummary: '已确认对方收到评测集', evidence: ['6/13 群里发了并 @ 了对方'] },
   });
   assert.equal(r.autoResolved, true);
   assert.equal(ms.getMatterById(m.id)?.status, 'resolved'); // 真办结了
@@ -279,7 +279,7 @@ test('MVP55 护栏：P0 事项即便高置信 resolved 也不自动办（永远�
 
 test('MVP55 透明性：resolved-sweep 不清掉「AI 已主动办结」回执卡（否则自主办结既不可见也无法撤销）', () => {
   const m = mkMatter();
-  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'resolved', confidence: 0.95, factSummary: '对方已确认完成', evidence: ['om_e'] } });
+  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'resolved', confidence: 0.95, solvability: 'can_close', factSummary: '对方已确认完成', evidence: ['om_e'] } });
   assert.equal(cardStatus('proposal:matter-autoresolved:', m.id), 'live', '回执卡已建且 live');
   // matter 此刻 resolved；跑 resolved-sweep（每 tick 都会跑）
   markAttentionSupersededForResolvedMatters(new Date().toISOString());

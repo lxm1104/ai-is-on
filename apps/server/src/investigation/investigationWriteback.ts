@@ -142,6 +142,8 @@ export function applyInvestigationResult(input: {
     c.confidence >= config.investigationAutoResolveMinConfidence &&
     c.evidence.length >= 1 &&
     matter.priority !== 'P0' &&
+    c.solvability === 'can_close' && // 审查 P1-4：可逆性自评作硬门——AI 必须显式判"内部可逆可闭环"才自动办；
+    // 对外/影响他人即便 LLM 误判 verdict=resolved+高置信，缺 can_close 也只降级人确认提案（守住"误判已完成"信任红线）。
     !classImpact.willComplete; // 级联护栏：会翻整问题类 → 不自动办
   if (autoResolveEligible) {
     // MVP55 放权第一档（内部可逆）：高置信 resolved → AI 直接办结（同 userResolveMatter 路径），

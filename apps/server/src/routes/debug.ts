@@ -59,6 +59,7 @@ debugRouter.get('/debug/model-circuit', (_req, res) => {
   res.json({
     enabled: config.opencodeModelCircuitEnabled,
     threshold: config.opencodeModelCircuitThreshold,
+    window: config.opencodeModelCircuitWindow,
     cooldownMs: config.opencodeModelCircuitCooldownMs,
     primary: config.opencodeModel,
     chain: [config.opencodeModel, ...config.opencodeFallbackModels],

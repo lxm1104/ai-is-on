@@ -35,7 +35,7 @@ function addToClass(matterId: string, classId: string) {
   pc.upsertMember({ matterId, spaceId: null, symptomBucket: 'b', diagnosticText: 'd', evidence: [], confidence: 0.8 });
   pc.setMemberAssigned(matterId, classId);
 }
-const resolvedConcl = { verdict: 'resolved' as const, confidence: 0.95, factSummary: '内部动作已完成', evidence: ['已更新文档到位'] };
+const resolvedConcl = { verdict: 'resolved' as const, confidence: 0.95, solvability: 'can_close' as const, factSummary: '内部动作已完成', evidence: ['已更新文档到位'] };
 function resolveProposalCard(matterId: string) {
   return db.db.prepare(`SELECT why FROM attention_items WHERE input_hash=?`).get(`${MATTER_RESOLVE_PROPOSAL_PREFIX}${matterId}`) as { why: string } | undefined;
 }
@@ -88,4 +88,12 @@ test('护栏：不属任何问题类的 resolved 高置信 → 正常自动办�
   const m = mkMatter();
   const r = applyInvestigationResult({ matterId: m.id, conclusion: resolvedConcl });
   assert.equal(r.autoResolved, true);
+});
+
+test('审查P1-4：resolved 高置信但缺 solvability=can_close（疑似对外/AI没自评可逆）→ 不自动办，降级人确认', () => {
+  const m = mkMatter();
+  // 同样的 resolved+0.95+evidence，但没有 can_close 自评（如对外承诺）
+  const r = applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'resolved', confidence: 0.95, factSummary: '对方似乎已收到', evidence: ['群里有人说收到了'] } });
+  assert.equal(r.autoResolved, false, '缺 can_close 硬门 → 不自动办');
+  assert.equal(r.proposalRaised, true, '降级为人确认办结提案');
 });

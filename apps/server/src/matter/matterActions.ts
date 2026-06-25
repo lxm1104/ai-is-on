@@ -58,6 +58,8 @@ function applyStatus(
     resolvedAt: toStatus === 'resolved' ? now : effect === 'reopen' ? null : matter.resolvedAt,
     droppedAt: toStatus === 'dropped' ? now : matter.droppedAt,
     reopenedCount: effect === 'reopen' ? matter.reopenedCount + 1 : matter.reopenedCount,
+    // 审查 P1-4：办结/丢弃的事项不该再留"下一步"（尤其自动办结前会被设成"请确认是否办结"的 stale 文案）。
+    nextAction: toStatus === 'resolved' || toStatus === 'dropped' ? null : matter.nextAction,
   };
   saveMatter(patched);
   recordMatterTransition({
