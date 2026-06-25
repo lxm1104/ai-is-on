@@ -14,6 +14,7 @@ import { userResolveMatter } from '../matter/matterActions.js';
 import { raiseMatterResolveProposal, raiseMatterProgressProposal, raiseMatterAutoResolvedReceipt, raiseMatterDanglingCommitmentProposal, raiseMatterNeedHelpProposal, raiseMatterArtifactProposal, raiseMatterRecommendationProposal } from '../matter/matterResolveProposal.js';
 import { isValidNeedFromUser, isValidArtifact, gradeRecommendation, type NeedFromUser } from './investigationPrompt.js';
 import { classCompletionImpactOfResolving } from '../problemClass/problemClassStore.js';
+import { maybeQueueAutoConversation } from '../chat/chatTopics.js';
 import { getSelfEntityIds, deriveNeedFromUser, isSelfCommitment } from './needHelpClassifier.js';
 import { scheduleMatterResolveVerification } from '../matter/matterVerifyService.js';
 import { getContextEntityById, getRecentInvestigationVerdicts } from '../db.js';
@@ -242,6 +243,8 @@ export function applyInvestigationResult(input: {
         reason: `AI 给你一条建议（${c.recommendation!.stance}）：${clip(c.recommendation!.advice, 80)}`,
         payload: { matterId: matter.id, stance: c.recommendation!.stance },
       });
+      // P1-5：高价值 matter 的达标建议 → 自动在右侧开一条会话（只插消息不起 turn，硬闸把关）。
+      try { maybeQueueAutoConversation(proposalMatter, c.recommendation!, factLine); } catch {}
     } else if ((c.verdict === 'progressed' || c.verdict === 'blocked') && c.confidence >= 0.6) {
       // 配额满/冷却没升起 → 回落进展卡兜底（仿 artifact，别静默吞）。
       proposalRaised = raiseMatterProgressProposal(proposalMatter, {

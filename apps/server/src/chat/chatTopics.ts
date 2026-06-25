@@ -7,9 +7,14 @@ import {
   insertRuntimeMessage,
   listChatTopics,
   updateChatTopic,
+  hasAiPushTopicForMatter,
+  countAiPushTopicsSince,
 } from '../db.js';
 import { recordUserMessage } from '../messageBus.js';
 import { broadcast } from '../ws.js';
+import { config } from '../config.js';
+import type { Matter } from '../matter/matterTypes.js';
+import type { Recommendation } from '../investigation/investigationPrompt.js';
 
 export type ChatTopic = {
   id: string;
@@ -48,6 +53,46 @@ export function toChatTopic(row: ChatTopicRow): ChatTopic {
 
 export function listTopics(limit = 100): ChatTopic[] {
   return listChatTopics(limit).map(toChatTopic);
+}
+
+/**
+ * MVP75 P1-5：自动开会话——**只插一条 AI(assistant)消息，绝不 spawn opencode turn**。
+ * 故：不抢单并发 gate、不跑 aiisn-chat(无 bash、无代发可能)。用户在该会话里回一句 → 才由既有
+ * sendTopicMessage/TopicSession 起 turn（用户在环 + 用户愿意花 gate）。
+ */
+export function postAiMessageToNewTopic(input: { title: string; sourceRefId?: string; text: string }): ChatTopic {
+  const topic = createChatTopic({ title: input.title, sourceKind: 'ai_push', sourceRefId: input.sourceRefId });
+  const now = new Date().toISOString();
+  const msg = { id: randomUUID(), topicId: topic.id, role: 'assistant' as const, text: input.text, createdAt: now };
+  insertRuntimeMessage({ id: msg.id, topic_id: topic.id, role: 'assistant', text: input.text, raw_json: JSON.stringify(msg), created_at: now });
+  updateChatTopic(topic.id, { updated_at: now, last_message_at: now });
+  broadcast({ type: 'message_added', message: msg } as never);
+  broadcast({ type: 'topic_updated', topic: { ...topic, updatedAt: now, lastMessageAt: now } });
+  return topic;
+}
+
+/**
+ * MVP75 P1-5：达标建议 + 高价值 matter → 自动在右侧开一条会话，把"过程+建议+提议接着做"亮给用户。
+ * 硬闸（缺一不可）：总开关 + stance∈{do,escalate,decide} + priority∈{P0,P1} + 同 matter 幂等 + 日配额。
+ * 只插一条 AI 消息、不起 turn（见 postAiMessageToNewTopic）。用户回一句才推进。
+ */
+export function maybeQueueAutoConversation(matter: Matter, rec: Recommendation, factSummary: string): boolean {
+  if (!config.investigationAutoTopicEnabled) return false;
+  if (rec.stance !== 'do' && rec.stance !== 'escalate' && rec.stance !== 'decide') return false;
+  if (matter.priority !== 'P0' && matter.priority !== 'P1') return false;
+  if (hasAiPushTopicForMatter(matter.id)) return false; // 同 matter 只自动开一次
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  if (countAiPushTopicsSince(todayStart.toISOString()) >= config.investigationAutoTopicDailyMax) return false;
+  const text = [
+    `我查到：${factSummary.slice(0, 220)}`,
+    `\n💡 我的建议：${rec.advice}（因为 ${rec.because}）`,
+    rec.nextStep
+      ? `\n要不要我接着帮你做（只读/起草，绝不对外发）：${rec.nextStep}？回我一句就行。`
+      : `\n要不要我接着帮你推进？回我一句就行。`,
+  ].join('\n');
+  postAiMessageToNewTopic({ title: `AI 推进：${matter.title.slice(0, 36)}`, sourceRefId: matter.id, text });
+  return true;
 }
 
 export function createChatTopic(input: {

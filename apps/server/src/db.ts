@@ -1125,6 +1125,14 @@ export function insertChatTopic(row: ChatTopicRow) {
   ).run(row);
 }
 
+// MVP75 P1-5 自动开会话的两道 DB 闸（持久化，tsx watch 重启不归零）。
+export function hasAiPushTopicForMatter(matterId: string): boolean {
+  return !!db.prepare(`SELECT 1 FROM chat_topics WHERE source_kind='ai_push' AND source_ref_id=? LIMIT 1`).get(matterId);
+}
+export function countAiPushTopicsSince(sinceIso: string): number {
+  return (db.prepare(`SELECT COUNT(*) AS n FROM chat_topics WHERE source_kind='ai_push' AND created_at >= ?`).get(sinceIso) as { n: number } | undefined)?.n ?? 0;
+}
+
 export function getChatTopic(id: string): ChatTopicRow | null {
   return (
     (db.prepare(`SELECT * FROM chat_topics WHERE id = ?`).get(id) as

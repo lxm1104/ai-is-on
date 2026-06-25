@@ -118,3 +118,35 @@ test('MVP75 向后兼容：无 recommendation → 等价今天（progressed 升�
   assert.equal(recoCard(m.id), undefined);
   assert.ok(db.db.prepare(`SELECT 1 FROM attention_items WHERE input_hash=?`).get(`${MATTER_PROGRESS_PROPOSAL_PREFIX}${m.id}`));
 });
+
+// ---- P1-5：自动开会话（只插消息、不起 turn） ----
+const { maybeQueueAutoConversation } = await import('../src/chat/chatTopics.js');
+const doReco = { stance: 'do' as const, advice: '催丘晓骁把图片预览落地，是阻塞评审收尾的关键项', because: '评审日报显示该项仍在丘晓骁名下未修复超10天', nextStep: '我可起草催办待你发' };
+function clearChat() { db.db.exec(`DELETE FROM chat_topics; DELETE FROM runtime_messages;`); }
+function mkP1Matter() { const m = mkMatter(); db.db.prepare(`UPDATE matters SET priority='P1' WHERE id=?`).run(m.id); return { ...m, priority: 'P1' as const }; }
+
+test('MVP75 P1-5：达标建议+P1 matter → 自动开会话（只插 assistant 消息，不起 turn）', () => {
+  resetDb(); clearChat();
+  const m = mkP1Matter();
+  assert.equal(maybeQueueAutoConversation(m as any, doReco, '评审仍在进行，图片预览项未修复'), true);
+  const topic = db.db.prepare(`SELECT * FROM chat_topics WHERE source_kind='ai_push' AND source_ref_id=?`).get(m.id) as any;
+  assert.ok(topic, '建了 ai_push topic');
+  assert.equal(topic.opencode_session_id, null, '没起 turn（无 opencode session）');
+  const msg = db.db.prepare(`SELECT * FROM runtime_messages WHERE topic_id=?`).get(topic.id) as any;
+  assert.equal(msg.role, 'assistant', '只插一条 assistant 消息');
+  assert.match(msg.text, /我的建议/);
+});
+
+test('MVP75 P1-5：同 matter 幂等 + 日配额满 + wait/P2 不开', () => {
+  resetDb(); clearChat();
+  const m = mkP1Matter();
+  assert.equal(maybeQueueAutoConversation(m as any, doReco, 'x'), true);
+  assert.equal(maybeQueueAutoConversation(m as any, doReco, 'x'), false, '同 matter 不重复开');
+  // 日配额：已开 1（上面），再开 1 到上限 2，第 3 个被挡
+  assert.equal(maybeQueueAutoConversation(mkP1Matter() as any, doReco, 'x'), true);
+  assert.equal(maybeQueueAutoConversation(mkP1Matter() as any, doReco, 'x'), false, '日配额(2)满 → 不开');
+  clearChat();
+  assert.equal(maybeQueueAutoConversation(mkP1Matter() as any, { ...doReco, stance: 'wait' }, 'x'), false, 'wait 建议不开');
+  const m2 = mkMatter(); db.db.prepare(`UPDATE matters SET priority='P2' WHERE id=?`).run(m2.id);
+  assert.equal(maybeQueueAutoConversation({ ...m2, priority: 'P2' } as any, doReco, 'x'), false, 'P2 matter 不开');
+});

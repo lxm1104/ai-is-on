@@ -215,7 +215,7 @@ export const config = {
   // MVP75：达标的「直接建议」升「💡 我的建议」卡（独立小配额，不挤安全求助池）；自动开会话默认 off 灰度。
   investigationRecoCardEnabled: envBool('INVESTIGATION_RECO_CARD_ENABLED', true),
   investigationRecoCardMaxLive: envInt('INVESTIGATION_RECO_CARD_MAX_LIVE', 4),
-  investigationAutoTopicEnabled: envBool('INVESTIGATION_AUTO_TOPIC_ENABLED', false),
+  investigationAutoTopicEnabled: envBool('INVESTIGATION_AUTO_TOPIC_ENABLED', true), // 用户明确要"自动开会话"；只插消息不起turn(安全)，硬闸日配额≤2
   investigationAutoTopicDailyMax: envInt('INVESTIGATION_AUTO_TOPIC_DAILY_MAX', 2),
   // MVP74 审查 P1：交付卡(7天TTL、豁免24h扫)用**独立**配额，不与下面安全求助池共享——
   // 否则几张长寿交付卡会跨 matter 饿死 need_credential 求助卡(安全>交付)。
