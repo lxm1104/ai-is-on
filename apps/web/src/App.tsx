@@ -248,6 +248,13 @@ export function App() {
             return;
           }
           case 'topic_created':
+            upsertTopic(e.topic);
+            // MVP75：AI 自动推进开的会话(ai_push) → 自动切过去并打开，让你立刻看到 AI 在替你做什么、
+            // 并把随后异步起草的交付物消息也收进来（否则非 open 的 topic 消息会被上面 message_added 丢弃）。
+            if ((e.topic as { sourceKind?: string }).sourceKind === 'ai_push') {
+              setActiveTopicId(e.topic.id);
+            }
+            return;
           case 'topic_updated':
             upsertTopic(e.topic);
             return;

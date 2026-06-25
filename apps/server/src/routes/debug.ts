@@ -6,6 +6,7 @@ import { listInducers } from '../structure/inducerRegistry.js';
 import { getMatterById, listMatterEntities } from '../matter/matterStore.js';
 import { runInvestigation } from '../investigation/investigationLoop.js';
 import { getModelCircuitState, getLlmGateStats } from '../triage/backgroundRuntime.js';
+import { maybeQueueAutoConversation } from '../chat/chatTopics.js';
 import { applyInvestigationResult } from '../investigation/investigationWriteback.js';
 import { runInvestigationDispatchTick } from '../investigation/investigationDispatcher.js';
 import { captureInvestigationTrace } from '../playbook/playbookCapture.js';
@@ -66,6 +67,25 @@ debugRouter.get('/debug/model-circuit', (_req, res) => {
     circuit: getModelCircuitState(),
     gate: getLlmGateStats(),
   });
+});
+
+// MVP75 演示/验证：在 live backend 上触发一次自动推进（开会话+自动起草），让 WS 广播真达到前端。
+debugRouter.post('/debug/auto-push', async (req, res) => {
+  const body = req.body ?? {};
+  const matterId = matchMatterId(body.matterId) ?? body.matterId;
+  const m = getMatterById(matterId);
+  if (!m) return res.status(404).json({ error: 'matter not found' });
+  // 清掉同 matter 旧的 ai_push 会话（幂等闸会挡重复），让本次能重新开。
+  db.prepare(`DELETE FROM runtime_messages WHERE topic_id IN (SELECT id FROM chat_topics WHERE source_kind='ai_push' AND source_ref_id=?)`).run(matterId);
+  db.prepare(`DELETE FROM chat_topics WHERE source_kind='ai_push' AND source_ref_id=?`).run(matterId);
+  const rec = {
+    stance: (body.stance as 'do' | 'escalate' | 'decide') ?? 'do',
+    advice: String(body.advice ?? '催相关同学把这条阻塞项落地'),
+    because: String(body.because ?? '查到该项长期未推进'),
+    nextStep: body.nextStep ? String(body.nextStep) : undefined,
+  };
+  const opened = maybeQueueAutoConversation(m, rec, String(body.factSummary ?? m.currentSummary ?? ''));
+  res.json({ ok: true, opened });
 });
 
 // MVP36：手动立即跑一次 dispatcher tick（不等定时器；试运行验证用）。
