@@ -78,19 +78,23 @@ export function getLlmGateStats(): { active: number; queuedHigh: number; queued:
 }
 
 // ───── 模型熔断（吞吐修复）─────
-// 某模型连续失败 N 次 → 冷却窗内跳过它、直奔下一个，避免每轮白等 90s 超时；冷却后半开探活一次，成则恢复。
-// 纯函数（now 注入、状态 module-level），可单测；永不全跳（至少留兜底）。
-type ModelHealth = { fails: number; skipUntil: number };
+// 滑动窗口：最近 window 次调用里失败 ≥ threshold 次 → 冷却窗内跳过该模型、直奔下一个，避免每轮白等 90s 超时
+//（实测 glm-5.2 是**间歇**超时——fail/success 交替，故按"近 N 次失败率"判，连续计数会漏）。冷却到点即半开探活，
+// 探活成功且窗口失败清零则关熔断恢复。纯函数（now 注入、状态 module-level），可单测；永不全跳（至少留兜底）。
+type ModelHealth = { recent: boolean[]; skipUntil: number }; // recent: 最近若干次结果(true=成功)
 const modelHealth = new Map<string, ModelHealth>();
 
 /** 测试用：清空熔断状态。 */
 export function _resetModelCircuit(): void {
   modelHealth.clear();
 }
+function failsIn(h: ModelHealth): number {
+  return h.recent.filter((r) => !r).length;
+}
 /** 观测用：当前各模型熔断状态快照。 */
-export function getModelCircuitState(): Array<{ model: string; fails: number; skipUntil: number; open: boolean }> {
+export function getModelCircuitState(): Array<{ model: string; recentFails: number; window: number; skipUntil: number; open: boolean }> {
   const now = Date.now();
-  return [...modelHealth.entries()].map(([model, h]) => ({ model, fails: h.fails, skipUntil: h.skipUntil, open: h.skipUntil > now }));
+  return [...modelHealth.entries()].map(([model, h]) => ({ model, recentFails: failsIn(h), window: h.recent.length, skipUntil: h.skipUntil, open: h.skipUntil > now }));
 }
 
 function isCircuitOpen(model: string, now: number): boolean {
@@ -106,24 +110,25 @@ export function selectEffectiveChain(modelChain: string[], now: number): string[
   return usable.length > 0 ? usable : [modelChain[modelChain.length - 1]];
 }
 
-/** 记录某模型一次结果，更新熔断状态。 */
+/** 记录某模型一次结果，更新熔断状态（滑动窗口）。 */
 export function recordModelResult(model: string, ok: boolean, now: number): void {
   if (!config.opencodeModelCircuitEnabled) return;
-  const h = modelHealth.get(model) ?? { fails: 0, skipUntil: 0 };
-  if (ok) {
-    if (h.fails > 0 || h.skipUntil > 0) console.log(`[opencode] 模型 ${model} 已恢复，熔断关闭`);
-    modelHealth.set(model, { fails: 0, skipUntil: 0 });
-    return;
-  }
-  h.fails += 1;
-  if (h.fails >= config.opencodeModelCircuitThreshold) {
+  const h = modelHealth.get(model) ?? { recent: [], skipUntil: 0 };
+  h.recent.push(ok);
+  while (h.recent.length > config.opencodeModelCircuitWindow) h.recent.shift();
+  const fails = failsIn(h);
+  if (!ok && fails >= config.opencodeModelCircuitThreshold) {
     const wasOpen = h.skipUntil > now;
     h.skipUntil = now + config.opencodeModelCircuitCooldownMs;
     if (!wasOpen) {
       console.warn(
-        `[opencode] 模型 ${model} 连续失败 ${h.fails} 次 → 熔断 ${Math.round(config.opencodeModelCircuitCooldownMs / 1000)}s（期间跳过、直接用下一个），到点半开探活`
+        `[opencode] 模型 ${model} 近 ${h.recent.length} 次失败 ${fails} 次 → 熔断 ${Math.round(config.opencodeModelCircuitCooldownMs / 1000)}s（期间跳过、直接用下一个），到点半开探活`
       );
     }
+  } else if (ok && h.skipUntil > 0 && fails === 0) {
+    // 探活成功且窗口失败清零 → 关熔断恢复。
+    console.log(`[opencode] 模型 ${model} 已恢复，熔断关闭`);
+    h.skipUntil = 0;
   }
   modelHealth.set(model, h);
 }

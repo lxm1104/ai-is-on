@@ -60,7 +60,10 @@ export const config = {
   // （实测 glm-5.2 简单 prompt 7s 但大 investigation prompt 常 90s 超时，间歇性）。冷却后半开探活一次，成则恢复。
   // 永不全跳（至少留最后一个兜底）。自适应：健康时仍优先用主模型。
   opencodeModelCircuitEnabled: envBool('OPENCODE_MODEL_CIRCUIT_ENABLED', true),
+  // 滑动窗口：最近 window 次调用里失败 ≥ threshold 次 → 熔断（实测 glm-5.2 是**间歇**超时，
+  // 非连续，故按"近 N 次失败率"判，比连续计数更能拦截间歇超时）。
   opencodeModelCircuitThreshold: envInt('OPENCODE_MODEL_CIRCUIT_THRESHOLD', 2),
+  opencodeModelCircuitWindow: envInt('OPENCODE_MODEL_CIRCUIT_WINDOW', 4),
   opencodeModelCircuitCooldownMs: envInt('OPENCODE_MODEL_CIRCUIT_COOLDOWN_MS', 120_000),
   opencodeAgentDir: path.resolve(
     REPO_ROOT,

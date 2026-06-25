@@ -372,6 +372,26 @@ export function allMemberMattersResolved(classId: string): boolean {
   return true;
 }
 
+/**
+ * P1-4 级联护栏：办结 matterId 是否会让其所在「多成员」问题类的全部成员变 resolved（本 matter 是最后一个未办结成员）
+ * → 触发 syncClassStatusForResolvedMatter 把整类（含他人名下成员）静默翻牌。用于把"会翻整类"的 AI 自动办结降级为人确认。
+ * 单成员类返回 willComplete=false（翻牌只涉及它自己，无跨成员风险）。返回 classLabel 供回执/提案披露。
+ */
+export function classCompletionImpactOfResolving(matterId: string): { willComplete: boolean; classId?: string; classLabel?: string } {
+  const classId = getClassIdForMatter(matterId);
+  if (!classId) return { willComplete: false };
+  const cls = db.prepare(`SELECT status, label FROM problem_classes WHERE id=?`).get(classId) as { status: string; label: string } | undefined;
+  if (!cls || cls.status === 'resolved') return { willComplete: false };
+  const members = db.prepare(`SELECT matter_id FROM problem_class_members WHERE class_id=? AND status='assigned'`).all(classId) as Array<{ matter_id: string }>;
+  if (members.length <= 1) return { willComplete: false };
+  for (const m of members) {
+    if (m.matter_id === matterId) continue;
+    const row = db.prepare(`SELECT status FROM matters WHERE id=?`).get(m.matter_id) as { status: string } | undefined;
+    if (!row || row.status !== 'resolved') return { willComplete: false }; // 还有别的成员没办结 → 本次不会翻整类
+  }
+  return { willComplete: true, classId, classLabel: cls.label };
+}
+
 /** 台账视图：每个类 + 它的成员摘要 + AI 疑似已修复提示（成员诊断文本里出现"已修复/合入 release"等）。 */
 export function listLedger(
   spaceId?: string | null

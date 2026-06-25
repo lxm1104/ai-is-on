@@ -13,6 +13,7 @@ import { attachMatterContextLink, getMatterById, saveMatter, listMatterEntities,
 import { userResolveMatter } from '../matter/matterActions.js';
 import { raiseMatterResolveProposal, raiseMatterProgressProposal, raiseMatterAutoResolvedReceipt, raiseMatterDanglingCommitmentProposal, raiseMatterNeedHelpProposal, raiseMatterArtifactProposal } from '../matter/matterResolveProposal.js';
 import { isValidNeedFromUser, isValidArtifact, type NeedFromUser } from './investigationPrompt.js';
+import { classCompletionImpactOfResolving } from '../problemClass/problemClassStore.js';
 import { getSelfEntityIds, deriveNeedFromUser, isSelfCommitment } from './needHelpClassifier.js';
 import { scheduleMatterResolveVerification } from '../matter/matterVerifyService.js';
 import { getContextEntityById, getRecentInvestigationVerdicts } from '../db.js';
@@ -131,13 +132,17 @@ export function applyInvestigationResult(input: {
   let autoResolved = false;
   // MVP71：needFromUser 一次性解析（LLM 合法值优先；否则确定性兜底推导）。供 needhelp 分流复用，不重复查 entities。
   const need = (c.verdict === 'blocked' || c.verdict === 'unknown') ? resolveNeedFromUser(matter, c) : undefined;
+  // P1-4 级联护栏：若办结本 matter 会让其多成员问题类全部办结（→ syncClassStatusForResolvedMatter 把整类、含他人名下成员
+  // 静默翻成已修复）——这种跨成员翻牌不该 AI 自动做，降级为人确认提案（仅 resolved 时才查，省开销）。
+  const classImpact = (c.verdict === 'resolved' && config.problemClassEnabled) ? classCompletionImpactOfResolving(matter.id) : { willComplete: false as const };
   // 自主办结的额外护栏（对抗审查）：必须有证据（杜绝裸口说"已完成"）、且不碰 P0（高风险事项永远走人确认提案）。
   const autoResolveEligible =
     c.verdict === 'resolved' &&
     config.investigationAutoResolveEnabled &&
     c.confidence >= config.investigationAutoResolveMinConfidence &&
     c.evidence.length >= 1 &&
-    matter.priority !== 'P0';
+    matter.priority !== 'P0' &&
+    !classImpact.willComplete; // 级联护栏：会翻整问题类 → 不自动办
   if (autoResolveEligible) {
     // MVP55 放权第一档（内部可逆）：高置信 resolved → AI 直接办结（同 userResolveMatter 路径），
     // 浮一张「AI 已主动办结」透明回执卡（可一键重开）。办结失败则退回提案，不丢事件。
@@ -160,8 +165,12 @@ export function applyInvestigationResult(input: {
       });
     }
   } else if (c.verdict === 'resolved' && c.confidence >= 0.75) {
+    // P1-4：被级联护栏拦下的"会翻整问题类"case 落这里——在提案里披露，让你知道确认的连带影响。
+    const classNote = classImpact.willComplete
+      ? `\n⚠️ 这是问题类「${classImpact.classLabel}」最后一个未办结的事项——为避免静默把整类（含他人名下成员）翻成已修复，AI 没有自动办结，请你确认。`
+      : '';
     proposalRaised = raiseMatterResolveProposal(proposalMatter, {
-      why: `AI 自主排查发现这件事疑似已完成：${clip(factLine, 100)}。确认后该事项标记为已解决、相关催办卡自动清除。`,
+      why: `AI 自主排查发现这件事疑似已完成：${clip(factLine, 100)}。确认后该事项标记为已解决、相关催办卡自动清除。${classNote}`,
       suggestedAction: '确认办结，或忽略保持跟进',
     });
   } else if (
