@@ -36,7 +36,8 @@ B) 已能下结论 → action="conclude"：
     "evidence": ["<支撑结论的具体证据：谁在何时说了什么 / 某文档某任务的状态，可带链接>"],
     "solvability": "can_close | can_produce_artifact | need_user | cant",
     "needFromUser": { "kind": "need_credential", "ask": "<一句话告诉用户你具体缺什么>" },
-    "artifact": { "kind": "code_fix | task_spec | decision_brief", "title": "...", "body": "主体内容", "rootCause": "(code_fix)根因", "targetRef": "(code_fix)文件:行号", "verifyCmd": "(code_fix)验证命令", "assignee": "(task_spec)建议负责人,可选" }
+    "artifact": { "kind": "code_fix | task_spec | decision_brief", "title": "...", "body": "主体内容", "rootCause": "(code_fix)根因", "targetRef": "(code_fix)文件:行号", "verifyCmd": "(code_fix)验证命令", "assignee": "(task_spec)建议负责人,可选" },
+    "recommendation": { "stance": "do|wait|escalate|drop|decide", "advice": "我建议你具体做什么(动作+对象)", "because": "一句理由,须引上面 evidence", "nextStep": "可选:你能一键做的只读/起草动作" }
   }
 }
 
@@ -55,6 +56,12 @@ B) 已能下结论 → action="conclude"：
     - **task_spec**（你查到某事**方案已确认采用/已拍板要做，但还没人建任务跟进**，如"TEA 方案已确认采用、要带 LogID 给邓贵羊"）：title=任务名、body=做什么·为什么·验收，assignee 建议负责人(可选)。让用户一键把它建成飞书任务。
     - **decision_brief**（**决策类**事项，信息已拉齐到能拍板）：title=决策点、body 结构化写【各方立场】【约束】【尚缺】【我的建议】。**不替用户拍板**，只把信息凝成一页让他决。
     · 共同要求：必须有 evidence 支撑（后端会校正，无证据不升卡）。能 code_fix 就别退而求其次。
+- **每次都尽量给「直接建议」(recommendation，这是用户最想要的"结果")**：除了陈述事实(factSummary)，基于查到的事实再给用户一句**直接可执行的建议或意见**——"我建议你做X" / "我倾向A，因为B"。
+  · **建议不得复述事实**："根因已明确""对方未交付""已定位到X"都是**事实**，必须紧跟"**所以我建议你…**"才算建议。advice 要含具体动作+对象（催谁/问谁/改哪/搁置/上抛），≤80 字。
+  · **because 必须引用上面 evidence 里的具体证据**，不是凭空。
+  · **nextStep 只能是只读或起草**（如"我已起草催办话术，待你发"），**绝不能写"我已发/已改/已办"**——你不代发、不自动改状态。
+  · stance：do(去做)｜wait(先等/还在窗口内别催)｜escalate(上抛求助)｜drop(可不跟了/做减法)｜decide(该用户拍板)。
+  · **说不出有信息含量的建议就把 recommendation 留空**，**别硬凑"建议继续跟进"这种废话**（后端有防换壳硬门，凑的会被丢、还拉低你的结果率）。blocked/unknown 通常诚实出口是 needFromUser 求助，不必硬给建议（除非是 escalate 上抛 或 drop 做减法 且能引证据）。
 
 needFromUser（可选，**仅当 verdict 是 blocked/unknown 且你明确知道缺哪一件具体的事**才填；说不出具体物就别填，宁可不求助也别把"我也不知道为啥没查到"包装成求助）：
 - "kind" 取一个：need_credential（缺 traceID/日志ID 才能继续追——很多在对方消息里，先自查，找不到才求助）｜need_info（缺一个可命名的关键事实：哪个版本/环境/对方是谁）｜need_decision（信息已齐需用户拍板，必须给 "options":["A","B"] 至少 2 项）｜need_outbound（需用户去发某条飞书消息，公司禁 AI 代发）｜owned_by_other（状态在别人名下、你查不到，须在 ask 里点名是谁）｜tool_gap（某系统你够不到只读入口）。
@@ -120,6 +127,65 @@ export function isValidArtifact(a: InvestigationArtifact | undefined | null): a 
   return true;
 }
 
+// MVP75：从"过程/事实"到"结果"——每次 conclude 尽量给一条**直接建议/意见**（不止罕见代码 artifact）。
+export type RecoStance = 'do' | 'wait' | 'escalate' | 'drop' | 'decide';
+export const RECO_STANCES = new Set<RecoStance>(['do', 'wait', 'escalate', 'drop', 'decide']);
+export type Recommendation = {
+  stance: RecoStance; // 倾向：去做 / 先等 / 上抛求助 / 可不跟了 / 该你拍板
+  advice: string; // 对用户的直接建议（含动作+对象），≤80 字
+  because: string; // 一句理由，须引证据
+  nextStep?: string; // 可选：用户能一键做的只读/起草动作（绝不能是"已发/已改/已办"）
+};
+const RECO_MIN_NEW_TOKENS = 2; // 增量信息门阈值：advice 须含 fact/evidence 之外的新词
+// 完成态/代执行动词 → 否决（AI 不代发不自动改，建议只能是"待你做"）。
+const RECO_DONE_RE = /已发(送)?|已改|已修改|已办(结)?|已删除|已通知|已提交|已发送/;
+// stance=do/escalate 的建议须含动作动词（词法只作"必要否决"，非充分）。
+const RECO_ACTION_RE = /(发|催|问|约|提|改|建|删|关|开|查|推|确认|对齐|上抛|升级|搁置|放弃|拆|合并|回复|起草|指派|跟进|联系|拉群|找)/;
+function recoTokens(s: string): string[] {
+  return s
+    .replace(/^(我建议你?|你可以|建议|倾向|我倾向|所以)/, '')
+    .replace(/[\s，。、；：,.:;!？?“”"'（）()【】]/g, '')
+    .split('')
+    .filter(Boolean);
+}
+function newTokenCount(advice: string, factSummary: string, evidence: string[]): number {
+  const known = new Set(recoTokens(factSummary + evidence.join('')));
+  const adv = recoTokens(advice);
+  const seen = new Set<string>();
+  let n = 0;
+  for (const t of adv) {
+    if (!known.has(t) && !seen.has(t)) { n += 1; seen.add(t); }
+  }
+  return n;
+}
+/** because 是否实质引用了某条 evidence（有足够字符重合），而非凭空。 */
+function citesEvidence(because: string, evidence: string[]): boolean {
+  if (!evidence.length) return false; // 无证据则无法引证据 → 不算达标（诚实出口是 needhelp）
+  const b = new Set(recoTokens(because));
+  if (b.size === 0) return false;
+  for (const e of evidence) {
+    const ev = new Set(recoTokens(e));
+    let overlap = 0;
+    for (const t of b) if (ev.has(t)) overlap += 1;
+    if (overlap >= 2) return true;
+  }
+  return false;
+}
+/**
+ * 防换壳硬门（决定成败）：建议必须有**增量信息** + **引证据** + 非完成态谎报。
+ * 代码门不承诺判出"有信息含量"，只挡掉 事实复述/泛泛跟进/完成态谎报；真换壳率靠人工抽检。
+ */
+export function gradeRecommendation(rec: Recommendation | undefined | null, factSummary: string, evidence: string[]): boolean {
+  if (!rec || typeof rec !== 'object' || !RECO_STANCES.has(rec.stance)) return false;
+  if (typeof rec.advice !== 'string' || !rec.advice.trim()) return false;
+  if (typeof rec.because !== 'string' || !rec.because.trim()) return false;
+  if (RECO_DONE_RE.test(rec.advice)) return false; // ① 否决完成态/代执行
+  if (newTokenCount(rec.advice, factSummary || '', evidence || [])  < RECO_MIN_NEW_TOKENS) return false; // ② 增量信息门
+  if (!citesEvidence(rec.because, evidence || [])) return false; // ③ because 引证据
+  if ((rec.stance === 'do' || rec.stance === 'escalate') && !RECO_ACTION_RE.test(rec.advice)) return false; // ④ do/escalate 须有动作
+  return true;
+}
+
 export type InvestigationConclusion = {
   verdict: 'resolved' | 'progressed' | 'blocked' | 'unknown';
   confidence: number;
@@ -128,6 +194,7 @@ export type InvestigationConclusion = {
   needFromUser?: NeedFromUser; // MVP69：仅 blocked/unknown 时可能有
   solvability?: Solvability; // MVP74：AI 自评能解到哪一步
   artifact?: InvestigationArtifact; // MVP74：最推进一步的可执行件（仅 can_produce_artifact 时）
+  recommendation?: Recommendation; // MVP75：直接的建议/意见（结果层）
 };
 export type InvestigationStep =
   | { action: 'investigate'; reason?: string; toolCalls: ToolCallRequest[] }
@@ -332,6 +399,19 @@ function parseArtifact(raw: unknown): InvestigationArtifact | undefined {
   return isValidArtifact(a) ? a : undefined;
 }
 
+/** MVP75：防御式解析 recommendation，非法/缺字段一律 undefined（向后兼容：无 rec 退回纯事实）。 */
+function parseRecommendation(raw: unknown): Recommendation | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const stance = o.stance as RecoStance;
+  if (!RECO_STANCES.has(stance)) return undefined;
+  const s = (k: string, n: number) => (typeof o[k] === 'string' ? (o[k] as string).trim().slice(0, n) : '');
+  const advice = s('advice', 120);
+  const because = s('because', 200);
+  if (!advice || !because) return undefined;
+  return { stance, advice, because, nextStep: s('nextStep', 120) || undefined };
+}
+
 /** 解析一步；非法或缺字段时按保守降级（解析失败→当作 unknown 结论，由调用方决定）。 */
 export function parseInvestigationStep(text: string): InvestigationStep {
   const obj = extractJson(text);
@@ -350,6 +430,7 @@ export function parseInvestigationStep(text: string): InvestigationStep {
         needFromUser: parseNeedFromUser(c.needFromUser), // MVP69：非法/缺失 → undefined，严格向后兼容
         solvability: parseSolvability(c.solvability), // MVP74
         artifact: parseArtifact(c.artifact), // MVP74：非法→undefined，绝不脏数据穿透
+        recommendation: parseRecommendation(c.recommendation), // MVP75：直接建议（结果层）
       },
     };
   }

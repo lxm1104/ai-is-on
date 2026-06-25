@@ -149,6 +149,17 @@ export function defaultAttentionActions(item: AttentionItem): CardAction[] {
     ];
   }
 
+  // MVP75：「💡 我的建议」卡 —— AI 给了一条直接建议/意见。「让 AI 接着推」走 ask_agent(右侧会话推进，手动花 gate)；
+  // 「我来办」走 mark_done(你照建议办了 → 办结+落说明)；「不用了」走 dismiss(豁免负反馈，是裁决非内容不相关)。
+  if (item.inputHash.startsWith('proposal:matter-reco:')) {
+    return [
+      { id: 'ask_agent', label: '让 AI 接着推', kind: 'ask_agent' },
+      { id: 'mark_done', label: '我来办', kind: 'mark_done' },
+      { id: 'ack', label: '知道了', kind: 'ack' },
+      { id: 'dismiss', label: '不用了', kind: 'dismiss' },
+    ];
+  }
+
   // MVP55：AI 已主动办结回执 —— 透明 + 可逆。「知道了」收下，「重开」一键撤销自动办结。
   if (item.inputHash.startsWith('proposal:matter-autoresolved:')) {
     return [

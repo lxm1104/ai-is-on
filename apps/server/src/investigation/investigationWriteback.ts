@@ -11,8 +11,8 @@ import { upsertContextUnit } from '../context/contextStore.js';
 import type { ContextEntityRef } from '../context/ContextUnit.js';
 import { attachMatterContextLink, getMatterById, saveMatter, listMatterEntities, listMatters } from '../matter/matterStore.js';
 import { userResolveMatter } from '../matter/matterActions.js';
-import { raiseMatterResolveProposal, raiseMatterProgressProposal, raiseMatterAutoResolvedReceipt, raiseMatterDanglingCommitmentProposal, raiseMatterNeedHelpProposal, raiseMatterArtifactProposal } from '../matter/matterResolveProposal.js';
-import { isValidNeedFromUser, isValidArtifact, type NeedFromUser } from './investigationPrompt.js';
+import { raiseMatterResolveProposal, raiseMatterProgressProposal, raiseMatterAutoResolvedReceipt, raiseMatterDanglingCommitmentProposal, raiseMatterNeedHelpProposal, raiseMatterArtifactProposal, raiseMatterRecommendationProposal } from '../matter/matterResolveProposal.js';
+import { isValidNeedFromUser, isValidArtifact, gradeRecommendation, type NeedFromUser } from './investigationPrompt.js';
 import { classCompletionImpactOfResolving } from '../problemClass/problemClassStore.js';
 import { getSelfEntityIds, deriveNeedFromUser, isSelfCommitment } from './needHelpClassifier.js';
 import { scheduleMatterResolveVerification } from '../matter/matterVerifyService.js';
@@ -224,6 +224,30 @@ export function applyInvestigationResult(input: {
       factSummary: factLine,
       evidence: c.evidence,
     });
+  } else if (
+    // MVP75「输出结果而非过程」：AI 给了一条**达标的直接建议**（过防换壳硬门 + 引证据）→ 升「💡 我的建议」卡。
+    // 互斥序 resolve > artifact > needhelp > 💡建议 > progress > dangling（在 needhelp 之后，不抢求助闭环）。
+    config.investigationRecoCardEnabled &&
+    gradeRecommendation(c.recommendation, c.factSummary, c.evidence) &&
+    c.evidence.length >= 1
+  ) {
+    proposalRaised = raiseMatterRecommendationProposal(proposalMatter, {
+      recommendation: c.recommendation!,
+      factSummary: factLine,
+    });
+    if (proposalRaised) {
+      // 结果率北极星：audit **只在真升💡卡分支写**（与 artifact/resolve 互斥，不重复计数虚高）。
+      writeAudit({
+        action: 'investigation_recommended',
+        reason: `AI 给你一条建议（${c.recommendation!.stance}）：${clip(c.recommendation!.advice, 80)}`,
+        payload: { matterId: matter.id, stance: c.recommendation!.stance },
+      });
+    } else if ((c.verdict === 'progressed' || c.verdict === 'blocked') && c.confidence >= 0.6) {
+      // 配额满/冷却没升起 → 回落进展卡兜底（仿 artifact，别静默吞）。
+      proposalRaised = raiseMatterProgressProposal(proposalMatter, {
+        verdict: c.verdict, factSummary: factLine, evidence: c.evidence, confidence: c.confidence,
+      });
+    }
   } else if ((c.verdict === 'progressed' || c.verdict === 'blocked') && c.confidence >= 0.6) {
     // MVP40：progressed/blocked 是 AI 对"跟进进展"的完整答复 → 升「进展回执」卡（不再只埋摘要）。
     // 把可认可的自主完成事件从仅 resolved（~4%）扩到 ~32%。

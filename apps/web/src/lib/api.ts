@@ -882,6 +882,8 @@ export type AiActivity = {
 export type AiActivityTally = {
   resolvedCount: number;
   producedCount: number; // MVP74：AI 替你产出修复方案（真有 file:line）的事项数
+  recommendedCount: number; // MVP75：AI 给你直接建议的事项数
+  resultRate: number; // MVP75：结果率（拿到直接结果的事项/被处理的事项），0~1
   progressedCount: number;
   pendingCount: number;
   answeredCount: number;

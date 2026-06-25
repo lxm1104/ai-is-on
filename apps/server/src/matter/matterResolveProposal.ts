@@ -10,13 +10,13 @@
  * 幂等：同事项已有在场同类提案则跳过。办结 > 进展：升办结时顶掉在场进展卡；已有办结时不叠升进展卡。
  */
 import { randomUUID } from 'node:crypto';
-import { db, countLivePendingUserProposals, countLiveArtifactProposals, wasProposalRecentlyDismissed } from '../db.js';
+import { db, countLivePendingUserProposals, countLiveArtifactProposals, countLiveRecoProposals, wasProposalRecentlyDismissed } from '../db.js';
 import { config } from '../config.js';
 import { insertAttentionItem, markAttentionItemsSupersededByHash } from '../attention/attentionStore.js';
 import { broadcast } from '../ws.js';
 import type { Matter } from './matterTypes.js';
 import type { AttentionPriority } from '../attention/attentionTypes.js';
-import type { NeedFromUser, InvestigationArtifact } from '../investigation/investigationPrompt.js';
+import type { NeedFromUser, InvestigationArtifact, Recommendation } from '../investigation/investigationPrompt.js';
 
 export const MATTER_RESOLVE_PROPOSAL_PREFIX = 'proposal:matter-resolve:';
 export const MATTER_PROGRESS_PROPOSAL_PREFIX = 'proposal:matter-progress:';
@@ -24,6 +24,7 @@ export const MATTER_AUTORESOLVED_PREFIX = 'proposal:matter-autoresolved:'; // MV
 export const MATTER_DANGLING_PROPOSAL_PREFIX = 'proposal:matter-dangling:'; // MVP67：你自己欠的承诺，AI 查无跟进痕迹
 export const MATTER_NEEDHELP_PROPOSAL_PREFIX = 'proposal:matter-needhelp:'; // MVP69：AI 卡住，结构化求助（你补一手→自动接着查）
 export const MATTER_ARTIFACT_PROPOSAL_PREFIX = 'proposal:matter-artifact:'; // MVP74：AI 替你定位代码根因，给出修复方案（你一键复制/应用/办结）
+export const MATTER_RECO_PROPOSAL_PREFIX = 'proposal:matter-reco:'; // MVP75：AI 给你一条直接建议/意见（结果层）
 
 function hasLiveProposal(prefix: string, matterId: string): boolean {
   return !!db
@@ -247,6 +248,43 @@ export function raiseMatterArtifactProposal(
     suggestedAction: '复制去用 / 办结',
     // 7 天 TTL：高价值交付件不该 24h 蒸发（实测泛进展卡 64% expired），又设有限期避免永占配额槽。
     expiresAt: new Date(Date.now() + 7 * 86_400_000).toISOString(),
+  });
+}
+
+/**
+ * MVP75 — 「💡 我的建议」卡。AI 不止陈述事实，给一条**直接可执行的建议/意见**（结果层）。
+ * 已过 gradeRecommendation 防换壳硬门才会调到这里。独立小配额（不挤安全求助池）；互斥序
+ * resolve > artifact > needhelp > 💡建议 > progress > dangling（在 needhelp 之后，不抢求助）。
+ */
+export function raiseMatterRecommendationProposal(
+  matter: Matter,
+  opts: { recommendation: Recommendation; factSummary?: string }
+): boolean {
+  if (hasLiveProposal(MATTER_RESOLVE_PROPOSAL_PREFIX, matter.id)) return false;
+  if (hasLiveProposal(MATTER_ARTIFACT_PROPOSAL_PREFIX, matter.id)) return false; // 交付件更推进，不叠建议
+  if (hasLiveProposal(MATTER_NEEDHELP_PROPOSAL_PREFIX, matter.id)) return false; // 求助在场不叠
+  if (blockedByReRaiseCooldown(MATTER_RECO_PROPOSAL_PREFIX, matter.id)) return false;
+  const alreadyHas = hasLiveProposal(MATTER_RECO_PROPOSAL_PREFIX, matter.id);
+  if (!alreadyHas && countLiveRecoProposals() >= config.investigationRecoCardMaxLive) return false;
+  const now = new Date().toISOString();
+  // 建议 > progress/dangling：顶掉同事项的泛进展/查无跟进卡（建议比"查到X"更是结果）。
+  markAttentionItemsSupersededByHash(`${MATTER_PROGRESS_PROPOSAL_PREFIX}${matter.id}`, now);
+  markAttentionItemsSupersededByHash(`${MATTER_DANGLING_PROPOSAL_PREFIX}${matter.id}`, now);
+  const r = opts.recommendation;
+  const fact = (opts.factSummary ?? '').trim().slice(0, 120);
+  const why = [
+    `💡 ${r.advice}`,
+    `📎 因为 ${r.because}`,
+    r.nextStep ? `👉 你可一键 ${r.nextStep}` : '',
+    fact ? `\n排查：${fact}` : '',
+  ].filter((l) => l && l.length > 0).join('\n');
+  return raiseMatterProposal(matter, {
+    prefix: MATTER_RECO_PROPOSAL_PREFIX,
+    priority: 'P1', // 直接结果，置顶露出
+    title: `💡 我的建议：${matter.title.slice(0, 36)}`,
+    why,
+    suggestedAction: '按建议办 / 让AI接着推 / 知道了',
+    expiresAt: new Date(Date.now() + 3 * 86_400_000).toISOString(), // 建议时效性强，3 天 TTL
   });
 }
 

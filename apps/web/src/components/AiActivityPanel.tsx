@@ -34,6 +34,8 @@ function actionMeta(a: AiActivity): ActionMeta {
   switch (a.action) {
     case 'matter_auto_resolved':
       return { icon: '✅', label: '替你办结', isResult: true };
+    case 'investigation_recommended':
+      return { icon: '💡', label: '给你一条建议', isResult: true }; // MVP75：直接建议/意见（结果）
     case 'matter_artifact_raised':
       return { icon: '🔧', label: '替你产出可执行件', isResult: true }; // MVP74/P1-6：修复方案/待建任务/决策信息包
 
@@ -137,9 +139,12 @@ export function AiActivityPanel() {
           {/* MVP71 支柱D：「AI 帮你完成了多少」近 7 天度量盘 —— 直接回答 North Star */}
           {tally && (
             <div className="ai-activity__tally" style={{ display: 'flex', gap: 12, flexWrap: 'wrap', padding: '6px 10px', fontSize: 12 }}>
+              {/* MVP75 北极星：结果率 = 拿到直接结果(建议/产出/办结)的事项占比，领衔展示 */}
+              <span title="近 7 天 AI 给你「直接结果」(建议/产出/办结)的事项占被处理事项的比例——越高越好" style={{ fontWeight: 600 }}>🎯 结果率 <b>{Math.round((tally.resultRate ?? 0) * 100)}%</b></span>
+              <span title="近 7 天 AI 给你直接建议/意见的事项数">💡 建议 <b>{tally.recommendedCount}</b></span>
               <span title="近 7 天 AI 高置信主动办结的事项数">✅ 办结 <b>{tally.resolvedCount}</b></span>
               <span title="近 7 天 AI 替你产出修复方案（真有 file:line，可一键复制去改）的事项数">🔧 产出 <b>{tally.producedCount}</b></span>
-              <span title="近 7 天 AI 自主查到进展的事项数">📈 推进 <b>{tally.progressedCount}</b></span>
+              <span title="近 7 天 AI 自主查到进展（事实，未必有建议）的事项数">📈 查到进展 <b>{tally.progressedCount}</b></span>
               <span title="当前需要你补一手才能接着办的事项数" style={{ color: tally.pendingCount > 0 ? '#b45309' : undefined }}>🙋 待你 <b>{tally.pendingCount}</b></span>
               <span title="近 7 天你已应答的求助/待办卡（人机协作转化）">🤝 已应答 <b>{tally.answeredCount}</b></span>
               <span style={{ opacity: 0.6 }}>（近 7 天）</span>
