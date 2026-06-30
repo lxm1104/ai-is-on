@@ -271,12 +271,11 @@ export function raiseMatterRecommendationProposal(
   markAttentionItemsSupersededByHash(`${MATTER_PROGRESS_PROPOSAL_PREFIX}${matter.id}`, now);
   markAttentionItemsSupersededByHash(`${MATTER_DANGLING_PROPOSAL_PREFIX}${matter.id}`, now);
   const r = opts.recommendation;
-  const fact = (opts.factSummary ?? '').trim().slice(0, 120);
+  // 结果先行：只给建议 + 一句依据 + 可一键的下一步；**不**再罗列"排查了什么/查了几步"（用户要结果不要过程）。
   const why = [
     `💡 ${r.advice}`,
-    `📎 因为 ${r.because}`,
+    `📎 依据 ${r.because}`,
     r.nextStep ? `👉 你可一键 ${r.nextStep}` : '',
-    fact ? `\n排查：${fact}` : '',
   ].filter((l) => l && l.length > 0).join('\n');
   return raiseMatterProposal(matter, {
     prefix: MATTER_RECO_PROPOSAL_PREFIX,

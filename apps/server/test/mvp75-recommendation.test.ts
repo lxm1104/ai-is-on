@@ -78,7 +78,8 @@ test('MVP75 writeback：达标建议 → 升💡卡 + investigation_recommended 
   assert.ok(card, '应升💡卡');
   assert.match(card!.title, /我的建议/);
   assert.match(card!.why, /先别催/);
-  assert.match(card!.why, /因为/);
+  assert.match(card!.why, /依据/);
+  assert.ok(!/排查：/.test(card!.why), '结果先行：卡里不再罗列排查过程');
   const audit = db.db.prepare(`SELECT payload_json FROM audit_logs WHERE action='investigation_recommended' LIMIT 1`).get() as { payload_json: string } | undefined;
   assert.ok(audit, '应写 investigation_recommended 审计');
   assert.equal(JSON.parse(audit!.payload_json).stance, 'wait');
@@ -135,7 +136,8 @@ test('MVP75 P1-5：达标建议+P1 matter → 自动开会话（只插 assistant
   assert.equal(topic.opencode_session_id, null, '没起 turn（无 opencode session）');
   const msg = db.db.prepare(`SELECT * FROM runtime_messages WHERE topic_id=?`).get(topic.id) as any;
   assert.equal(msg.role, 'assistant', '只插一条 assistant 消息');
-  assert.match(msg.text, /我的建议/);
+  assert.match(msg.text, /我建议你/);
+  assert.ok(!/我查到/.test(msg.text), '结果先行：开头不再"我查到X"罗列过程');
 });
 
 test('MVP75 P1-5：同 matter 幂等 + 日配额满 + wait/P2 不开', () => {

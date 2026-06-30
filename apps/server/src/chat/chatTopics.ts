@@ -91,10 +91,11 @@ export function maybeQueueAutoConversation(matter: Matter, rec: Recommendation, 
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   if (countAiPushTopicsSince(todayStart.toISOString()) >= config.investigationAutoTopicDailyMax) return false;
+  // 结果先行：直接上"我的建议 + 起草好的东西"，**不**罗列"我查到 X / 查了几步"（用户要结果不要过程）。
   const topic = postAiMessageToNewTopic({
     title: `AI 推进：${matter.title.slice(0, 36)}`,
     sourceRefId: matter.id,
-    text: `我查到：${factSummary.slice(0, 220)}\n\n💡 我的建议：${rec.advice}（因为 ${rec.because}）\n\n我接着替你把该做的起草出来 👇`,
+    text: `💡 我建议你：${rec.advice}\n依据：${rec.because}\n\n我已经替你把该做的直接起草好了，你看下要不要用 👇`,
   });
   // ② 自动推进：异步跑沙箱 push turn 起草交付物，完成后贴进同一会话（不阻塞 writeback；失败则只留①）。
   if (config.investigationAutoPushEnabled) {
