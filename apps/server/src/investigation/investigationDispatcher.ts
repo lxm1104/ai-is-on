@@ -17,7 +17,7 @@ import { captureInvestigationTrace } from '../playbook/playbookCapture.js';
 import { matchPlaybookForMatter, renderPlaybookForPrompt } from '../playbook/playbookMatcher.js';
 import { resolveProjectProfileForMatter } from './projectProfile.js';
 import { resolveProjectSpaceDeterministic } from './projectRouter.js';
-import { ingestConclusion, syncClassStatusForResolvedMatter } from '../problemClass/problemClassService.js';
+import { ingestConclusion, syncClassStatusForResolvedMatter, getProblemClassHintForMatter } from '../problemClass/problemClassService.js';
 import { classCompletionImpactOfResolving } from '../problemClass/problemClassStore.js';
 import { onInvestigationKick } from './investigationKick.js';
 import { maybeAlertReadToolHealth } from './readToolHealth.js';
@@ -259,6 +259,8 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
       originHint: getMatterOriginHint(candidate.id) ?? undefined,
       // 追查链路：已知业务代码库路径——即便本 matter 没路由到项目 space，也让它 git log 去对的仓查提交。
       knownCodeRepos: listKnownCodeRepos(),
+      // 追查链路：所属问题类的已知根因 + 已解决兄弟事项——系统早已归纳的现成线索，先看这些别从零重推。
+      problemClassHint: getProblemClassHintForMatter(candidate.id) ?? undefined,
     });
     const toolSummary = result.toolLog.map((l) => `${l.tool}:${l.ok ? l.summary : '失败'}`).join('；');
     // MVP69 P0-5：把"派发起始时刻"透传给 writeback 写进 audit payload.startedAt，

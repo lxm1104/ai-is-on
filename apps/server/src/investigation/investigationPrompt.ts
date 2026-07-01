@@ -233,6 +233,7 @@ export function buildInvestigateUserMessage(opts: {
   userBackfills?: string[]; // MVP71 KEYSTONE：用户经求助卡补给该 matter 的内容（traceID/对方回复/真实状态）
   originHint?: string; // 追查链路：这件事最初出现在哪（源头对话/文档/链接 + 最初内容）
   knownCodeRepos?: string[]; // 追查链路：已知业务代码库绝对路径（git log 去这些仓，别在本工具目录 log）
+  problemClassHint?: string; // 追查链路：所属问题类的已知根因 + 已解决的兄弟事项（先看现成线索）
 }): string {
   const lines = [
     '<matter>',
@@ -252,6 +253,10 @@ export function buildInvestigateUserMessage(opts: {
   // 追查链路：已知业务代码库路径——查代码提交时 git log **只在这些真实业务仓里查**，别在当前目录（那是本工具自己的仓库）。
   if (opts.knownCodeRepos && opts.knownCodeRepos.length && opts.round === 1) {
     lines.push('', '<已知代码库（git log 查提交去这些路径，别在当前目录 log）>', ...opts.knownCodeRepos.map((r) => `- ${r}`), '</已知代码库>');
+  }
+  // 追查链路：所属问题类的已知根因 + 已解决兄弟事项——系统早已归纳，先看这些现成线索（可能同一个 fix 已覆盖），别从零重推。
+  if (opts.problemClassHint && opts.round === 1) {
+    lines.push('', opts.problemClassHint);
   }
   // MVP71 KEYSTONE：用户此前就这件事**通过「需要你帮忙」求助卡补过信息**（贴的 traceID / 对方的回复 / 真实状态）。
   // 这是你上次卡住后用户专门补给你的——务必据此重新判断，别再得出和上次一样的"查不到"。置顶且强语气。

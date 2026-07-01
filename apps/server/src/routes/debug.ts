@@ -12,6 +12,7 @@ import { runInvestigationDispatchTick } from '../investigation/investigationDisp
 import { captureInvestigationTrace } from '../playbook/playbookCapture.js';
 import { matchPlaybookForMatter, renderPlaybookForPrompt } from '../playbook/playbookMatcher.js';
 import { resolveProjectProfileForMatter } from '../investigation/projectProfile.js';
+import { getProblemClassHintForMatter } from '../problemClass/problemClassService.js';
 import { config } from '../config.js';
 
 export const debugRouter = Router();
@@ -129,6 +130,7 @@ debugRouter.post('/debug/investigation/run', async (req, res) => {
       userBackfills: listUserBackfillUnitsForMatter(matterId, 5).map((u) => u.content), // MVP71 KEYSTONE：对齐真实派发
       originHint: getMatterOriginHint(matterId) ?? undefined, // 追查链路：源头
       knownCodeRepos: listKnownCodeRepos(), // 追查链路：已知业务代码库（git log 去对的仓）
+      problemClassHint: getProblemClassHintForMatter(matterId) ?? undefined, // 追查链路：同类根因/已解决兄弟
     });
     let writeback;
     if (body.apply === true) {

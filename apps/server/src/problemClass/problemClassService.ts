@@ -211,6 +211,55 @@ export function syncClassStatusForResolvedMatter(matterId: string): void {
   }
 }
 
+/**
+ * MVP76 追查线索：某 matter 归属的**问题类**——系统早已蒸馏出这类问题的**根因**，并可能已有**兄弟事项被解决**
+ * （其结论常直接指向修复它的 commit）。这是"系统能拿到、却从没喂给排查器"的现成线索：查一件新同类问题时，
+ * 别让 AI 从零重推——先告诉它已知根因 + 指向已解决的兄弟，让它先判断"同一个 fix 是不是已经覆盖了这件"。
+ * 返回可注入 prompt 的一段（无归类/未启用 → null）。
+ */
+export function getProblemClassHintForMatter(matterId: string): string | null {
+  if (!config.problemClassEnabled) return null;
+  const classId = getClassIdForMatter(matterId);
+  if (!classId) return null;
+  const cls = getProblemClass(classId);
+  if (!cls) return null;
+  // 同类的其它 assigned 成员 + 它们对应 matter 的现状（重点标出已解决的——很可能同一个 fix）。
+  const siblings = db
+    .prepare(
+      `SELECT pcm.matter_id AS mid, m.title AS title, m.status AS status, m.current_summary AS summary
+         FROM problem_class_members pcm JOIN matters m ON m.id = pcm.matter_id
+        WHERE pcm.class_id = ? AND pcm.status='assigned' AND pcm.matter_id != ?
+        ORDER BY CASE WHEN m.status='resolved' THEN 0 ELSE 1 END, m.updated_at DESC
+        LIMIT 6`
+    )
+    .all(classId, matterId) as Array<{ mid: string; title: string; status: string; summary: string | null }>;
+  const lines: string[] = [];
+  lines.push('<同类问题（系统已归纳的根因/已解决的兄弟事项——先看这些，可能同一个 fix 已覆盖本事项）>');
+  lines.push(`本事项属于问题类「${cls.label}」${cls.systemic ? '（已标记为系统性问题）' : ''}。系统蒸馏出的根因：${cls.rootCause}`);
+  if (cls.status === 'resolved') {
+    lines.push('该问题类已被标记「已修复」——请重点确认本事项是否已被那个修复覆盖（若是→resolved；若这条是遗漏/回归→说清差异）。');
+  }
+  if (siblings.length) {
+    lines.push('同类兄弟事项：');
+    const seenTitles = new Set<string>(); // 去重：库里存在同题重复 matter，重复行不带新信息、只占注意力
+    for (const s of siblings) {
+      const key = s.title.trim();
+      if (seenTitles.has(key)) continue;
+      seenTitles.add(key);
+      const done = s.status === 'resolved';
+      const snip = (stripSummaryPrefix(s.summary || '') || '').replace(/\s+/g, ' ').slice(0, 120);
+      lines.push(
+        done
+          ? `- ✅[已解决] ${s.title}：${snip || '(已办结)'} ← 很可能同一个 fix，先确认它的修复是否已覆盖本事项、根因是否一致`
+          : `- [进行中] ${s.title}`
+      );
+    }
+  }
+  lines.push('先据此判断：本事项的根因是否与本类一致？是否已被某个兄弟的 fix 覆盖？据此再决定还要查什么。');
+  lines.push('</同类问题>');
+  return lines.join('\n');
+}
+
 /** 扫所有有 pending 的 space 各蒸馏一次（启动 backfill 后/调试用）。 */
 export async function distillAllPending(deps: DistillDeps = {}): Promise<number> {
   let n = 0;

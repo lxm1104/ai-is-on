@@ -41,6 +41,8 @@ export type InvestigationInput = {
   originHint?: string;
   /** 追查链路：已知的业务代码库绝对路径——让排查查代码提交时 git log 去对的仓，而不是本工具目录。 */
   knownCodeRepos?: string[];
+  /** 追查链路：这件事所属问题类的已知根因 + 已解决的兄弟事项——先看这些现成线索，别从零重推。 */
+  problemClassHint?: string;
 };
 
 export type InvestigationToolLogEntry = {
@@ -125,6 +127,7 @@ export async function runInvestigation(
       userBackfills: input.userBackfills,
       originHint: input.originHint,
       knownCodeRepos: input.knownCodeRepos,
+      problemClassHint: input.problemClassHint,
     });
 
     let step;

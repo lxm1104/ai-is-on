@@ -194,6 +194,33 @@ test('MVP55 syncClassStatusForResolvedMatter：成员 matter 全办结 → 类�
   assert.equal(store.getProblemClass(c.id)?.status, 'open', '重开成员 → 类对称恢复 open');
 });
 
+test('MVP76 getProblemClassHintForMatter：注入本类已知根因 + 指向已解决兄弟；无归类 → null', () => {
+  const sid = 'sp-hint-' + randomUUID().slice(0, 6);
+  const c = store.createDistilledClass({ spaceId: sid, label: '异步公式未等待', rootCause: '后端仍在算 Analysis Agent 就返回，未等待计算完成' });
+  function mkMember(title: string, resolved: boolean, summary: string): string {
+    const unit = cs.upsertContextUnit({ kind: 'commitment', title: 't', content: 'c', scope: 'work', origin: { kind: 'manual', refId: 'r-' + randomUUID() }, silent: true }).unit;
+    const m = ms.createMatter({ scope: 'work', type: 'follow_up', title, canonicalKey: 'k-' + randomUUID(), createdFromContextUnitId: unit.id, currentSummary: summary, nextAction: 'n' });
+    store.upsertMember({ matterId: m.id, spaceId: sid, symptomBucket: '报错', diagnosticText: 'd', evidence: [], confidence: 0.8 });
+    store.setMemberAssigned(m.id, c.id);
+    if (resolved) ms.saveMatter({ ...ms.getMatterById(m.id)!, status: 'resolved' as never });
+    return m.id;
+  }
+  const self = mkMember('Analysis Agent 读公式失败', false, '正在查');
+  mkMember('Analysis Agent 公式计算返回错误', true, '［AI 排查］已由 commit abc123 修复：等待异步计算完成后再返回');
+
+  const hint = svc.getProblemClassHintForMatter(self)!;
+  assert.ok(hint, '归类的 matter 必产出线索');
+  assert.match(hint, /异步公式未等待/, '注入本类已知根因');
+  assert.match(hint, /✅\[已解决\] Analysis Agent 公式计算返回错误/, '指向已解决的兄弟事项');
+  assert.match(hint, /abc123|同一个 fix/, '带上兄弟的修复线索，提示可能同一个 fix 已覆盖');
+  assert.doesNotMatch(hint, /Analysis Agent 读公式失败/, '不把自己列进兄弟');
+
+  // 无归类的 matter → null（不硬凑）
+  const orphanUnit = cs.upsertContextUnit({ kind: 'commitment', title: 't', content: 'c', scope: 'work', origin: { kind: 'manual', refId: 'r-' + randomUUID() }, silent: true }).unit;
+  const orphan = ms.createMatter({ scope: 'work', type: 'follow_up', title: '孤立事项', canonicalKey: 'k-' + randomUUID(), createdFromContextUnitId: orphanUnit.id, currentSummary: 's', nextAction: 'n' });
+  assert.equal(svc.getProblemClassHintForMatter(orphan.id), null, '未归类 → 不产出线索');
+});
+
 test('MVP56 parseClassAnalysis：合法解析；缺系统性根因/解法 → null', () => {
   const ok = analyzePrompt.parseClassAnalysis(JSON.stringify({ systematicRootCause: '工具返回普遍被截断', systematicSolution: '统一加分页+fetch全文', affectedScope: 'get_base_schema', recommendedAction: '改 schema 读取', confidence: 0.7 }));
   assert.equal(ok?.systematicSolution, '统一加分页+fetch全文');
