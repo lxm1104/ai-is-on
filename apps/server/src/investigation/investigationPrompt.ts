@@ -47,7 +47,7 @@ B) 已能下结论 → action="conclude"：
   ① **IM**：把 <matter> 里涉及的**每个人名 + 关键术语 + 别名/英文名**都搜一遍（search_im_messages，多组关键词）；相关的群/单聊读原文（read_chat_messages）。
   ② **待办**：list_my_tasks 看这件事对应的任务是否已办结。
   ③ **文档**：相关文档读正文看是否已更新/有结论（read_doc）。
-  ④ **代码提交（很多结果就落在这里，务必查）**：只要这件事和某个项目/代码/功能/badcase 有关，就到项目代码库用 run_command 查提交——\`git -C <代码库路径> log --all --oneline --grep 关键词\`（找提交信息里提到它的 commit）、\`git -C <代码库路径> log -S 关键标识 --oneline\`（找改动了某段代码/字段的 commit）、必要时 \`git -C <代码库路径> show <commit>\` 看具体改动。很多"某功能做没做 / 某 bug 修没修 / 某方案落地没"的答案就在 commit 里。<项目档案> 段有代码库路径。
+  ④ **代码提交（很多结果就落在这里，务必查）**：只要这件事和某个项目/代码/功能/badcase 有关，就到**业务代码库**用 run_command 查提交——\`git -C <代码库路径> log --all --oneline --grep 关键词\`（找提交信息里提到它的 commit）、\`git -C <代码库路径> log -S 关键标识 --oneline\`（找改动了某段代码/字段的 commit）、必要时 \`git -C <代码库路径> show <commit>\` 看具体改动。很多"某功能做没做 / 某 bug 修没修 / 某方案落地没"的答案就在 commit 里。**代码库路径用 <已知代码库> 段 或 <项目档案> 段里给的绝对路径；千万别不带 -C 在当前目录 log——那是本工具自己的仓库、不是业务代码，查了也白查。**
   ⑤ **badcase/报错**：走 日志ID→traceID(bytedcli log)→trace(fornax-cli)→file:line/引入commit(rg·git)。
 - ✅ **穷尽了才结论**：conclude 前先自问——"系统里还有哪个我够得到的源没查？源头回去看了吗？相关的代码提交查了吗？涉及的人名都搜过了吗？"。**只要还有没查的、够得到的线索，就继续 investigate**，别提前收工下 unknown。真查全了、确实没有，才 conclude。
 
@@ -232,6 +232,7 @@ export function buildInvestigateUserMessage(opts: {
   projectProfile?: string; // MVP38 项目排查档案：代码库路径/trace 方法/术语等
   userBackfills?: string[]; // MVP71 KEYSTONE：用户经求助卡补给该 matter 的内容（traceID/对方回复/真实状态）
   originHint?: string; // 追查链路：这件事最初出现在哪（源头对话/文档/链接 + 最初内容）
+  knownCodeRepos?: string[]; // 追查链路：已知业务代码库绝对路径（git log 去这些仓，别在本工具目录 log）
 }): string {
   const lines = [
     '<matter>',
@@ -247,6 +248,10 @@ export function buildInvestigateUserMessage(opts: {
   // 追查链路：这件事**最初出现在哪**。第一步永远先回源头看有没有新进展/回复/结论，再往外扩。
   if (opts.originHint && opts.round === 1) {
     lines.push('', '<源头（第一步先回这里查）>', opts.originHint, '</源头>');
+  }
+  // 追查链路：已知业务代码库路径——查代码提交时 git log **只在这些真实业务仓里查**，别在当前目录（那是本工具自己的仓库）。
+  if (opts.knownCodeRepos && opts.knownCodeRepos.length && opts.round === 1) {
+    lines.push('', '<已知代码库（git log 查提交去这些路径，别在当前目录 log）>', ...opts.knownCodeRepos.map((r) => `- ${r}`), '</已知代码库>');
   }
   // MVP71 KEYSTONE：用户此前就这件事**通过「需要你帮忙」求助卡补过信息**（贴的 traceID / 对方的回复 / 真实状态）。
   // 这是你上次卡住后用户专门补给你的——务必据此重新判断，别再得出和上次一样的"查不到"。置顶且强语气。
@@ -298,7 +303,14 @@ export function buildInvestigateUserMessage(opts: {
   } else {
     lines.push('', '（还没查任何东西）');
   }
-  lines.push('', '请输出一个 JSON：继续 investigate 或 conclude。');
+  // MVP76：破格式最常见的表现是模型把"我接下来想查X"写成散文而不发 JSON（实测 r3 narrate
+  // "我先搜一下相关 commit" → 整轮报废、证据被弃）。把"只输出 JSON、想继续查就把它写进 toolCalls"
+  // 这条铁律放在模型开口前的最后一句，最大化遵从。
+  lines.push(
+    '',
+    '⚠️ 只输出**一个** JSON 对象，前后不许有任何文字/解释/思考散文。',
+    '想继续查（哪怕只是"再搜个 commit"）就发 {"action":"investigate","toolCalls":[…]}，别用散文说你要查什么；查够了才发 {"action":"conclude", …}。'
+  );
   return lines.join('\n');
 }
 

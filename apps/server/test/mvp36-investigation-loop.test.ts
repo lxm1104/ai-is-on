@@ -141,3 +141,18 @@ test('T4 解析失败那轮 → 收尾 unknown，不空转', async () => {
   assert.equal(r.conclusion.verdict, 'unknown');
   assert.equal(r.rounds, 1);
 });
+
+test('MVP76 破格式不弃证据：前轮已查到东西、后一轮 narrate 成散文(重试仍败) → 保留 findings，不清零成 conf0/evidence[]', async () => {
+  // r1 正常 investigate（git log 命中）；r2 及其重试都吐散文（实测：模型 narrate "我先搜个 commit"）。
+  const { judge } = scriptedJudge([
+    JSON.stringify({ action: 'investigate', toolCalls: [{ tool: 'run_command', params: { cmd: 'git', args: ['-C', '/repo', 'log', '--grep=附件'] } }] }),
+    '我先搜索一下相关的具体 commit，并确认任务状态。', // r2 破格式；retry 被 clamp 到同一条，仍破
+  ]);
+  const runTool = async (name: string): Promise<ReadToolResult> =>
+    ({ tool: name as never, ok: true, data: { stdout: 'abc123 fix(附件): 优化返回值', code: 0 }, summary: 'git log 命中 1 条' });
+  const r = await runInvestigation({ ...baseInput, maxRounds: 3 }, { judge, runTool: runTool as never });
+  assert.equal(r.conclusion.verdict, 'unknown');
+  assert.ok(r.conclusion.confidence > 0, '有 findings 时不再是退化 conf=0'); // 兜底给 0.3
+  assert.ok(r.conclusion.evidence.length > 0, '前轮 git log 证据必须保留、surface 给用户');
+  assert.ok(/git log|附件|命中/.test(r.conclusion.evidence.join(' ')), 'evidence 来自真实查到的 findings');
+});

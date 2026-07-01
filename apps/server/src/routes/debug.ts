@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { db, getContextEntityById, listEvents, listTriageResults, matchMatterId, listUserBackfillUnitsForMatter, getMatterOriginHint } from '../db.js';
+import { db, getContextEntityById, listEvents, listTriageResults, matchMatterId, listUserBackfillUnitsForMatter, getMatterOriginHint, listKnownCodeRepos } from '../db.js';
 import { raiseMatterProgressProposal } from '../matter/matterResolveProposal.js';
 import { backfillUnitRouting } from '../bootstrap/backfillUnitRouting.js';
 import { listInducers } from '../structure/inducerRegistry.js';
@@ -128,6 +128,7 @@ debugRouter.post('/debug/investigation/run', async (req, res) => {
       projectProfile: (await resolveProjectProfileForMatter(m)) ?? undefined,
       userBackfills: listUserBackfillUnitsForMatter(matterId, 5).map((u) => u.content), // MVP71 KEYSTONE：对齐真实派发
       originHint: getMatterOriginHint(matterId) ?? undefined, // 追查链路：源头
+      knownCodeRepos: listKnownCodeRepos(), // 追查链路：已知业务代码库（git log 去对的仓）
     });
     let writeback;
     if (body.apply === true) {

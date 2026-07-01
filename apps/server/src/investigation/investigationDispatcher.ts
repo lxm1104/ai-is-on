@@ -8,7 +8,7 @@
  * 选件/worthiness 为纯函数 → 可单测。调度部分薄。
  */
 import { config } from '../config.js';
-import { getContextEntityById, hasLiveMatterProposal, getRecentInvestigationVerdicts, getLastInvestigatedAt, hasNewExternalEvidenceSince, listUserBackfillUnitsForMatter, getMatterOriginHint } from '../db.js';
+import { getContextEntityById, hasLiveMatterProposal, getRecentInvestigationVerdicts, getLastInvestigatedAt, hasNewExternalEvidenceSince, listUserBackfillUnitsForMatter, getMatterOriginHint, listKnownCodeRepos } from '../db.js';
 import { listMatters, listMatterEntities } from '../matter/matterStore.js';
 import type { Matter } from '../matter/matterTypes.js';
 import { runInvestigation } from './investigationLoop.js';
@@ -257,6 +257,8 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
       userBackfills: listUserBackfillUnitsForMatter(candidate.id, 5).map((u) => u.content),
       // 追查链路：这件事最初出现在哪（源头对话/文档）——让排查第一步先回源头看进展。
       originHint: getMatterOriginHint(candidate.id) ?? undefined,
+      // 追查链路：已知业务代码库路径——即便本 matter 没路由到项目 space，也让它 git log 去对的仓查提交。
+      knownCodeRepos: listKnownCodeRepos(),
     });
     const toolSummary = result.toolLog.map((l) => `${l.tool}:${l.ok ? l.summary : '失败'}`).join('；');
     // MVP69 P0-5：把"派发起始时刻"透传给 writeback 写进 audit payload.startedAt，

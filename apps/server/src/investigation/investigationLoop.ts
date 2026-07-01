@@ -39,6 +39,8 @@ export type InvestigationInput = {
   userBackfills?: string[];
   /** 追查链路：这件事最初出现在哪（源头对话 chatId / 文档 token / 链接 + 最初内容）——让排查"第一步先回源头看进展"。 */
   originHint?: string;
+  /** 追查链路：已知的业务代码库绝对路径——让排查查代码提交时 git log 去对的仓，而不是本工具目录。 */
+  knownCodeRepos?: string[];
 };
 
 export type InvestigationToolLogEntry = {
@@ -122,6 +124,7 @@ export async function runInvestigation(
       projectProfile: input.projectProfile,
       userBackfills: input.userBackfills,
       originHint: input.originHint,
+      knownCodeRepos: input.knownCodeRepos,
     });
 
     let step;
@@ -134,12 +137,18 @@ export async function runInvestigation(
         const retryMsg = `${userMessage}\n\n⚠️ 上一次没有输出合法 JSON（不要写任何说理散文、不要尝试调用工具）。现在**只**输出那一个 JSON 对象。`;
         step = parseInvestigationStep(await judge(retryMsg));
       } catch (err2) {
-        concluded = {
-          verdict: 'unknown',
-          confidence: 0,
-          factSummary: `排查器输出无法解析（重试后仍失败）：${err2 instanceof Error ? err2.message : String(err2)}`,
-          evidence: [],
-        };
+        // MVP76：重试仍失败——**别把已查到的证据清零**。若前几轮已 git log / IM 搜到东西
+        // （实测：r1-r2 已在正确的业务仓 git log + 多关键词搜到料，只是 r3 narrate 成散文破了格式），
+        // 就 break 让 concluded 保持 null → 落到轮末 findings 兜底（保留证据、conf=0.3、surface 给用户）。
+        // 只有真的一无所获时才记 conf=0 的退化哨兵（MVP45：会被止损排除，不误判永久放弃）。
+        if (findings.length === 0) {
+          concluded = {
+            verdict: 'unknown',
+            confidence: 0,
+            factSummary: `排查器输出无法解析（重试后仍失败）：${err2 instanceof Error ? err2.message : String(err2)}`,
+            evidence: [],
+          };
+        }
         break;
       }
     }

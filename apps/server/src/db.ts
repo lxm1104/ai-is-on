@@ -3285,6 +3285,25 @@ export function getMatterOriginHint(matterId: string): string | null {
   return parts.length ? parts.join('｜') : null;
 }
 
+/**
+ * 追查链路：所有项目档案里配过的**代码库绝对路径**（供"查代码提交"用）。
+ * 即便某 matter 没被路由到项目 space（拿不到该 space 的档案），也把已知代码库喂给排查器，
+ * 让它 git log 时**知道去哪个真实业务仓查、而不是在本工具目录瞎 log**（实测断点：unrouted matter git-log 了 cwd）。
+ */
+export function listKnownCodeRepos(): string[] {
+  const rows = db
+    .prepare(`SELECT investigation_profile AS p FROM context_spaces WHERE investigation_profile IS NOT NULL AND investigation_profile != ''`)
+    .all() as Array<{ p: string }>;
+  const repos = new Set<string>();
+  for (const r of rows) {
+    for (const m of (r.p || '').matchAll(/代码库[：:]\s*(\/[^\s，,；;]+)/g)) {
+      const path = m[1]?.trim();
+      if (path) repos.add(path);
+    }
+  }
+  return [...repos];
+}
+
 export function collapseDuplicateLiveCardsByMatter(updatedAt: string): number {
   const notProposal = `input_hash NOT LIKE 'proposal:%' AND input_hash NOT LIKE 'system:%'`;
   // ① 同 matter（非提案）只留最新一张。
