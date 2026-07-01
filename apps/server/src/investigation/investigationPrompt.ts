@@ -41,6 +41,16 @@ B) 已能下结论 → action="conclude"：
   }
 }
 
+追查纪律（像侦探一样，不放过系统能拿到的任何线索——尽可能查全再下结论）：
+- 🔍 **第一步永远先回源头**：<源头> 段给了这件事**最初出现在哪**（原对话 chatId / 原文档 token / 链接）。先去那儿看有没有新进展/回复/结论/状态变化——很多"进展"就躺在原群、原文档里。别一上来就凭摘要瞎搜关键词。
+- 然后**系统性把每个源都查一遍，一个都别漏**（相关的一次并行问清，别一条条试）：
+  ① **IM**：把 <matter> 里涉及的**每个人名 + 关键术语 + 别名/英文名**都搜一遍（search_im_messages，多组关键词）；相关的群/单聊读原文（read_chat_messages）。
+  ② **待办**：list_my_tasks 看这件事对应的任务是否已办结。
+  ③ **文档**：相关文档读正文看是否已更新/有结论（read_doc）。
+  ④ **代码提交（很多结果就落在这里，务必查）**：只要这件事和某个项目/代码/功能/badcase 有关，就到项目代码库用 run_command 查提交——\`git -C <代码库路径> log --all --oneline --grep 关键词\`（找提交信息里提到它的 commit）、\`git -C <代码库路径> log -S 关键标识 --oneline\`（找改动了某段代码/字段的 commit）、必要时 \`git -C <代码库路径> show <commit>\` 看具体改动。很多"某功能做没做 / 某 bug 修没修 / 某方案落地没"的答案就在 commit 里。<项目档案> 段有代码库路径。
+  ⑤ **badcase/报错**：走 日志ID→traceID(bytedcli log)→trace(fornax-cli)→file:line/引入commit(rg·git)。
+- ✅ **穷尽了才结论**：conclude 前先自问——"系统里还有哪个我够得到的源没查？源头回去看了吗？相关的代码提交查了吗？涉及的人名都搜过了吗？"。**只要还有没查的、够得到的线索，就继续 investigate**，别提前收工下 unknown。真查全了、确实没有，才 conclude。
+
 判定纪律：
 - verdict=resolved 只在**查到明确完成证据**时给（对方确认收到 / 任务已完成 / 文档已更新到位）；不确定就给 progressed 或 unknown，**宁可漏判完成也别误判完成**。
   · **按可逆性分档**（决定 AI 敢不敢自动办结）：对**你自己欠的、内部可逆**的事——你已完成的内部动作、已更新到位的文档、已建好的任务等——查到明确完成证据时给 resolved + solvability="can_close"，系统会在高置信时**自动办结**（留二档核实 + 一键重开兜底）。对**对外承诺 / 影响他人 / P0** 的事，即便像是完成了也**保守**给 progressed，让用户确认，别擅自替对方判定收尾。
@@ -221,6 +231,7 @@ export function buildInvestigateUserMessage(opts: {
   playbookHint?: string; // MVP37 召回：这类任务已学/用户教过的做法，优先照此排查
   projectProfile?: string; // MVP38 项目排查档案：代码库路径/trace 方法/术语等
   userBackfills?: string[]; // MVP71 KEYSTONE：用户经求助卡补给该 matter 的内容（traceID/对方回复/真实状态）
+  originHint?: string; // 追查链路：这件事最初出现在哪（源头对话/文档/链接 + 最初内容）
 }): string {
   const lines = [
     '<matter>',
@@ -233,6 +244,10 @@ export function buildInvestigateUserMessage(opts: {
       : '',
     '</matter>',
   ];
+  // 追查链路：这件事**最初出现在哪**。第一步永远先回源头看有没有新进展/回复/结论，再往外扩。
+  if (opts.originHint && opts.round === 1) {
+    lines.push('', '<源头（第一步先回这里查）>', opts.originHint, '</源头>');
+  }
   // MVP71 KEYSTONE：用户此前就这件事**通过「需要你帮忙」求助卡补过信息**（贴的 traceID / 对方的回复 / 真实状态）。
   // 这是你上次卡住后用户专门补给你的——务必据此重新判断，别再得出和上次一样的"查不到"。置顶且强语气。
   if (opts.userBackfills && opts.userBackfills.length) {

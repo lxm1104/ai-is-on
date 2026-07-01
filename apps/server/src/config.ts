@@ -203,7 +203,8 @@ export const config = {
   // 设 false 则让位 attention，但在繁忙环境下排查会被持续饿死、出不了数据。
   investigationPriority: envBool('INVESTIGATION_PRIORITY', true),
   investigationCooldownMs: envInt('INVESTIGATION_COOLDOWN_MS', 21_600_000), // 同 matter 6h 内不重查
-  investigationMaxRounds: envInt('INVESTIGATION_MAX_ROUNDS', 3),
+  // 追查链路要穷尽（源头→关键词→待办/文档→代码提交→trace），给足轮数；简单事项会提前 conclude、不额外花。
+  investigationMaxRounds: envInt('INVESTIGATION_MAX_ROUNDS', 5),
   // MVP67：你自己欠的承诺(owner=自己)被排查仍"查无跟进"(unknown) → 升一张"待你处理"提醒，而非静默丢弃。
   investigationDanglingReminderEnabled: envBool('INVESTIGATION_DANGLING_REMINDER_ENABLED', true),
   // 够旧才提醒（避免刚承诺就被催）：默认创建满 3 天（或已过期）才升。

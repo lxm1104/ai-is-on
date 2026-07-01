@@ -37,6 +37,8 @@ export type InvestigationInput = {
   /** MVP71 KEYSTONE：用户经「需要你帮忙」求助卡补给该 matter 的内容（贴的 traceID / 对方回复 / 真实状态）。
    *  注入每轮 prompt 的 `<用户补充>` 段——让"你补一手→AI 接着查"从假闭环变真闭环（重查真正读到你补的信息）。 */
   userBackfills?: string[];
+  /** 追查链路：这件事最初出现在哪（源头对话 chatId / 文档 token / 链接 + 最初内容）——让排查"第一步先回源头看进展"。 */
+  originHint?: string;
 };
 
 export type InvestigationToolLogEntry = {
@@ -119,6 +121,7 @@ export async function runInvestigation(
       playbookHint: input.playbookHint,
       projectProfile: input.projectProfile,
       userBackfills: input.userBackfills,
+      originHint: input.originHint,
     });
 
     let step;

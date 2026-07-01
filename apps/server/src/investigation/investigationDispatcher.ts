@@ -8,7 +8,7 @@
  * 选件/worthiness 为纯函数 → 可单测。调度部分薄。
  */
 import { config } from '../config.js';
-import { getContextEntityById, hasLiveMatterProposal, getRecentInvestigationVerdicts, getLastInvestigatedAt, hasNewExternalEvidenceSince, listUserBackfillUnitsForMatter } from '../db.js';
+import { getContextEntityById, hasLiveMatterProposal, getRecentInvestigationVerdicts, getLastInvestigatedAt, hasNewExternalEvidenceSince, listUserBackfillUnitsForMatter, getMatterOriginHint } from '../db.js';
 import { listMatters, listMatterEntities } from '../matter/matterStore.js';
 import type { Matter } from '../matter/matterTypes.js';
 import { runInvestigation } from './investigationLoop.js';
@@ -255,6 +255,8 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
       projectProfile: (await resolveProjectProfileForMatter(candidate)) ?? undefined,
       // MVP71 KEYSTONE：把用户经求助卡补给该 matter 的内容喂回重查——闭环从"只解封不喂内容"的假闭环变真闭环。
       userBackfills: listUserBackfillUnitsForMatter(candidate.id, 5).map((u) => u.content),
+      // 追查链路：这件事最初出现在哪（源头对话/文档）——让排查第一步先回源头看进展。
+      originHint: getMatterOriginHint(candidate.id) ?? undefined,
     });
     const toolSummary = result.toolLog.map((l) => `${l.tool}:${l.ok ? l.summary : '失败'}`).join('；');
     // MVP69 P0-5：把"派发起始时刻"透传给 writeback 写进 audit payload.startedAt，

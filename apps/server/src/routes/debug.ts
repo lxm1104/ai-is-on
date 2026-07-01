@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { db, getContextEntityById, listEvents, listTriageResults, matchMatterId, listUserBackfillUnitsForMatter } from '../db.js';
+import { db, getContextEntityById, listEvents, listTriageResults, matchMatterId, listUserBackfillUnitsForMatter, getMatterOriginHint } from '../db.js';
 import { raiseMatterProgressProposal } from '../matter/matterResolveProposal.js';
 import { backfillUnitRouting } from '../bootstrap/backfillUnitRouting.js';
 import { listInducers } from '../structure/inducerRegistry.js';
@@ -127,6 +127,7 @@ debugRouter.post('/debug/investigation/run', async (req, res) => {
       playbookHint: matchedPb ? renderPlaybookForPrompt(matchedPb) : undefined,
       projectProfile: (await resolveProjectProfileForMatter(m)) ?? undefined,
       userBackfills: listUserBackfillUnitsForMatter(matterId, 5).map((u) => u.content), // MVP71 KEYSTONE：对齐真实派发
+      originHint: getMatterOriginHint(matterId) ?? undefined, // 追查链路：源头
     });
     let writeback;
     if (body.apply === true) {

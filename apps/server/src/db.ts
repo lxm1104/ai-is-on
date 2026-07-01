@@ -3247,6 +3247,44 @@ export function listUserBackfillUnitsForMatter(
   return rows.filter((r) => typeof r.content === 'string' && r.content.trim().length > 0);
 }
 
+/**
+ * 追查链路：这件事**最初出现在哪**——源头对话/文档/链接 + 最初内容。让排查"第一步先回源头看进展"。
+ * matter → created_from_context_unit_id → context_unit → 源头 event（im 有 chatId、minutes/doc 有 token、其余给 url）。
+ */
+export function getMatterOriginHint(matterId: string): string | null {
+  const row = db
+    .prepare(
+      `SELECT cu.content AS content, cu.origin_kind AS ok, e.raw_json AS raw, e.text AS etext, e.url AS eurl, e.source AS esource, e.title AS etitle, e.occurred_at AS occurred
+       FROM matters m
+       JOIN context_units cu ON cu.id = m.created_from_context_unit_id
+       LEFT JOIN events e ON e.id = cu.origin_ref_id
+       WHERE m.id = ?`
+    )
+    .get(matterId) as
+    | { content?: string; ok?: string; raw?: string; etext?: string; eurl?: string; esource?: string; etitle?: string; occurred?: string }
+    | undefined;
+  if (!row) return null;
+  let ref = '';
+  try {
+    const raw = row.raw ? (JSON.parse(row.raw) as Record<string, unknown>) : {};
+    const msg = raw.msg as Record<string, unknown> | undefined;
+    const note = raw.note as Record<string, unknown> | undefined;
+    const chatId = (raw.chatId ?? msg?.chat_id ?? raw.chat_id) as string | undefined;
+    const docToken = (note?.note_doc_token ?? raw.doc_token ?? raw.token) as string | undefined;
+    if (chatId) ref = `原对话 chatId=${chatId}（先用 read_chat_messages 读这个会话，看这件事有没有新进展/回复/结论）`;
+    else if (docToken) ref = `原文档 token=${docToken}（先用 read_doc 读它看是否已更新/有结论）`;
+    else if (row.eurl) ref = `原始出处链接 ${row.eurl}`;
+  } catch {}
+  const text = (row.etext || row.content || '').trim().replace(/\s+/g, ' ').slice(0, 220);
+  const parts = [
+    ref,
+    row.esource ? `来源类型=${row.esource}` : '',
+    row.occurred ? `最初出现于 ${row.occurred.slice(0, 16)}` : '',
+    text ? `最初内容：${text}` : '',
+  ].filter(Boolean);
+  return parts.length ? parts.join('｜') : null;
+}
+
 export function collapseDuplicateLiveCardsByMatter(updatedAt: string): number {
   const notProposal = `input_hash NOT LIKE 'proposal:%' AND input_hash NOT LIKE 'system:%'`;
   // ① 同 matter（非提案）只留最新一张。
