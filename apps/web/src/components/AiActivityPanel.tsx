@@ -1,28 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchAiActivity, fetchAiActivityNow, fetchMatterInvestigationTrace, type AiActivity, type AiActivityTally, type AiInFlight, type InvestigationTrace } from '../lib/api';
-
-// MVP69 P1：把内部工具名映射成用户能懂的说法；**只做术语层**，不展示 run_command 原始命令/路径（防泄漏）。
-const TOOL_LABEL: Record<string, string> = {
-  search_im_messages: '搜飞书消息',
-  im_search: '搜飞书消息',
-  get_chat_history: '看群聊记录',
-  list_my_tasks: '查我的待办',
-  read_doc: '读文档',
-  fetch_doc: '读文档',
-  run_command: '本地查代码/数据',
-};
-function friendlyTool(s: { tool?: string; kind: string }): string {
-  const t = s.tool ?? s.kind;
-  return TOOL_LABEL[t] ?? t;
-}
-// 失败/含 CLI 原文的步骤 summary 不直接展示原始错误（防泄漏内部命令/路径），归一为一句话。
-const LEAK_RE = /lark-cli|exit \d|command not found|traceback|\/Users\/|node_modules|stderr|panic|undefined is not/i;
-function friendlySummary(raw: string): string {
-  const s = (raw || '').trim();
-  if (!s) return '（无结果）';
-  if (s.startsWith('（失败') || LEAK_RE.test(s)) return '（这步没成功，AI 已跳过）';
-  return s.slice(0, 100);
-}
+import { fetchAiActivity, fetchAiActivityNow, type AiActivity, type AiActivityTally, type AiInFlight } from '../lib/api';
 
 /**
  * MVP68「AI 替你做了什么」——把 AI 自主动作（主动办结 / 自主排查 / 从对话更新事项）做成用户可读的记录流。
@@ -56,14 +33,8 @@ function actionMeta(a: AiActivity): ActionMeta {
       return { icon: '⏰', label: '到期提醒', isResult: true };
     case 'caring_note':
       return { icon: '💗', label: '关心提醒', isResult: true };
-    case 'investigation_written_back':
-      // MVP73：把排查"结果"和"过程"分开标——查到东西的是结果，暂未查到的才是过程。
-      switch (a.verdict) {
-        case 'resolved': return { icon: '✅', label: '排查·疑似已完成', isResult: true };
-        case 'progressed': return { icon: '🔍', label: '替你查清进展', isResult: true };
-        case 'blocked': return { icon: '🔍', label: '查清·暂时受阻', isResult: true };
-        default: return { icon: '🔭', label: '排查·暂未查到', isResult: false };
-      }
+    // MVP75 第一性原理：面板只展示"结果/交付物"。原始排查(investigation_written_back)是过程、不是结果，
+    // 已从后端 AI_ACTIVITY_ACTIONS 移除，不再进这里。其余未知动作一律不当结果。
     default:
       return { icon: '🤖', label: a.action, isResult: false };
   }
@@ -144,28 +115,25 @@ export function AiActivityPanel() {
               <span title="近 7 天 AI 给你直接建议/意见的事项数">💡 建议 <b>{tally.recommendedCount}</b></span>
               <span title="近 7 天 AI 高置信主动办结的事项数">✅ 办结 <b>{tally.resolvedCount}</b></span>
               <span title="近 7 天 AI 替你产出修复方案（真有 file:line，可一键复制去改）的事项数">🔧 产出 <b>{tally.producedCount}</b></span>
-              <span title="近 7 天 AI 自主查到进展（事实，未必有建议）的事项数">📈 查到进展 <b>{tally.progressedCount}</b></span>
               <span title="当前需要你补一手才能接着办的事项数" style={{ color: tally.pendingCount > 0 ? '#b45309' : undefined }}>🙋 待你 <b>{tally.pendingCount}</b></span>
               <span title="近 7 天你已应答的求助/待办卡（人机协作转化）">🤝 已应答 <b>{tally.answeredCount}</b></span>
               <span style={{ opacity: 0.6 }}>（近 7 天）</span>
             </div>
           )}
           <div className="ai-activity__bar">
-            <span className="ai-activity__hint">AI 自主处理的记录（主动办结 / 自主排查 / 从对话更新），均可在事项里复核</span>
+            <span className="ai-activity__hint">AI 替你办成/推进的结果（建议 / 起草 / 产出 / 办结），点事项可复核</span>
             <button type="button" className="btn btn--ghost" onClick={() => void load()} disabled={loading}>
               {loading ? '加载中…' : '↻ 刷新'}
             </button>
           </div>
           {error && <div className="ai-activity__err">{error}</div>}
-          {inFlight ? (
+          {inFlight && (
             <div className="ai-activity__inflight">
-              <span className="ai-activity__inflight-dot" /> AI 正在排查：「{inFlight.title}」
+              <span className="ai-activity__inflight-dot" /> AI 正在替你处理：「{inFlight.title}」
             </div>
-          ) : (
-            <div className="ai-activity__inflight ai-activity__inflight--idle">AI 当前没有在排查（有新事项/新证据会自动开查）</div>
           )}
           {!error && items.length === 0 && !loading && (
-            <div className="ai-activity__empty">还没有 AI 自主处理记录。AI 排查/办结后会出现在这里。</div>
+            <div className="ai-activity__empty">还没有结果。AI 给出建议 / 起草 / 办结后，会出现在这里。</div>
           )}
           <ul className="ai-activity__list">
             {items.map((a) => {
@@ -175,14 +143,10 @@ export function AiActivityPanel() {
                   <div className="ai-activity__head">
                     <span className="ai-activity__icon">{meta.icon}</span>
                     <span className="ai-activity__action">{meta.label}</span>
-                    {typeof a.confidence === 'number' && a.action === 'investigation_written_back' && (
-                      <span className="ai-activity__conf" title="AI 对该结论的把握">置信 {a.confidence.toFixed(2)}</span>
-                    )}
                     <span className="ai-activity__time">{shortTime(a.createdAt)}</span>
                   </div>
                   {a.matterTitle && <div className="ai-activity__matter">「{a.matterTitle}」</div>}
                   <div className="ai-activity__detail">{detailOf(a)}</div>
-                  {a.matterId && a.action === 'investigation_written_back' && <TraceExpander matterId={a.matterId} />}
                 </li>
               );
             })}
@@ -193,49 +157,3 @@ export function AiActivityPanel() {
   );
 }
 
-/** MVP69 P1：行内下钻"AI 查了哪几步"——按需拉该 matter 最近一次排查轨迹，友好工具名，不露 CLI 原文。 */
-function TraceExpander({ matterId }: { matterId: string }) {
-  const [open, setOpen] = useState(false);
-  const [trace, setTrace] = useState<InvestigationTrace | null>(null);
-  const [loaded, setLoaded] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  async function toggle() {
-    const next = !open;
-    setOpen(next);
-    if (next && !loaded) {
-      setBusy(true);
-      try {
-        setTrace(await fetchMatterInvestigationTrace(matterId));
-      } catch {
-        setTrace(null);
-      } finally {
-        setLoaded(true);
-        setBusy(false);
-      }
-    }
-  }
-
-  const steps = trace?.steps ?? [];
-  return (
-    <div className="ai-activity__trace">
-      <button type="button" className="ai-activity__trace-toggle" onClick={() => void toggle()}>
-        {open ? '▾' : '▸'} {busy ? '加载中…' : open ? '收起排查过程' : '看 AI 查了哪几步'}
-      </button>
-      {open && loaded && (
-        steps.length === 0 ? (
-          <div className="ai-activity__trace-empty">没有这次排查的工具链记录（可能是据已知信息直接判断的）。</div>
-        ) : (
-          <ol className="ai-activity__trace-steps">
-            {steps.map((s) => (
-              <li key={s.order}>
-                <span className="ai-activity__trace-tool">{friendlyTool(s)}</span>
-                <span className="ai-activity__trace-sum"> → {friendlySummary(s.summary)}</span>
-              </li>
-            ))}
-          </ol>
-        )
-      )}
-    </div>
-  );
-}

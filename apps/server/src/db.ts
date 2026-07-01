@@ -2446,14 +2446,16 @@ export type AiActivityRow = {
   matterTitle: string | null;
   createdAt: string;
 };
+// MVP75 第一性原理：面板只列"结果/交付物"，不列原始排查过程。
+// 故移除 investigation_written_back（那是过程：查了X/没查到/受阻）——它若产出了建议/产出/办结，
+// 已分别记为 investigation_recommended / matter_artifact_raised / matter_auto_resolved（下面这些才是结果）。
 const AI_ACTIVITY_ACTIONS = [
-  'matter_auto_resolved', // AI 高置信主动办结
+  'matter_auto_resolved', // AI 高置信主动办结（结果）
   'investigation_recommended', // MVP75：AI 给你一条达标的直接建议（结果）
-  'matter_artifact_raised', // MVP74：AI 替你产出修复方案交付件（真有 file:line 的推进结果）
-  'investigation_written_back', // AI 自主排查写回结论
-  'chat_conclusion_written_back', // AI 从对话里替你更新事项
-  'lark_task_created', // AI 替你建了飞书任务
-  'lark_doc_created', // AI 替你建了飞书文档
+  'matter_artifact_raised', // MVP74：AI 替你产出修复方案/待建任务/决策信息包（结果）
+  'chat_conclusion_written_back', // AI 从对话里替你更新事项（结果）
+  'lark_task_created', // AI 替你建了飞书任务（结果）
+  'lark_doc_created', // AI 替你建了飞书文档（结果）
 ] as const;
 // MVP73：除了排查，AI 还替你做这些（action_proposals 里的 agent 产出）——之前面板只收录排查、
 // 让用户以为"只有排查"。排除 doc_comment_attention（仅"注意到一条评论"、量大噪声、非交付物）。

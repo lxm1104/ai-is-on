@@ -116,26 +116,26 @@ test('MVP66 hasNewExternalEvidenceSince：作废(status!=active)不算新证据'
   assert.equal(db.hasNewExternalEvidenceSince(m, since), false);
 });
 
-// MVP68 listAiActivity：只取 AI 自主动作 + join 事项标题 + 排除 conf=0 哨兵
-test('MVP68 listAiActivity：过滤自主动作、join 标题、排除 conf=0 哨兵', () => {
+// MVP68/MVP75 listAiActivity：只取 AI「结果」+ join 事项标题。
+// MVP75 第一性原理：investigation_written_back（原始排查过程）不再进面板；只留结果类动作。
+test('MVP75 listAiActivity：只列结果（排除原始排查过程 + 非结果动作）、join 标题', () => {
   resetDb();
   const m = 'mtr-' + randomUUID();
   db.db.prepare(
     `INSERT INTO matters (id, subject_id, scope, type, title, canonical_key, status, priority, current_summary, created_from_context_unit_id, confidence, reopened_count, version, created_at, updated_at)
      VALUES (?, 'me','work','follow_up','授权超时跟进','k1','open','P1','','u1',0.7,0,1,?,?)`
   ).run(m, '2026-06-15T00:00:00.000Z', '2026-06-15T00:00:00.000Z');
-  // 自主动作（应入选）
+  // 原始排查（过程）——不进面板
   writeback(m, 'progressed', 0.7, '2026-06-15T10:00:00.000Z');
+  // 自主办结（结果）——入选
   db.insertAuditLog({ id: randomUUID(), agent_run_id: null, card_id: null, rule_id: null, action: 'matter_auto_resolved', reason: 'AI 自主办结：已发', payload_json: JSON.stringify({ matterId: m, confidence: 0.9 }), created_at: '2026-06-15T11:00:00.000Z' });
-  // conf=0 哨兵（应排除）
-  writeback(m, 'unknown', 0, '2026-06-15T12:00:00.000Z');
-  // 非自主动作（应排除）
+  // 非结果动作（应排除）
   db.insertAuditLog({ id: randomUUID(), agent_run_id: null, card_id: null, rule_id: null, action: 'card_blocked', reason: 'x', payload_json: null, created_at: '2026-06-15T13:00:00.000Z' });
 
   const items = db.listAiActivity(50);
-  assert.equal(items.length, 2, '只 2 条自主动作（排除 conf=0 哨兵 + 非自主 card_blocked）');
-  assert.ok(items.every((i) => i.action === 'investigation_written_back' || i.action === 'matter_auto_resolved'));
-  assert.ok(items.every((i) => i.matterTitle === '授权超时跟进'), 'join 到事项标题');
+  assert.equal(items.length, 1, '只 1 条结果（自主办结）——排查过程 + card_blocked 都不进');
+  assert.equal(items[0].action, 'matter_auto_resolved');
+  assert.equal(items[0].matterTitle, '授权超时跟进', 'join 到事项标题');
 });
 
 // MVP73 listAiActivity：除排查外，纳入 agent 交付物(会前/日报/纪要/提醒)，排除 sync_draft/doc_comment 噪声
@@ -152,7 +152,8 @@ test('MVP73 listAiActivity：纳入 agent 交付物、排除草稿/评论噪声'
   mk('reminder', '承诺到期：发月报');
   mk('sync_draft', '同步草稿→相关方');         // 应排除
   mk('doc_comment_attention', '注意到一条评论'); // 应排除
-  // 一条真实排查
+  // 一条建议（结果）+ 一条原始排查（过程）
+  db.insertAuditLog({ id: randomUUID(), agent_run_id: null, card_id: null, rule_id: null, action: 'investigation_recommended', reason: 'AI 给你一条建议（do）：催X把Y落地', payload_json: JSON.stringify({ matterId: 'm1', stance: 'do' }), created_at: now });
   db.insertAuditLog({ id: randomUUID(), agent_run_id: null, card_id: null, rule_id: null, action: 'investigation_written_back', reason: 'AI 排查（progressed）：定位到X', payload_json: JSON.stringify({ matterId: 'm1', verdict: 'progressed', confidence: 0.7 }), created_at: now });
 
   const items = db.listAiActivity(50);
@@ -160,7 +161,8 @@ test('MVP73 listAiActivity：纳入 agent 交付物、排除草稿/评论噪声'
   assert.ok(types.includes('meeting_brief'), '含会前');
   assert.ok(types.includes('daily_digest'), '含日报');
   assert.ok(types.includes('reminder'), '含提醒');
-  assert.ok(types.includes('investigation_written_back'), '含排查');
+  assert.ok(types.includes('investigation_recommended'), '含建议（结果）');
+  assert.ok(!types.includes('investigation_written_back'), 'MVP75：原始排查过程不进面板');
   assert.ok(!types.includes('sync_draft'), '排除同步草稿（用户devalue草稿）');
   assert.ok(!types.includes('doc_comment_attention'), '排除评论噪声');
 });
