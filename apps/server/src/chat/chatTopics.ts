@@ -91,14 +91,17 @@ export function maybeQueueAutoConversation(matter: Matter, rec: Recommendation, 
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   if (countAiPushTopicsSince(todayStart.toISOString()) >= config.investigationAutoTopicDailyMax) return false;
-  // 结果先行：直接上"我的建议 + 起草好的东西"，**不**罗列"我查到 X / 查了几步"（用户要结果不要过程）。
+  // 结果先行：直接上"我的建议 + 起草好的成品全文"，**不**罗列"我查到 X / 查了几步"（用户要结果不要过程）。
   const topic = postAiMessageToNewTopic({
     title: `AI 推进：${matter.title.slice(0, 36)}`,
     sourceRefId: matter.id,
-    text: `💡 我建议你：${rec.advice}\n依据：${rec.because}\n\n我已经替你把该做的直接起草好了，你看下要不要用 👇`,
+    text: `💡 我建议你：${rec.advice}\n依据：${rec.because}`,
   });
-  // ② 自动推进：异步跑沙箱 push turn 起草交付物，完成后贴进同一会话（不阻塞 writeback；失败则只留①）。
-  if (config.investigationAutoPushEnabled) {
+  if (rec.draft) {
+    // 结论里已带 AI 起草好的成品 → 直接贴（同步、无需再跑 turn）。用户看全文 + 一键复制去发。
+    postAiMessageToTopic(topic.id, `📝 我替你起草好了${rec.nextStep ? `（${rec.nextStep}）` : ''}，复制就能用：\n\n${rec.draft}`);
+  } else if (config.investigationAutoPushEnabled) {
+    // 结论没带成品 → 兜底跑全沙箱 aiisn-push 起草（异步，不阻塞 writeback；失败则只留建议）。
     void runAutoPushTurn(topic.id, matter, rec, factSummary).catch(() => {});
   }
   return true;

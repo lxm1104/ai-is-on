@@ -149,14 +149,15 @@ export function defaultAttentionActions(item: AttentionItem): CardAction[] {
     ];
   }
 
-  // MVP75：「💡 我的建议」卡 —— AI 给了一条直接建议/意见。「让 AI 接着推」走 ask_agent(右侧会话推进，手动花 gate)；
-  // 「我来办」走 mark_done(你照建议办了 → 办结+落说明)；「不用了」走 dismiss(豁免负反馈，是裁决非内容不相关)。
+  // MVP75：「💡 我的建议」卡 —— AI 给了建议 + 直接起草好的成品（卡正文含全文）。参与入口要清晰：
+  // 「复制去发」纯前端复制卡正文（含起草的话术，你粘到飞书发）；「让 AI 改一版」走 ask_agent 到右侧会话细改；
+  // 「我发了·办结」走 matter_resolve（你按建议办完了→办结）；「先不弄」走 dismiss（豁免负反馈，是裁决非不相关）。
   if (item.inputHash.startsWith('proposal:matter-reco:')) {
     return [
-      { id: 'ask_agent', label: '让 AI 接着推', kind: 'ask_agent' },
-      { id: 'mark_done', label: '我来办', kind: 'mark_done' },
-      { id: 'ack', label: '知道了', kind: 'ack' },
-      { id: 'dismiss', label: '不用了', kind: 'dismiss' },
+      { id: 'copy_reco', label: '复制去发', kind: 'copy' },
+      { id: 'ask_agent', label: '让 AI 改一版', kind: 'ask_agent' },
+      { id: 'matter_resolve', label: '我发了·办结', kind: 'matter_resolve' },
+      { id: 'dismiss', label: '先不弄', kind: 'dismiss' },
     ];
   }
 

@@ -37,7 +37,7 @@ B) 已能下结论 → action="conclude"：
     "solvability": "can_close | can_produce_artifact | need_user | cant",
     "needFromUser": { "kind": "need_credential", "ask": "<一句话告诉用户你具体缺什么>" },
     "artifact": { "kind": "code_fix | task_spec | decision_brief", "title": "...", "body": "主体内容", "rootCause": "(code_fix)根因", "targetRef": "(code_fix)文件:行号", "verifyCmd": "(code_fix)验证命令", "assignee": "(task_spec)建议负责人,可选" },
-    "recommendation": { "stance": "do|wait|escalate|drop|decide", "advice": "我建议你具体做什么(动作+对象)", "because": "一句理由,须引上面 evidence", "nextStep": "可选:你能一键做的只读/起草动作" }
+    "recommendation": { "stance": "do|wait|escalate|drop|decide", "advice": "我建议你具体做什么(动作+对象)", "because": "一句理由,须引上面 evidence", "nextStep": "可选:一句话点明下一步是什么", "draft": "可选但强烈建议:直接起草好的成品全文(催办话术/回复/方案),让用户一键复制去用" }
   }
 }
 
@@ -60,7 +60,8 @@ B) 已能下结论 → action="conclude"：
   · **verdict=progressed 或 resolved 时，几乎一定要给 recommendation**——有进展/已完成就一定有"所以你接下来该…"。只有 blocked/unknown 且确实只能求助时才可不给（走 needFromUser）。
   · **建议必须是"动作"不是"事实复述"**："根因已明确""对方未交付""评审没召开""已定位X"全是**事实**，要紧跟"**所以我建议你〔催谁/问谁/改哪/推动什么/搁置/上抛〕**"。advice 含具体动作+对象，≤80 字。
   · 例：事实「评审没召开，4月对方说要支持，6月关联工单按"产品需求"关闭」→ 建议 advice:"找对方对齐这功能到底还推不推——4月说要、6月工单却按产品需求关了，方向有分歧" because:"4月确认支持但6月工单已关归因产品需求(见 evidence)" stance:"do" nextStep:"我已起草一句问对方的话术待你发"。
-  · **because 必须引用上面 evidence 里的具体证据**；**nextStep 只能只读/起草**（"我已起草…待你发"），**绝不写"我已发/已改/已办"**（你不代发、不自动改状态）。
+  · **because 必须引用上面 evidence 里的具体证据**。
+  · 🎯 **stance=do 且建议是"催办/回复/问清/发消息"这类可起草的动作时，必须把 draft 字段也写出来**——**直接起草好可以发的成品全文**（自然口吻、点名对方、说清诉求，用户复制就能发），别只在 advice 里说"建议催一下"却不给话术。这是让用户"一键就能用"的关键。draft 里**绝不能写"我已发/已通知/已办"**——你不代发，发由用户点。
   · stance：do(去做)｜wait(先等/还在窗口内别催)｜escalate(上抛求助)｜drop(可不跟了/做减法)｜decide(该用户拍板)。
   · 实在**只能复述事实、给不出有动作的建议**才留空——但这应是少数；**别用"建议继续跟进"这种废话凑**（后端有防换壳硬门会丢掉、还拉低你的结果率）。
 
@@ -135,7 +136,8 @@ export type Recommendation = {
   stance: RecoStance; // 倾向：去做 / 先等 / 上抛求助 / 可不跟了 / 该你拍板
   advice: string; // 对用户的直接建议（含动作+对象），≤80 字
   because: string; // 一句理由，须引证据
-  nextStep?: string; // 可选：用户能一键做的只读/起草动作（绝不能是"已发/已改/已办"）
+  nextStep?: string; // 可选：一句话点明下一步是什么（如"发给丘晓骁的催办"）
+  draft?: string; // 关键：AI 替用户**直接起草好的成品**（催办话术/回复/方案全文），让用户一键复制去用——绝不是"已发"
 };
 const RECO_MIN_NEW_TOKENS = 2; // 增量信息门阈值：advice 须含 fact/evidence 之外的新词
 // 完成态/代执行动词 → 否决（AI 不代发不自动改，建议只能是"待你做"）。
@@ -410,7 +412,7 @@ function parseRecommendation(raw: unknown): Recommendation | undefined {
   const advice = s('advice', 120);
   const because = s('because', 200);
   if (!advice || !because) return undefined;
-  return { stance, advice, because, nextStep: s('nextStep', 120) || undefined };
+  return { stance, advice, because, nextStep: s('nextStep', 120) || undefined, draft: s('draft', 1200) || undefined };
 }
 
 /** 解析一步；非法或缺字段时按保守降级（解析失败→当作 unknown 结论，由调用方决定）。 */

@@ -124,6 +124,7 @@ test('MVP75 向后兼容：无 recommendation → 等价今天（progressed 升�
 // ---- P1-5：自动开会话（只插消息、不起 turn） ----
 const { maybeQueueAutoConversation } = await import('../src/chat/chatTopics.js');
 const doReco = { stance: 'do' as const, advice: '催丘晓骁把图片预览落地，是阻塞评审收尾的关键项', because: '评审日报显示该项仍在丘晓骁名下未修复超10天', nextStep: '我可起草催办待你发' };
+const draftReco = { ...doReco, nextStep: '发给丘晓骁的催办', draft: '晓骁，图片预览这条从6/13挂到现在超10天了，是评审收尾的关键项，方便同步下进度和预计修复时间吗？' };
 function clearChat() { db.db.exec(`DELETE FROM chat_topics; DELETE FROM runtime_messages;`); }
 function mkP1Matter() { const m = mkMatter(); db.db.prepare(`UPDATE matters SET priority='P1' WHERE id=?`).run(m.id); return { ...m, priority: 'P1' as const }; }
 
@@ -138,6 +139,26 @@ test('MVP75 P1-5：达标建议+P1 matter → 自动开会话（只插 assistant
   assert.equal(msg.role, 'assistant', '只插一条 assistant 消息');
   assert.match(msg.text, /我建议你/);
   assert.ok(!/我查到/.test(msg.text), '结果先行：开头不再"我查到X"罗列过程');
+});
+
+test('MVP75 结果+成品同卡：建议带 draft → 💡卡正文含 AI 起草的成品全文', () => {
+  resetDb();
+  const m = mkMatter();
+  applyInvestigationResult({ matterId: m.id, conclusion: { verdict: 'progressed', confidence: 0.7, factSummary: FACT, evidence: EV, recommendation: draftReco } });
+  const card = recoCard(m.id);
+  assert.ok(card, '升💡卡');
+  assert.match(card!.why, /我替你起草好了/, '卡正文含起草段');
+  assert.match(card!.why, /晓骁，图片预览/, '含草稿全文（结果内容看得到）');
+});
+
+test('MVP75 P1-5：建议带 draft → 自动会话直接贴成品（建议+草稿两条，不跑 turn）', () => {
+  resetDb(); clearChat();
+  const m = mkP1Matter();
+  assert.equal(maybeQueueAutoConversation(m as any, draftReco, 'x'), true);
+  const topic = db.db.prepare(`SELECT id FROM chat_topics WHERE source_kind='ai_push' AND source_ref_id=?`).get(m.id) as any;
+  const msgs = db.db.prepare(`SELECT text FROM runtime_messages WHERE topic_id=? ORDER BY created_at`).all(topic.id) as any[];
+  assert.equal(msgs.length, 2, '建议 + 起草成品两条');
+  assert.match(msgs[1].text, /晓骁，图片预览/, '第二条是起草全文');
 });
 
 test('MVP75 P1-5：同 matter 幂等 + 日配额满 + wait/P2 不开', () => {

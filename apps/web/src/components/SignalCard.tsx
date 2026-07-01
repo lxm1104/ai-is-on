@@ -299,10 +299,16 @@ export function SignalCardView(props: {
       window.open(card.sourceUrl, '_blank', 'noreferrer');
       return;
     }
-    // MVP74：「复制修复方案」纯前端复制卡正文（含 file:line+根因+改法+验证命令），不经后端、不改卡状态。
+    // MVP74/75：「复制」纯前端复制卡正文，不经后端、不改卡状态。
+    // MVP75：💡建议卡的正文里 AI 起草好的成品在"复制就能用：\n"之后——只复制那段成品（用户直接粘去发），
+    // 不带"建议/依据"前言；没有该标记的卡（如修复方案）则复制整段正文。
     if (kind === 'copy') {
       try {
-        await navigator.clipboard.writeText(card.reason ?? card.title ?? '');
+        const full = card.reason ?? card.title ?? '';
+        const marker = '复制就能用：\n';
+        const idx = full.indexOf(marker);
+        const toCopy = idx >= 0 ? full.slice(idx + marker.length).trim() : full;
+        await navigator.clipboard.writeText(toCopy);
         setCopied(actionId);
         window.setTimeout(() => setCopied((c) => (c === actionId ? null : c)), 1800);
       } catch (e) {
