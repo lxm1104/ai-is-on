@@ -16,6 +16,7 @@
  * armed 模式：只有服务进程启动时显式 armNotifyService() 后才真发。测试/脚本 import 升卡函数时天然 no-op，
  * 现有测试零改动也绝不会误发真实 DM（确定性保证，不靠环境变量猜测）。
  */
+import { createHash } from 'node:crypto';
 import { config } from '../config.js';
 import { runLarkCliJson } from '../util/larkCli.js';
 import { getMyOpenId } from '../util/identity.js';
@@ -84,6 +85,18 @@ function clip(s: string, n: number): string {
   const t = s.trim();
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 }
+
+/**
+ * 飞书消息幂等键（uuid 字段）**硬限 50 字符**，超长整个请求被拒（99992402 field validation failed，
+ * 2026-07-03 实测：reply_ack 键 51 字符导致回执静默丢失、用户以为"没反应"）。
+ * 超长时确定性哈希截短——同输入永远同键，两层幂等（audit + 飞书服务端）都不受影响。
+ */
+export function makeIdempotencyKey(...parts: string[]): string {
+  const raw = parts.join(':');
+  if (raw.length <= 50) return raw;
+  const digest = createHash('sha1').update(raw).digest('hex').slice(0, 32);
+  return `aiisn-${digest}`; // 38 字符，恒 ≤50
+}
 function firstLine(s: string): string {
   return s.trim().split('\n')[0] ?? '';
 }
@@ -106,8 +119,10 @@ export async function sendBotDm(
   opts: { kind: NotifyKind; refId?: string; idempotencyKey: string; now?: Date }
 ): Promise<boolean> {
   if (!armed || !config.notifyPushEnabled) return false;
+  // 防御性归一：任何调用方传超长键都在这里截短（audit 与飞书两层用同一个归一后键）。
+  const idempotencyKey = makeIdempotencyKey(opts.idempotencyKey);
   try {
-    if (wasNotifyPushed(opts.idempotencyKey)) return false;
+    if (wasNotifyPushed(idempotencyKey)) return false;
     if (
       !QUOTA_EXEMPT_KINDS.has(opts.kind) &&
       countNotifyPushedSince(startOfTodayIso(opts.now)) >= config.notifyInstantDailyMax
@@ -127,7 +142,7 @@ export async function sendBotDm(
       '--markdown',
       markdown,
       '--idempotency-key',
-      opts.idempotencyKey,
+      idempotencyKey,
     ]);
     const data = (resp as { data?: { message_id?: string; chat_id?: string } })?.data;
     const messageId = data?.message_id;
@@ -136,14 +151,14 @@ export async function sendBotDm(
     writeAudit({
       action: 'notify_pushed',
       reason: `已推送到你的飞书（${opts.kind}）：${clip(firstLine(markdown).replace(/\*/g, ''), 80)}`,
-      payload: { kind: opts.kind, refId: opts.refId, idempotencyKey: opts.idempotencyKey, messageId },
+      payload: { kind: opts.kind, refId: opts.refId, idempotencyKey, messageId },
     });
     return true;
   } catch (err) {
     writeAudit({
       action: 'notify_failed',
       reason: `飞书推送失败（${opts.kind}）：${clip((err as Error)?.message ?? String(err), 200)}`,
-      payload: { kind: opts.kind, refId: opts.refId, idempotencyKey: opts.idempotencyKey },
+      payload: { kind: opts.kind, refId: opts.refId, idempotencyKey },
     });
     return false;
   }
@@ -172,7 +187,8 @@ export function notifyProposalRaised(input: {
   void sendBotDm(md, {
     kind,
     refId: input.matterId,
-    idempotencyKey: `aiisn:${kind}:${input.matterId}:${localDateStr()}`,
+    // matterId 是 36 位 uuid，裸拼会超飞书 50 字符键上限（实测被整单拒收）——必须走 makeIdempotencyKey。
+    idempotencyKey: makeIdempotencyKey('aiisn', kind, input.matterId, localDateStr()),
   });
 }
 

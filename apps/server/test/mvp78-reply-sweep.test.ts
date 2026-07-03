@@ -316,6 +316,65 @@ test('MVP78 命令回复：「确认清理」「忽略」「恢复」经 handleU
   assert.equal(await loop.handleUserReply(userMsg({ content: '忽略' }), deps), 'command:ignore');
 });
 
+// ---- 幂等键硬限（2026-07-03 实测：>50 字符被飞书整单拒收 99992402） ----
+test('MVP78 幂等键恒 ≤50 字符：超长确定性哈希截短，同输入同键', () => {
+  assert.equal(notify.makeIdempotencyKey('aiisn', 'daily_report', '2026-07-03'), 'aiisn:daily_report:2026-07-03', '短键原样');
+  const long = notify.makeIdempotencyKey('aiisn', 'needhelp', randomUUID(), '2026-07-03');
+  assert.ok(long.length <= 50, `即时推送键必须 ≤50，实际 ${long.length}`);
+  const ackKey = notify.makeIdempotencyKey('ack', 'om_x100b6b4fdf5970a0b3bca2df51f3764');
+  assert.ok(ackKey.length <= 50, `ack 键必须 ≤50，实际 ${ackKey.length}`);
+  assert.equal(
+    notify.makeIdempotencyKey('ack', 'om_x100b6b4fdf5970a0b3bca2df51f3764'),
+    ackKey,
+    '确定性：同输入永远同键'
+  );
+});
+
+test('MVP78 sendBotDm 防御性归一：调用方传超长键也照常发送且两层幂等一致', async () => {
+  resetDb();
+  const sent = armSender();
+  const longKey = `aiisn:reply_ack:om_${'x'.repeat(40)}`; // 59 字符
+  assert.equal(await notify.sendBotDm('m', { kind: 'reco', idempotencyKey: longKey }), true);
+  const usedKey = sent[0].args[sent[0].args.indexOf('--idempotency-key') + 1];
+  assert.ok(usedKey.length <= 50, `实发键 ${usedKey.length} 字符`);
+  // 同一超长键第二次 → audit 幂等挡住
+  assert.equal(await notify.sendBotDm('m', { kind: 'reco', idempotencyKey: longKey }), false);
+  assert.equal(sent.length, 1);
+});
+
+// ---- ack 失败绝不无声：留底 + 降级普通 DM ----
+test('MVP78 ack 线程回复失败 → notify_failed 留底 + 降级 sendBotDm 兜底', async () => {
+  resetDb();
+  const sent = armSender(); // sendBotDm 走 mock sender（armed）
+  const m1 = mkMatter({ title: '兜底回执目标' });
+  db.setSetting(
+    'sweep:pendingBatch',
+    JSON.stringify({
+      id: 'b3',
+      createdAt: new Date().toISOString(),
+      scanned: 1,
+      items: [{ matterId: m1.id, title: m1.title, verdict: 'likely_done', because: 'ok' }],
+    })
+  );
+  const deps = {
+    replyFn: async () => {
+      throw new Error('field validation failed');
+    },
+  };
+  const mode = await loop.handleUserReply(userMsg({ content: '确认清理' }), deps);
+  assert.equal(mode, 'command:apply');
+  assert.equal(ms.getMatterById(m1.id)!.status, 'resolved', '命令本体不受 ack 失败影响');
+  // notify_failed 留底 + 降级 DM 真的发出去了
+  const failed = db.db.prepare(`SELECT COUNT(*) c FROM audit_logs WHERE action='notify_failed'`).get() as { c: number };
+  assert.equal(failed.c, 1);
+  assert.ok(sent.length >= 1, '降级 DM 已发送');
+  // 命令也有审计
+  const handled = db.db
+    .prepare(`SELECT COUNT(*) c FROM audit_logs WHERE action='notify_reply_handled'`)
+    .get() as { c: number };
+  assert.equal(handled.c, 1);
+});
+
 // ---- chat_id 持久化（回复闭环的进水口） ----
 test('MVP78 sendBotDm 成功后持久化 botChatId', async () => {
   resetDb();

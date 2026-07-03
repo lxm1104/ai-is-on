@@ -25,6 +25,7 @@ import {
   getSetting,
   setSetting,
 } from '../db.js';
+import { makeIdempotencyKey, sendBotDm } from './larkNotifyService.js';
 import { upsertContextUnit } from '../context/contextStore.js';
 import { attachMatterContextLink, getMatterById } from '../matter/matterStore.js';
 import { kickInvestigation } from '../investigation/investigationKick.js';
@@ -97,11 +98,22 @@ async function replyAck(
       msg.message_id,
       '--markdown',
       markdown,
+      // 飞书幂等键硬限 50 字符（2026-07-03 实测：裸拼 om_ id 达 51 字符→整单被拒→用户"没反应"）。
       '--idempotency-key',
-      `aiisn:reply_ack:${msg.message_id}`,
+      makeIdempotencyKey('ack', msg.message_id),
     ]);
   } catch (err) {
-    console.warn('[bot-reply] ack failed:', err instanceof Error ? err.message : String(err));
+    // 回执绝不允许无声失败（用户以为没反应=信任崩塌）：留底 + 降级普通 DM 兜底再送一次。
+    writeAudit({
+      action: 'notify_failed',
+      reason: `回执线程回复失败，降级普通 DM 重试：${err instanceof Error ? err.message.slice(0, 150) : String(err)}`,
+      payload: { kind: 'reply_ack', refId: msg.message_id },
+    });
+    await sendBotDm(markdown, {
+      kind: 'reply_ack',
+      refId: msg.message_id,
+      idempotencyKey: makeIdempotencyKey('ack-fb', msg.message_id),
+    });
   }
 }
 
@@ -152,10 +164,17 @@ export async function handleUserReply(
     await ack('这类消息我还看不懂（只认文字）。要补充某件事，请引用那条推送回复。');
     return 'unsupported';
   }
-  // —— 命令 ——（积压大扫除批次操作）
+  // —— 命令 ——（积压大扫除批次操作）。每条命令都落审计：用户在飞书做的操作与面板同等可审。
+  const auditCommand = (mode: string, result: string) =>
+    writeAudit({
+      action: 'notify_reply_handled',
+      reason: `飞书命令「${text.slice(0, 20)}」已执行：${result.slice(0, 80)}`,
+      payload: { mode, messageId: msg.message_id },
+    });
   if (/^(确认清理|全部清理|清理确认|确认归档)/.test(text)) {
     const r = applyPendingSweepBatch();
     await ack(r.message);
+    auditCommand('command:apply', r.message);
     return 'command:apply';
   }
   const keepMatch = text.match(/^保留[\s:：]*([0-9\s,，、]+)$/);
@@ -166,17 +185,20 @@ export async function handleUserReply(
       .filter((n) => Number.isInteger(n) && n > 0);
     const r = applyPendingSweepBatch(keep);
     await ack(r.message);
+    auditCommand('command:keep', r.message);
     return 'command:keep';
   }
   if (/^忽略/.test(text)) {
     const r = ignorePendingSweepBatch();
     await ack(r.message);
+    auditCommand('command:ignore', r.message);
     return 'command:ignore';
   }
   const restoreMatch = text.match(/^恢复[\s:：]*(.+)$/);
   if (restoreMatch) {
     const r = restoreSweptMatter(restoreMatch[1]);
     await ack(r.message);
+    auditCommand('command:restore', r.message);
     return 'command:restore';
   }
   // —— 引用回复 → 精确路由 ——
