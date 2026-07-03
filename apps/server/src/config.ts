@@ -269,6 +269,16 @@ export const config = {
   // 每日工作汇报 DM：过去 24h「AI 替你办结了哪几件 / 产出了什么 / 哪几件需要你」。空则不发。
   notifyDailyReportEnabled: envBool('NOTIFY_DAILY_REPORT_ENABLED', true),
   notifyDailyReportHour: envInt('NOTIFY_DAILY_REPORT_HOUR', 18),
+  // ---------- MVP78 回复闭环 + 积压大扫除 ----------
+  // 回复闭环：轮询 bot P2P 会话，用户回一句（引用回复/命令/普通回复）就推进对应事项。
+  notifyReplyLoopEnabled: envBool('NOTIFY_REPLY_LOOP_ENABLED', true),
+  notifyReplyPollMs: envInt('NOTIFY_REPLY_POLL_MS', 60_000),
+  // 积压大扫除：停滞 ≥N 天的 open 事项 → LLM 甄别（拿不准一律不清）→ 飞书清单，用户回「确认清理」批量办结。
+  // 绝不自动清：无用户确认不改任何 matter 状态。
+  sweepEnabled: envBool('SWEEP_ENABLED', true),
+  sweepStaleDays: envInt('SWEEP_STALE_DAYS', 14),
+  sweepBatchMax: envInt('SWEEP_BATCH_MAX', 40),
+  sweepHour: envInt('SWEEP_HOUR', 17),
   matterVerifyEnabled: envBool('MATTER_VERIFY_ENABLED', true),
   // mark_done → 核实的延迟。≥ IM collector 一轮（imIntervalMs 默认 3min），
   // 让"刚回的消息"先经 collector → Reducer 挂到 matter_context_links，核实 agent 才看得到。

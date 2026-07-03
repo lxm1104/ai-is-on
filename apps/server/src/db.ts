@@ -2578,13 +2578,13 @@ export function wasNotifyPushed(idempotencyKey: string): boolean {
   return !!row;
 }
 
-/** 即时推送日配额分子：自某时刻起成功推送数（不含 daily_report——日报不占即时配额）。 */
+/** 即时推送日配额分子：自某时刻起成功推送数（不含 daily_report/sweep_list/reply_ack——它们各自自限，不占即时配额）。 */
 export function countNotifyPushedSince(sinceIso: string): number {
   const row = db
     .prepare(
       `SELECT COUNT(*) AS n FROM audit_logs
        WHERE action='notify_pushed' AND created_at >= ?
-         AND COALESCE(json_extract(payload_json,'$.kind'),'') != 'daily_report'`
+         AND COALESCE(json_extract(payload_json,'$.kind'),'') NOT IN ('daily_report','sweep_list','reply_ack')`
     )
     .get(sinceIso) as { n: number } | undefined;
   return row?.n ?? 0;
@@ -2629,6 +2629,92 @@ export function listProposalItemsByPrefixes(
     status: string;
     createdAt: string;
   }>;
+}
+
+// -------- MVP78 回复闭环 + 积压大扫除 --------
+
+/** 按已推送消息 id 反查那次推送（引用回复→matter 路由的键石）。 */
+export function getNotifyPushByMessageId(
+  messageId: string
+): { kind: string; refId: string | null } | null {
+  const row = db
+    .prepare(
+      `SELECT json_extract(payload_json,'$.kind') AS kind, json_extract(payload_json,'$.refId') AS refId
+       FROM audit_logs
+       WHERE action='notify_pushed' AND json_extract(payload_json,'$.messageId') = ?
+       ORDER BY created_at DESC LIMIT 1`
+    )
+    .get(messageId) as { kind: string; refId: string | null } | undefined;
+  return row ?? null;
+}
+
+/** 最近一次即时推送（非 daily_report 且带 matter refId）——无引用回复时的兜底路由候选。 */
+export function getLastInstantNotifyPush(
+  sinceIso: string
+): { kind: string; refId: string; createdAt: string } | null {
+  const row = db
+    .prepare(
+      `SELECT json_extract(payload_json,'$.kind') AS kind, json_extract(payload_json,'$.refId') AS refId, created_at AS createdAt
+       FROM audit_logs
+       WHERE action='notify_pushed' AND created_at >= ?
+         AND COALESCE(json_extract(payload_json,'$.kind'),'') NOT IN ('daily_report','sweep_list','reply_ack')
+         AND json_extract(payload_json,'$.refId') IS NOT NULL
+       ORDER BY created_at DESC LIMIT 1`
+    )
+    .get(sinceIso) as { kind: string; refId: string; createdAt: string } | undefined;
+  return row ?? null;
+}
+
+export type StaleMatterRow = {
+  id: string;
+  title: string;
+  type: string;
+  priority: string;
+  status: string;
+  currentSummary: string | null;
+  nextAction: string | null;
+  staleDays: number;
+};
+
+/**
+ * 积压大扫除候选：open/in_progress/blocked、最近一次证据（linked unit 最大 updated_at，兜底 matter.updated_at）
+ * 距今 ≥ staleDays、且无在场 proposal 卡（已在协作流程里的不动）。按最陈旧优先。
+ */
+export function listStaleOpenMatters(staleDays: number, limit: number): StaleMatterRow[] {
+  return db
+    .prepare(
+      `SELECT id, title, type, priority, status, current_summary AS currentSummary, next_action AS nextAction, stale_days AS staleDays
+       FROM (
+         SELECT m.id, m.title, m.type, m.priority, m.status, m.current_summary, m.next_action,
+           CAST(julianday('now') - julianday(COALESCE(
+             (SELECT MAX(cu.updated_at) FROM matter_context_links mcl JOIN context_units cu ON cu.id = mcl.context_unit_id WHERE mcl.matter_id = m.id),
+             m.updated_at)) AS INT) AS stale_days
+         FROM matters m
+         WHERE m.status IN ('open','in_progress','blocked')
+           AND NOT EXISTS (SELECT 1 FROM attention_items ai WHERE ai.matter_id = m.id AND ai.status='live' AND ai.input_hash LIKE 'proposal:%')
+       )
+       WHERE stale_days >= ?
+       ORDER BY stale_days DESC, id
+       LIMIT ?`
+    )
+    .all(staleDays, limit) as StaleMatterRow[];
+}
+
+/** 恢复命令：近 N 天被批量清理办结/归档的事项按标题模糊找回。 */
+export function listRecentlySweptMatters(
+  sinceIso: string,
+  titleKeyword: string,
+  limit = 5
+): Array<{ matterId: string; title: string; toStatus: string }> {
+  return db
+    .prepare(
+      `SELECT t.matter_id AS matterId, m.title AS title, t.to_status AS toStatus
+       FROM matter_transitions t JOIN matters m ON m.id = t.matter_id
+       WHERE t.created_at >= ? AND t.reason LIKE '%批量清理%' AND t.to_status IN ('resolved','dropped')
+         AND m.title LIKE '%' || ? || '%'
+       ORDER BY t.created_at DESC LIMIT ?`
+    )
+    .all(sinceIso, titleKeyword, limit) as Array<{ matterId: string; title: string; toStatus: string }>;
 }
 
 // -------- entity_aliases (MVP10) --------

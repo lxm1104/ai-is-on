@@ -36,7 +36,11 @@ export type AuditAction =
   | 'matter_artifact_raised'             // MVP74：AI 替你产出修复方案交付件（hasTargetRef 可审）——"已产出件"度量口径
   | 'investigation_recommended'          // MVP75：AI 给你一条达标的直接建议（结果率北极星分子）
   | 'notify_pushed'                      // MVP77：结果/求助已推送到用户飞书（bot DM，幂等键在 payload）
-  | 'notify_failed';                     // MVP77：推送失败留底（通道问题不阻断业务路径）
+  | 'notify_failed'                      // MVP77：推送失败留底（通道问题不阻断业务路径）
+  | 'notify_reply_handled'               // MVP78：用户在飞书 bot 会话的回复已被处理（回填/命令/引导，mode 在 payload）
+  | 'backlog_sweep_proposed'             // MVP78：积压大扫除清单已生成并发飞书（等用户一句话确认，绝不自动清）
+  | 'backlog_swept'                      // MVP78：用户确认后批量清理的单件记录（matterId+verdict 可审可恢复）
+  | 'backlog_sweep_restored';            // MVP78：用户「恢复 <关键词>」找回误清事项
 
 export function writeAudit(input: {
   action: AuditAction;

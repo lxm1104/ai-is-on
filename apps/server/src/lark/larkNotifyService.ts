@@ -35,7 +35,12 @@ export type NotifyKind =
   | 'reco'
   | 'autoresolved'
   | 'resolve_proposal'
-  | 'daily_report';
+  | 'daily_report'
+  | 'sweep_list' // MVP78 积压大扫除清单（一天至多一批）
+  | 'reply_ack'; // MVP78 对用户回复的应答（用户主动发起，不设量）
+
+/** 不占即时推送日配额的类型：日报/清单每天至多一条自限；ack 是对用户动作的应答，限了会静默失联。 */
+const QUOTA_EXEMPT_KINDS: ReadonlySet<NotifyKind> = new Set(['daily_report', 'sweep_list', 'reply_ack']);
 
 // 前缀常量定义在 matter/matterResolveProposal.ts；这里用字面量映射避免环形依赖
 // （前缀是落库 input_hash 的稳定契约，不会静默漂移）。progress / dangling 故意不在表里：不即时推。
@@ -47,7 +52,7 @@ const KIND_BY_PREFIX: Record<string, NotifyKind> = {
   'proposal:matter-resolve:': 'resolve_proposal',
 };
 
-const HEADLINE: Record<Exclude<NotifyKind, 'daily_report'>, string> = {
+const HEADLINE: Record<Exclude<NotifyKind, 'daily_report' | 'sweep_list' | 'reply_ack'>, string> = {
   needhelp: '🙋 需要你补一手，AI 就能接着办',
   artifact: '🔧 AI 已定位根因，替你起草了修复方案',
   reco: '💡 AI 给你一条建议',
@@ -104,7 +109,7 @@ export async function sendBotDm(
   try {
     if (wasNotifyPushed(opts.idempotencyKey)) return false;
     if (
-      opts.kind !== 'daily_report' &&
+      !QUOTA_EXEMPT_KINDS.has(opts.kind) &&
       countNotifyPushedSince(startOfTodayIso(opts.now)) >= config.notifyInstantDailyMax
     ) {
       // 配额满不丢内容：这些卡仍在面板里，且每日工作汇报会兜底汇总。
@@ -124,7 +129,10 @@ export async function sendBotDm(
       '--idempotency-key',
       opts.idempotencyKey,
     ]);
-    const messageId = (resp as { data?: { message_id?: string } })?.data?.message_id;
+    const data = (resp as { data?: { message_id?: string; chat_id?: string } })?.data;
+    const messageId = data?.message_id;
+    // MVP78：留住 bot P2P 会话 id——回复闭环（botReplyLoop）靠它拉用户的回复。
+    if (data?.chat_id) setSetting('notify:botChatId', data.chat_id);
     writeAudit({
       action: 'notify_pushed',
       reason: `已推送到你的飞书（${opts.kind}）：${clip(firstLine(markdown).replace(/\*/g, ''), 80)}`,
@@ -152,9 +160,9 @@ export function notifyProposalRaised(input: {
   why: string;
 }): void {
   const kind = KIND_BY_PREFIX[input.prefix];
-  if (!kind || kind === 'daily_report') return;
+  if (!kind || !(kind in HEADLINE)) return;
   const md = [
-    `**${HEADLINE[kind]}**`,
+    `**${HEADLINE[kind as keyof typeof HEADLINE]}**`,
     input.title,
     clip(input.why, 600),
     `👉 打开 AI is ON 处理：${config.webOrigin}`,
