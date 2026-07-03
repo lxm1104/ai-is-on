@@ -40,7 +40,9 @@ export type AuditAction =
   | 'notify_reply_handled'               // MVP78：用户在飞书 bot 会话的回复已被处理（回填/命令/引导，mode 在 payload）
   | 'backlog_sweep_proposed'             // MVP78：积压大扫除清单已生成并发飞书（等用户一句话确认，绝不自动清）
   | 'backlog_swept'                      // MVP78：用户确认后批量清理的单件记录（matterId+verdict 可审可恢复）
-  | 'backlog_sweep_restored';            // MVP78：用户「恢复 <关键词>」找回误清事项
+  | 'backlog_sweep_restored'             // MVP78：用户「恢复 <关键词>」找回误清事项
+  | 'consult_asked'                      // MVP79：有人 IM 请你做事 → AI 已收集信息发飞书征询你怎么办
+  | 'consult_choice';                    // MVP79：你的处理选择（起草/先查/忽略/自由指示）——习惯学习的原料
 
 export function writeAudit(input: {
   action: AuditAction;

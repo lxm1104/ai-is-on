@@ -21,6 +21,7 @@ import { runLarkCliJson } from '../util/larkCli.js';
 import { writeAudit } from '../boundary/auditLog.js';
 import {
   getLastInstantNotifyPush,
+  getLastOpenConsultMatterId,
   getNotifyPushByMessageId,
   getSetting,
   setSetting,
@@ -36,6 +37,7 @@ import {
   ignorePendingSweepBatch,
   restoreSweptMatter,
 } from '../matter/backlogSweeper.js';
+import { handleConsultChoice } from '../matter/consultService.js';
 
 const CHAT_ID_KEY = 'notify:botChatId';
 const WATERMARK_KEY = 'notify:botReplyWatermark';
@@ -201,10 +203,35 @@ export async function handleUserReply(
     auditCommand('command:restore', r.message);
     return 'command:restore';
   }
+  // —— MVP79 征询答复：裸回「1/2/3」→ 路由到最近一条未答复的征询 ——
+  if (/^[123]$/.test(text)) {
+    const openConsult = getLastOpenConsultMatterId();
+    if (openConsult) {
+      await handleConsultChoice(openConsult, text, ack);
+      writeAudit({
+        action: 'notify_reply_handled',
+        reason: `飞书征询答复（裸编号 ${text}）已处理`,
+        payload: { mode: 'consult_choice', matterId: openConsult, messageId: msg.message_id },
+      });
+      return 'consult_choice';
+    }
+    await ack('现在没有等你答复的征询。要补充某件事，请引用那条推送回复。');
+    return 'guidance';
+  }
   // —— 引用回复 → 精确路由 ——
   const parentId = msg.parent_id ?? msg.root_id;
   if (parentId) {
     const push = getNotifyPushByMessageId(parentId);
+    // 引用的是征询消息 → 走征询答复（含自由文本指示）
+    if (push?.refId && push.kind === 'consult') {
+      await handleConsultChoice(push.refId, text, ack);
+      writeAudit({
+        action: 'notify_reply_handled',
+        reason: `飞书征询答复（引用）已处理`,
+        payload: { mode: 'consult_choice', matterId: push.refId, messageId: msg.message_id },
+      });
+      return 'consult_choice';
+    }
     if (push?.refId && !['daily_report', 'sweep_list', 'reply_ack'].includes(push.kind)) {
       const title = backfillMatterFromReply(push.refId, text, msg.message_id);
       if (title) {
@@ -231,6 +258,16 @@ export async function handleUserReply(
     targetMatterId = liveNeedHelp[0].matterId!;
   } else {
     const recent = getLastInstantNotifyPush(new Date(Date.now() - 24 * 3600_000).toISOString());
+    // 最近一条是征询 → 自由文本按「你的处理指示」走征询路径（而非裸证据回填）
+    if (recent?.refId && recent.kind === 'consult') {
+      await handleConsultChoice(recent.refId, text, ack);
+      writeAudit({
+        action: 'notify_reply_handled',
+        reason: `飞书征询答复（自由文本兜底）已处理`,
+        payload: { mode: 'consult_choice', matterId: recent.refId, messageId: msg.message_id },
+      });
+      return 'consult_choice';
+    }
     if (recent?.refId) targetMatterId = recent.refId;
   }
   if (targetMatterId) {

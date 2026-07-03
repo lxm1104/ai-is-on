@@ -14,6 +14,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { kickInvestigation } from '../investigation/investigationKick.js';
+import { maybeConsultOnMatterCreated } from './consultService.js';
 import {
   getContextEntityById,
   getSetting,
@@ -276,6 +277,9 @@ function createFromUnit(
   // MVP58：新建事项 = 可能的新 badcase/待排查 → 立刻 kick 派发（dispatcher 去抖+在飞行锁+worthiness 过滤兜底，
   // 非排查类只会触发一次空转 tick，无害）。解耦走 investigationKick 叶子模块，不引 dispatcher 防循环依赖。
   kickInvestigation();
+  // MVP79 小助理拦一道：具名他人请你办事 → 收集来源信息发飞书征询你怎么处理（服务内三闸降噪+永不 throw，
+  // 未 arm 的测试/脚本环境天然 no-op，绝不影响 reducer 主链路）。
+  void maybeConsultOnMatterCreated(created).catch(() => {});
   return created;
 }
 

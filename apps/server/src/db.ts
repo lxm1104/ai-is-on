@@ -2700,7 +2700,7 @@ export function listStaleOpenMatters(staleDays: number, limit: number): StaleMat
     .all(staleDays, limit) as StaleMatterRow[];
 }
 
-/** 恢复命令：近 N 天被批量清理办结/归档的事项按标题模糊找回。 */
+/** 恢复命令：近 N 天经飞书清理/征询归档的事项按标题模糊找回（MVP79 征询「不用管」也可恢复）。 */
 export function listRecentlySweptMatters(
   sinceIso: string,
   titleKeyword: string,
@@ -2710,11 +2710,40 @@ export function listRecentlySweptMatters(
     .prepare(
       `SELECT t.matter_id AS matterId, m.title AS title, t.to_status AS toStatus
        FROM matter_transitions t JOIN matters m ON m.id = t.matter_id
-       WHERE t.created_at >= ? AND t.reason LIKE '%批量清理%' AND t.to_status IN ('resolved','dropped')
+       WHERE t.created_at >= ? AND (t.reason LIKE '%批量清理%' OR t.reason LIKE '%飞书征询%')
+         AND t.to_status IN ('resolved','dropped')
          AND m.title LIKE '%' || ? || '%'
        ORDER BY t.created_at DESC LIMIT ?`
     )
     .all(sinceIso, titleKeyword, limit) as Array<{ matterId: string; title: string; toStatus: string }>;
+}
+
+/** 某 audit 动作自某时刻起的次数（consult 日配额等通用小口径）。 */
+export function countAuditActionSince(action: string, sinceIso: string): number {
+  const row = db
+    .prepare(`SELECT COUNT(*) AS n FROM audit_logs WHERE action = ? AND created_at >= ?`)
+    .get(action, sinceIso) as { n: number } | undefined;
+  return row?.n ?? 0;
+}
+
+/** MVP79：最近一条**未答复**的征询（48h 内 consult_asked 之后没有同 matter 的 consult_choice）。裸回「1/2/3」时路由用。 */
+export function getLastOpenConsultMatterId(now = new Date()): string | null {
+  const sinceIso = new Date(now.getTime() - 48 * 3600_000).toISOString();
+  const row = db
+    .prepare(
+      `SELECT json_extract(a.payload_json,'$.matterId') AS mid
+       FROM audit_logs a
+       WHERE a.action='consult_asked' AND a.created_at >= ?
+         AND NOT EXISTS (
+           SELECT 1 FROM audit_logs c
+           WHERE c.action='consult_choice'
+             AND json_extract(c.payload_json,'$.matterId') = json_extract(a.payload_json,'$.matterId')
+             AND c.created_at > a.created_at
+         )
+       ORDER BY a.created_at DESC LIMIT 1`
+    )
+    .get(sinceIso) as { mid: string | null } | undefined;
+  return row?.mid ?? null;
 }
 
 // -------- entity_aliases (MVP10) --------

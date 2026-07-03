@@ -279,6 +279,11 @@ export const config = {
   sweepStaleDays: envInt('SWEEP_STALE_DAYS', 14),
   sweepBatchMax: envInt('SWEEP_BATCH_MAX', 40),
   sweepHour: envInt('SWEEP_HOUR', 17),
+  // ---------- MVP79 小助理拦一道：有人在 IM 请你做事 → AI 收集信息来征询你怎么办 ----------
+  // 触发窄门：新建 matter 且「具名他人是 requester + 你是 executor」（有人当面请你办事）才征询；
+  // 每 matter 终身一次 + 日配额。拿不准怎么办的事必须问你，绝不静默代办（用户原话铁律）。
+  consultEnabled: envBool('CONSULT_ENABLED', true),
+  consultDailyMax: envInt('CONSULT_DAILY_MAX', 3),
   matterVerifyEnabled: envBool('MATTER_VERIFY_ENABLED', true),
   // mark_done → 核实的延迟。≥ IM collector 一轮（imIntervalMs 默认 3min），
   // 让"刚回的消息"先经 collector → Reducer 挂到 matter_context_links，核实 agent 才看得到。

@@ -38,10 +38,11 @@ export type NotifyKind =
   | 'resolve_proposal'
   | 'daily_report'
   | 'sweep_list' // MVP78 积压大扫除清单（一天至多一批）
-  | 'reply_ack'; // MVP78 对用户回复的应答（用户主动发起，不设量）
+  | 'reply_ack' // MVP78 对用户回复的应答（用户主动发起，不设量）
+  | 'consult'; // MVP79 小助理征询（自带 consultDailyMax 日配额）
 
-/** 不占即时推送日配额的类型：日报/清单每天至多一条自限；ack 是对用户动作的应答，限了会静默失联。 */
-const QUOTA_EXEMPT_KINDS: ReadonlySet<NotifyKind> = new Set(['daily_report', 'sweep_list', 'reply_ack']);
+/** 不占即时推送日配额的类型：日报/清单/征询各自自限；ack 是对用户动作的应答，限了会静默失联。 */
+const QUOTA_EXEMPT_KINDS: ReadonlySet<NotifyKind> = new Set(['daily_report', 'sweep_list', 'reply_ack', 'consult']);
 
 // 前缀常量定义在 matter/matterResolveProposal.ts；这里用字面量映射避免环形依赖
 // （前缀是落库 input_hash 的稳定契约，不会静默漂移）。progress / dangling 故意不在表里：不即时推。
@@ -53,7 +54,7 @@ const KIND_BY_PREFIX: Record<string, NotifyKind> = {
   'proposal:matter-resolve:': 'resolve_proposal',
 };
 
-const HEADLINE: Record<Exclude<NotifyKind, 'daily_report' | 'sweep_list' | 'reply_ack'>, string> = {
+const HEADLINE: Record<Exclude<NotifyKind, 'daily_report' | 'sweep_list' | 'reply_ack' | 'consult'>, string> = {
   needhelp: '🙋 需要你补一手，AI 就能接着办',
   artifact: '🔧 AI 已定位根因，替你起草了修复方案',
   reco: '💡 AI 给你一条建议',
