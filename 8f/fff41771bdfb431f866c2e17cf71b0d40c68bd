@@ -1,0 +1,21 @@
+docs/MVP79-小助理拦一道-征询闭环.md
+  s_bbeda2637ec16a::t_03a5b63deb95ca 1-40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "8ffff41771bdfb431f866c2e17cf71b0d40c68bd",
+  "prompts": {},
+  "sessions": {
+    "s_bbeda2637ec16a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7abb4f83-f128-48e7-9dcf-68f5a4842fd9",
+        "model": "unknown"
+      },
+      "human_author": "Liu Xinming <liuxinming.ai@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
