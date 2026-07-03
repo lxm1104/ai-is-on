@@ -1,0 +1,23 @@
+apps/server/src/boundary/auditLog.ts
+  s_37a5ea96919574::t_b9eef88500e6e8 43-45
+apps/server/src/config.ts
+  s_37a5ea96919574::t_669cc59cdfbadd 282-286
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "e67f7de961809b5432c8eab0ad65f8b1333bfa0d",
+  "prompts": {},
+  "sessions": {
+    "s_37a5ea96919574": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-a4fadfc89ea02d622",
+        "model": "unknown"
+      },
+      "human_author": "Liu Xinming <liuxinming.ai@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
