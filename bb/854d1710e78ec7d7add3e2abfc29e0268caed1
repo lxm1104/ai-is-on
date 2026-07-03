@@ -1,0 +1,33 @@
+apps/server/src/boundary/auditLog.ts
+  s_bbeda2637ec16a::t_b38dcef5b72126 37-39
+apps/server/src/config.ts
+  s_bbeda2637ec16a::t_0b502f3a6a951c 262-271
+apps/server/src/db.ts
+  s_bbeda2637ec16a::t_0b3828a7720a92 2568-2633,3496-3497
+apps/server/src/index.ts
+  s_bbeda2637ec16a::t_385f2151a2f60f 48,149-151,171-173
+apps/server/src/lark/larkNotifyService.ts
+  s_bbeda2637ec16a::t_12127117ed28f1 1-256
+apps/server/src/matter/matterResolveProposal.ts
+  s_bbeda2637ec16a::t_f9a1aff4fb2f8f 17,71-73,147-148,187-188,328-334
+apps/server/test/mvp77-notify.test.ts
+  s_bbeda2637ec16a::t_569ca5da506a74 1-233
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "bb854d1710e78ec7d7add3e2abfc29e0268caed1",
+  "prompts": {},
+  "sessions": {
+    "s_bbeda2637ec16a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7abb4f83-f128-48e7-9dcf-68f5a4842fd9",
+        "model": "unknown"
+      },
+      "human_author": "Liu Xinming <liuxinming.ai@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
