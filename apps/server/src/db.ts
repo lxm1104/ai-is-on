@@ -2445,57 +2445,116 @@ export type AiActivityRow = {
   matterId: string | null;
   matterTitle: string | null;
   createdAt: string;
+  /** MVP80：同一事项该动作累计发生次数（建议/产出去重后标"第 N 次跟进"；清理批次=清理件数）。 */
+  repeatCount?: number;
+  /** MVP80「学习照做也是结果」：该结果是按你教的做法（playbook）/用了你补的信息（backfill）得来的。 */
+  followedYourPlaybook?: number | null;
+  usedYourBackfill?: number | null;
 };
-// MVP75 第一性原理：面板只列"结果/交付物"，不列原始排查过程。
-// 故移除 investigation_written_back（那是过程：查了X/没查到/受阻）——它若产出了建议/产出/办结，
-// 已分别记为 investigation_recommended / matter_artifact_raised / matter_auto_resolved（下面这些才是结果）。
-const AI_ACTIVITY_ACTIONS = [
-  'matter_auto_resolved', // AI 高置信主动办结（结果）
-  'investigation_recommended', // MVP75：AI 给你一条达标的直接建议（结果）
-  'matter_artifact_raised', // MVP74：AI 替你产出修复方案/待建任务/决策信息包（结果）
-  'chat_conclusion_written_back', // AI 从对话里替你更新事项（结果）
-  'lark_task_created', // AI 替你建了飞书任务（结果）
-  'lark_doc_created', // AI 替你建了飞书文档（结果）
+// MVP80「助理工作日志」——用户实锤反馈"这里都是没用的信息"，实测四大噪声：
+// ①meeting/digest/reminder 行 payload 无 title → 全空行；②同一事项的建议/产出按 audit 流水直铺（同事项 4 条重复行）；
+// ③每天例行 daily_digest/reminder 混进"替你做了什么"；④真正的大活（批量清理/征询互动/回复处理）反而没纳入。
+// 重做规则（MVP75 第一性原理延伸）：只留三类——✅办完的事、🔧💡给你的成品（按事项去重取最新、带重复计数）、
+// 🤝与你的互动（征询选择/飞书回填）；批量清理按批次聚合成一行；空标题/例行推送一律不进。
+const AI_ACTIVITY_RESULT_ACTIONS = [
+  'matter_auto_resolved', // ✅ AI 高置信主动办结
+  'chat_conclusion_written_back', // 💬 AI 从对话里替你更新事项
+  'lark_task_created', // ☑️ AI 替你建了飞书任务
+  'lark_doc_created', // 📄 AI 替你建了飞书文档
 ] as const;
-// MVP73：除了排查，AI 还替你做这些（action_proposals 里的 agent 产出）——之前面板只收录排查、
-// 让用户以为"只有排查"。排除 doc_comment_attention（仅"注意到一条评论"、量大噪声、非交付物）。
-const AI_ACTIVITY_PROPOSAL_TYPES = [
-  'meeting_brief', // 会前拉齐
-  'meeting_action_items', // 纪要→待办
-  'daily_digest', // 日报
-  'reminder', // 承诺到期提醒
-  'caring_note', // 关心提醒
-  // 不含 sync_draft：量大且是"待你发的草稿"，用户明确devalue草稿类（MVP68 移除草稿按钮）。
+const AI_ACTIVITY_DEDUPE_ACTIONS = [
+  'investigation_recommended', // 💡 直接建议——同事项多轮重发只留最新一条（带次数）
+  'matter_artifact_raised', // 🔧 修复方案/待建任务/决策信息包——同上
+] as const;
+const AI_ACTIVITY_INTERACTION_ACTIONS = [
+  'consult_choice', // 🤝 征询后你的拍板（AI 已照办）
+  'notify_reply_handled', // 💬 你在飞书补了一句 → AI 接着办（仅回填类；命令/征询模式已有各自行，防双计）
+  'consult_asked', // 🤝 有人找你办事，AI 已收集信息来征询（等你拍板也是结果——用户定义）
+  'backlog_sweep_proposed', // 🧹 积压甄别完，清单已发飞书等你一句话（待确认也是结果）
+  'backlog_sweep_restored', // ↩️ 你要求恢复误清事项，AI 已照办
 ] as const;
 export function listAiActivity(limit = 60): AiActivityRow[] {
-  const aPlace = AI_ACTIVITY_ACTIONS.map(() => '?').join(',');
-  const pPlace = AI_ACTIVITY_PROPOSAL_TYPES.map(() => '?').join(',');
-  // UNION：① audit_logs 的自主动作（排查/办结/建任务文档）② action_proposals 的 agent 交付物（会前/日报/纪要/草稿/提醒）。
-  const rows = db
+  const resultPlace = AI_ACTIVITY_RESULT_ACTIONS.map(() => '?').join(',');
+  const interactPlace = AI_ACTIVITY_INTERACTION_ACTIONS.map(() => '?').join(',');
+  // ① 直接结果 + 互动（互动里排除 mode=command:*/consult_choice——它们分别由批次行/consult_choice 行承载）
+  const direct = db
     .prepare(
-      `SELECT id, action, reason, createdAt, matterId, verdict, confidence, matterTitle FROM (
+      `SELECT a.id AS id, a.action AS action, a.reason AS reason, a.created_at AS createdAt,
+              json_extract(a.payload_json,'$.matterId') AS matterId,
+              NULL AS verdict, NULL AS confidence, m.title AS matterTitle, 1 AS repeatCount,
+              json_extract(a.payload_json,'$.followedYourPlaybook') AS followedYourPlaybook,
+              json_extract(a.payload_json,'$.usedYourBackfill') AS usedYourBackfill
+       FROM audit_logs a
+       LEFT JOIN matters m ON m.id = json_extract(a.payload_json,'$.matterId')
+       WHERE (a.action IN (${resultPlace}))
+          OR (a.action IN (${interactPlace})
+              AND COALESCE(json_extract(a.payload_json,'$.mode'),'') NOT LIKE 'command:%'
+              AND COALESCE(json_extract(a.payload_json,'$.mode'),'') != 'consult_choice')
+       ORDER BY a.created_at DESC LIMIT ?`
+    )
+    .all(...AI_ACTIVITY_RESULT_ACTIONS, ...AI_ACTIVITY_INTERACTION_ACTIONS, limit) as AiActivityRow[];
+  // ①b 「我来找过你」也是结果（用户定义：需要你帮忙/请你确认都是结果）：
+  // 求助🙋与待确认✋的飞书送达留底 → 合成行（别的推送 kind 已有各自的结果/互动行，不重复计）。
+  const asks = db
+    .prepare(
+      `SELECT a.id AS id,
+              CASE json_extract(a.payload_json,'$.kind') WHEN 'needhelp' THEN 'asked_for_help' ELSE 'asked_confirm' END AS action,
+              a.reason AS reason, a.created_at AS createdAt,
+              json_extract(a.payload_json,'$.refId') AS matterId,
+              NULL AS verdict, NULL AS confidence, m.title AS matterTitle, 1 AS repeatCount,
+              NULL AS followedYourPlaybook, NULL AS usedYourBackfill
+       FROM audit_logs a
+       LEFT JOIN matters m ON m.id = json_extract(a.payload_json,'$.refId')
+       WHERE a.action = 'notify_pushed'
+         AND json_extract(a.payload_json,'$.kind') IN ('needhelp','resolve_proposal')
+       ORDER BY a.created_at DESC LIMIT ?`
+    )
+    .all(limit) as AiActivityRow[];
+  // ② 建议/产出：同 (action, matter) 只留最新一条，repeatCount 记录同事项累计次数（"第 N 次跟进"）
+  const dedupePlace = AI_ACTIVITY_DEDUPE_ACTIONS.map(() => '?').join(',');
+  const deduped = db
+    .prepare(
+      `SELECT id, action, reason, createdAt, matterId, verdict, confidence, matterTitle, repeatCount, followedYourPlaybook, usedYourBackfill FROM (
          SELECT a.id AS id, a.action AS action, a.reason AS reason, a.created_at AS createdAt,
                 json_extract(a.payload_json,'$.matterId') AS matterId,
-                json_extract(a.payload_json,'$.verdict') AS verdict,
-                json_extract(a.payload_json,'$.confidence') AS confidence,
-                m.title AS matterTitle
+                NULL AS verdict, NULL AS confidence, m.title AS matterTitle,
+                ROW_NUMBER() OVER (PARTITION BY a.action, COALESCE(json_extract(a.payload_json,'$.matterId'), a.id) ORDER BY a.created_at DESC) AS rn,
+                COUNT(*) OVER (PARTITION BY a.action, COALESCE(json_extract(a.payload_json,'$.matterId'), a.id)) AS repeatCount,
+                json_extract(a.payload_json,'$.followedYourPlaybook') AS followedYourPlaybook,
+                json_extract(a.payload_json,'$.usedYourBackfill') AS usedYourBackfill
          FROM audit_logs a
          LEFT JOIN matters m ON m.id = json_extract(a.payload_json,'$.matterId')
-         WHERE a.action IN (${aPlace})
-           AND NOT (a.action='investigation_written_back'
-                    AND json_extract(a.payload_json,'$.verdict')='unknown'
-                    AND json_extract(a.payload_json,'$.confidence')<=0)
-         UNION ALL
-         SELECT p.id AS id, p.proposal_type AS action, p.title AS reason, p.created_at AS createdAt,
-                json_extract(p.payload_json,'$.matterId') AS matterId,
-                NULL AS verdict, NULL AS confidence, NULL AS matterTitle
-         FROM action_proposals p
-         WHERE p.proposal_type IN (${pPlace})
-       )
+         WHERE a.action IN (${dedupePlace})
+       ) WHERE rn = 1
        ORDER BY createdAt DESC LIMIT ?`
     )
-    .all(...AI_ACTIVITY_ACTIONS, ...AI_ACTIVITY_PROPOSAL_TYPES, limit) as AiActivityRow[];
-  return rows;
+    .all(...AI_ACTIVITY_DEDUPE_ACTIONS, limit) as AiActivityRow[];
+  // ③ 批量清理：按批次聚合成一行（"你确认后清理 N 件：t1、t2…"），比 N 条流水更像人话
+  const sweptBatches = db
+    .prepare(
+      `SELECT MIN(a.id) AS id, MAX(a.created_at) AS createdAt, COUNT(*) AS cnt,
+              GROUP_CONCAT(COALESCE(m.title, substr(a.reason, 6, 24)), '、') AS titles
+       FROM audit_logs a
+       LEFT JOIN matters m ON m.id = json_extract(a.payload_json,'$.matterId')
+       WHERE a.action = 'backlog_swept'
+       GROUP BY COALESCE(json_extract(a.payload_json,'$.batchId'), a.created_at)
+       ORDER BY createdAt DESC LIMIT 10`
+    )
+    .all() as Array<{ id: string; createdAt: string; cnt: number; titles: string | null }>;
+  const sweptRows: AiActivityRow[] = sweptBatches.map((b) => ({
+    id: b.id,
+    action: 'backlog_swept_batch',
+    reason: `你在飞书确认后，一次清掉 ${b.cnt} 件陈旧事项：${(b.titles ?? '').slice(0, 160)}`,
+    verdict: null,
+    confidence: null,
+    matterId: null,
+    matterTitle: null,
+    createdAt: b.createdAt,
+    repeatCount: b.cnt,
+  }));
+  return [...direct, ...asks, ...deduped, ...sweptRows]
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, limit);
 }
 
 /**
@@ -2511,6 +2570,7 @@ export function getAiActivityTally(): {
   progressedCount: number;
   pendingCount: number;
   answeredCount: number;
+  sweptCount: number;
 } {
   const since = new Date(Date.now() - 7 * 86_400_000).toISOString();
   const one = (sql: string, ...args: unknown[]): number => ((db.prepare(sql).get(...args) as { n: number } | undefined)?.n ?? 0);
@@ -2562,6 +2622,8 @@ export function getAiActivityTally(): {
          AND (input_hash LIKE 'proposal:matter-needhelp:%' OR input_hash LIKE 'proposal:matter-dangling:%'
               OR input_hash LIKE 'proposal:matter-artifact:%' OR input_hash LIKE 'proposal:matter-reco:%')`, since
     ),
+    // MVP80 🧹：近 7d 你在飞书确认后批量清理的陈旧事项数（AI 甄别 + 你一句话确认 = 协作完成）
+    sweptCount: one(`SELECT COUNT(*) AS n FROM audit_logs WHERE action='backlog_swept' AND created_at > ?`, since),
   };
 }
 

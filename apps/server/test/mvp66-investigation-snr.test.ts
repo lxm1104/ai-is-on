@@ -138,8 +138,10 @@ test('MVP75 listAiActivity：只列结果（排除原始排查过程 + 非结果
   assert.equal(items[0].matterTitle, '授权超时跟进', 'join 到事项标题');
 });
 
-// MVP73 listAiActivity：除排查外，纳入 agent 交付物(会前/日报/纪要/提醒)，排除 sync_draft/doc_comment 噪声
-test('MVP73 listAiActivity：纳入 agent 交付物、排除草稿/评论噪声', () => {
+// MVP73→MVP80 契约变更：用户实锤"面板都是没用的信息"——proposal 类（会前/日报/纪要/提醒）payload 无
+// title 全是空行 + 每日例行推送噪声，MVP80 起一律不进面板（它们在卡片流有自己的位置）；
+// 面板只留 ✅办完/🔧💡成品/🤝互动 三类。本测试断言反转为"全部排除"。
+test('MVP80 listAiActivity：proposal 交付物行一律不进（会前/日报/提醒/草稿/评论全排除）', () => {
   resetDb();
   const now = new Date().toISOString();
   const mk = (type: string, title: string) => db.insertActionProposal({
@@ -158,9 +160,9 @@ test('MVP73 listAiActivity：纳入 agent 交付物、排除草稿/评论噪声'
 
   const items = db.listAiActivity(50);
   const types = items.map((i) => i.action);
-  assert.ok(types.includes('meeting_brief'), '含会前');
-  assert.ok(types.includes('daily_digest'), '含日报');
-  assert.ok(types.includes('reminder'), '含提醒');
+  assert.ok(!types.includes('meeting_brief'), 'MVP80：会前拉齐不再进面板（空标题+例行=噪声）');
+  assert.ok(!types.includes('daily_digest'), 'MVP80：日报不进面板');
+  assert.ok(!types.includes('reminder'), 'MVP80：提醒不进面板');
   assert.ok(types.includes('investigation_recommended'), '含建议（结果）');
   assert.ok(!types.includes('investigation_written_back'), 'MVP75：原始排查过程不进面板');
   assert.ok(!types.includes('sync_draft'), '排除同步草稿（用户devalue草稿）');

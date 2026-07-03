@@ -243,6 +243,8 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
   lastInvestigatedAt.set(candidate.id, now); // 进 in-flight 即占冷却，防重入
   try {
     const matchedPb = matchPlaybookForMatter(candidate);
+    // MVP80「学习照做也是结果」：记住本次排查带没带你教的做法/你补的信息——结论落 audit 时归因，工作日志可见。
+    const userBackfills = listUserBackfillUnitsForMatter(candidate.id, 5).map((u) => u.content);
     const result = await runInvestigation({
       matterTitle: candidate.title,
       matterType: candidate.type,
@@ -254,7 +256,7 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
       playbookHint: matchedPb ? renderPlaybookForPrompt(matchedPb) : undefined,
       projectProfile: (await resolveProjectProfileForMatter(candidate)) ?? undefined,
       // MVP71 KEYSTONE：把用户经求助卡补给该 matter 的内容喂回重查——闭环从"只解封不喂内容"的假闭环变真闭环。
-      userBackfills: listUserBackfillUnitsForMatter(candidate.id, 5).map((u) => u.content),
+      userBackfills,
       // 追查链路：这件事最初出现在哪（源头对话/文档）——让排查第一步先回源头看进展。
       originHint: getMatterOriginHint(candidate.id) ?? undefined,
       // 追查链路：已知业务代码库路径——即便本 matter 没路由到项目 space，也让它 git log 去对的仓查提交。
@@ -265,7 +267,15 @@ export async function runInvestigationDispatchTick(): Promise<boolean> {
     const toolSummary = result.toolLog.map((l) => `${l.tool}:${l.ok ? l.summary : '失败'}`).join('；');
     // MVP69 P0-5：把"派发起始时刻"透传给 writeback 写进 audit payload.startedAt，
     // 让 getLastInvestigatedAt 的 since 用排查**起始**而非结束——覆盖 in-flight 期到达的回填/新证据。
-    const wb = applyInvestigationResult({ matterId: candidate.id, conclusion: result.conclusion, toolSummary, startedAt: new Date(now).toISOString() });
+    const wb = applyInvestigationResult({
+      matterId: candidate.id,
+      conclusion: result.conclusion,
+      toolSummary,
+      startedAt: new Date(now).toISOString(),
+      // MVP80 归因：结论若产出结果（办结/方案/建议），audit 标注"按你教的做法/用了你补的信息"——学习照做也是结果。
+      followedYourPlaybook: !!matchedPb,
+      usedYourBackfill: userBackfills.length > 0,
+    });
     // MVP51：诊断结论吸纳进「问题类聚合」（case→根因类台账，fire-and-forget，过诊断门才落）
     void ingestConclusion({
       matterId: candidate.id,

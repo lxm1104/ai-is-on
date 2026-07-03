@@ -44,6 +44,9 @@ export function applyInvestigationResult(input: {
   conclusion: InvestigationConclusion;
   toolSummary?: string; // 用了哪些只读工具的一行摘要，便于追溯
   startedAt?: string; // MVP69 P0-5：本次排查派发起始时刻（写进 audit，供 getLastInvestigatedAt 当 since 用）
+  // MVP80「学习照做也是结果」：本次排查是否带了你教的 playbook / 你补的信息——结果 audit 归因，工作日志可见。
+  followedYourPlaybook?: boolean;
+  usedYourBackfill?: boolean;
 }): InvestigationWritebackResult {
   const matter = getMatterById(input.matterId);
   if (!matter) return { ok: false, matterId: input.matterId, summaryUpdated: false, error: 'matter not found' };
@@ -157,7 +160,10 @@ export function applyInvestigationResult(input: {
       writeAudit({
         action: 'matter_auto_resolved',
         reason: `AI 自主办结（置信 ${c.confidence.toFixed(2)}）：${clip(factLine, 100)}`,
-        payload: { matterId: matter.id, confidence: c.confidence, factSummary: factLine, evidence: c.evidence.slice(0, 3) },
+        payload: {
+          matterId: matter.id, confidence: c.confidence, factSummary: factLine, evidence: c.evidence.slice(0, 3),
+          followedYourPlaybook: input.followedYourPlaybook || undefined, usedYourBackfill: input.usedYourBackfill || undefined,
+        },
       });
       // 与用户「已处理」同等待遇：排一次二档核实——若稍后查到矛盾证据，会浮「核实存疑」reopen 卡（该卡已豁免 resolved-sweep）。
       scheduleMatterResolveVerification({ matterId: matter.id, userNote: 'AI 自主办结（高置信），二档核实' });
@@ -197,7 +203,10 @@ export function applyInvestigationResult(input: {
       writeAudit({
         action: 'matter_artifact_raised',
         reason: `AI 替你产出可执行件（${c.artifact.kind}）：${clip(c.artifact.title, 80)}${ref ? `（${ref.slice(0, 60)}）` : ''}`,
-        payload: { matterId: matter.id, hasTargetRef: !!ref, artifactKind: c.artifact.kind },
+        payload: {
+          matterId: matter.id, hasTargetRef: !!ref, artifactKind: c.artifact.kind,
+          followedYourPlaybook: input.followedYourPlaybook || undefined, usedYourBackfill: input.usedYourBackfill || undefined,
+        },
       });
     } else if ((c.verdict === 'progressed' || c.verdict === 'blocked') && c.confidence >= 0.6) {
       // MVP74 审查 P2：交付卡因冷却/独立配额满没升起 → 别静默吞掉这次结论，落回进展卡兜底
@@ -241,7 +250,10 @@ export function applyInvestigationResult(input: {
       writeAudit({
         action: 'investigation_recommended',
         reason: `AI 给你一条建议（${c.recommendation!.stance}）：${clip(c.recommendation!.advice, 80)}`,
-        payload: { matterId: matter.id, stance: c.recommendation!.stance },
+        payload: {
+          matterId: matter.id, stance: c.recommendation!.stance,
+          followedYourPlaybook: input.followedYourPlaybook || undefined, usedYourBackfill: input.usedYourBackfill || undefined,
+        },
       });
       // P1-5：高价值 matter 的达标建议 → 自动在右侧开一条会话（只插消息不起 turn，硬闸把关）。
       try { maybeQueueAutoConversation(proposalMatter, c.recommendation!, factLine); } catch {}
