@@ -14,6 +14,7 @@ import { db, countLivePendingUserProposals, countLiveArtifactProposals, countLiv
 import { config } from '../config.js';
 import { insertAttentionItem, markAttentionItemsSupersededByHash } from '../attention/attentionStore.js';
 import { broadcast } from '../ws.js';
+import { notifyProposalRaised } from '../lark/larkNotifyService.js';
 import type { Matter } from './matterTypes.js';
 import type { AttentionPriority } from '../attention/attentionTypes.js';
 import type { NeedFromUser, InvestigationArtifact, Recommendation } from '../investigation/investigationPrompt.js';
@@ -67,6 +68,9 @@ function raiseMatterProposal(
     now: new Date().toISOString(),
   });
   broadcast({ type: 'attention_updated', generation: 0, itemsEmitted: 1 });
+  // MVP77：结果/需要你 类卡升起即推送到用户飞书（needhelp/artifact/reco/resolve；progress/dangling 不推）。
+  // fire-and-forget + 服务内兜错，绝不影响升卡返回值；未 arm（测试/脚本）时是 no-op。
+  notifyProposalRaised({ prefix: opts.prefix, matterId: matter.id, title: opts.title, why: opts.why });
   return true;
 }
 
@@ -140,6 +144,8 @@ export function raiseMatterDanglingCommitmentProposal(
     title: `待你处理：${matter.title.slice(0, 40)}`,
     why: `这是你欠下的承诺，但 AI 多轮查证后找不到任何跟进痕迹（已约 ${opts.ageDays} 天）。${fact ? `\n排查：${fact}` : ''}\n要不要现在推进，或它其实已不需要了？`,
     suggestedAction: '我来跟进 / 标记办结 / 不再跟进',
+    // MVP77：近 7 天 20 张 dangling 被 24h 扫掉没人见过——3 天 TTL（比 needhelp 短：它可反复重升，别攒陈卡）。
+    expiresAt: new Date(Date.now() + 3 * 86_400_000).toISOString(),
   });
 }
 
@@ -178,6 +184,8 @@ export function raiseMatterNeedHelpProposal(
     title: `🙋 需要你：${matter.title.slice(0, 38)}`,
     why: `${opts.needFromUser.ask.trim()}${fact ? `\n排查：${fact}` : ''}${evLines.length ? '\n证据：\n' + evLines.join('\n') : ''}`,
     suggestedAction: '补充给我接着查 / 不用了',
+    // MVP77：求助卡是闭环的咽喉，历史 2/3 被 24h 兜底扫静默蒸发（用户从没见过）——给 7 天显式 TTL（同交付卡待遇）。
+    expiresAt: new Date(Date.now() + 7 * 86_400_000).toISOString(),
   });
 }
 
@@ -317,5 +325,12 @@ export function raiseMatterAutoResolvedReceipt(
     now: new Date().toISOString(),
   });
   broadcast({ type: 'attention_updated', generation: 0, itemsEmitted: 1 });
+  // MVP77：「AI 已替你办结」是最强的自主完成信号（且低频）——即时告知用户飞书，误判可回面板一键重开。
+  notifyProposalRaised({
+    prefix: MATTER_AUTORESOLVED_PREFIX,
+    matterId: matter.id,
+    title: `✅ AI 已主动办结：${matter.title.slice(0, 40)}`,
+    why: `依据：${opts.factSummary.trim().slice(0, 140)}\n如判断有误，回面板点「重开」即可恢复跟进。`,
+  });
   return true;
 }

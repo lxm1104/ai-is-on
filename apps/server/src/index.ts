@@ -45,6 +45,7 @@ import { startMatterTracker, stopMatterTracker } from './matter/matterScheduler.
 import { startTriggerScheduler, stopTriggerScheduler } from './triggers/triggerScheduler.js';
 import { startAttentionScheduler, stopAttentionScheduler } from './attention/attentionEngine.js';
 import { startInvestigationDispatcher, stopInvestigationDispatcher } from './investigation/investigationDispatcher.js';
+import { armNotifyService, startDailyWorkReportJob, stopDailyWorkReportJob } from './lark/larkNotifyService.js';
 import { bootstrapAgents } from './agents/index.js';
 import { migrateUserRulesIfNeeded } from './boundary/migration.js';
 import { runStartupRecovery } from './startupRecovery.js';
@@ -145,6 +146,9 @@ server.listen(config.port, '127.0.0.1', () => {
   startTriggerScheduler();
   startAttentionScheduler();
   startInvestigationDispatcher(); // MVP36：默认关，opt-in 才自动派发只读排查
+  // MVP77：飞书推送通道只在服务进程 arm（测试 import 升卡函数时天然 no-op，绝不误发）。
+  armNotifyService();
+  startDailyWorkReportJob();
   // MVP15A §7.2.1: 10s 后台预热 graph inducer（首次 LLM project taxonomy 慢，
   // 这样 /api/graph/* 第一次访问命中缓存）。失败不阻塞 server。
   setTimeout(() => {
@@ -163,6 +167,9 @@ const shutdown = async (signal: string) => {
   } catch {}
   try {
     stopInvestigationDispatcher();
+  } catch {}
+  try {
+    stopDailyWorkReportJob();
   } catch {}
   try {
     stopFreshnessWatchdog();

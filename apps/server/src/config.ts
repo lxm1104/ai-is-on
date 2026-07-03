@@ -259,6 +259,16 @@ export const config = {
   // userResolveMatter 同路径），并浮一张「AI 已主动办结」回执卡（可一键重开）。比"提案"门更高（自动办更谨慎）。
   investigationAutoResolveEnabled: envBool('INVESTIGATION_AUTO_RESOLVE_ENABLED', true),
   investigationAutoResolveMinConfidence: envFloat('INVESTIGATION_AUTO_RESOLVE_MIN_CONFIDENCE', 0.85),
+  // ---------- MVP77 把结果送到你面前：飞书 bot DM 推送 ----------
+  // 实测断裂：用户 7 天没开 web UI，AI 办结/成品/求助全部静默蒸发（needhelp 卡历史 2/3 过期无人见）。
+  // bot 以**自己身份**给用户本人发 DM（≠被公司策略禁止的"以用户身份代发给他人"）。只推两类（MVP75 第一性原理）：
+  // ①结果（已办结/修复方案/建议）②需要你的（求助/确认办结）。过程（progress/查了没查到）绝不推。
+  notifyPushEnabled: envBool('NOTIFY_PUSH_ENABLED', true),
+  // 即时推送日配额（防骚扰）；超出的不丢——每日工作汇报兜底汇总。daily_report 自身不占配额。
+  notifyInstantDailyMax: envInt('NOTIFY_INSTANT_DAILY_MAX', 6),
+  // 每日工作汇报 DM：过去 24h「AI 替你办结了哪几件 / 产出了什么 / 哪几件需要你」。空则不发。
+  notifyDailyReportEnabled: envBool('NOTIFY_DAILY_REPORT_ENABLED', true),
+  notifyDailyReportHour: envInt('NOTIFY_DAILY_REPORT_HOUR', 18),
   matterVerifyEnabled: envBool('MATTER_VERIFY_ENABLED', true),
   // mark_done → 核实的延迟。≥ IM collector 一轮（imIntervalMs 默认 3min），
   // 让"刚回的消息"先经 collector → Reducer 挂到 matter_context_links，核实 agent 才看得到。

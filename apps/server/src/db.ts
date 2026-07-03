@@ -2565,6 +2565,72 @@ export function getAiActivityTally(): {
   };
 }
 
+// -------- MVP77 飞书推送（notify）查询 --------
+
+/** 幂等：该幂等键是否已成功推送过（audit notify_pushed 留底为准；lark-cli --idempotency-key 是第二层）。 */
+export function wasNotifyPushed(idempotencyKey: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 AS n FROM audit_logs
+       WHERE action='notify_pushed' AND json_extract(payload_json,'$.idempotencyKey') = ? LIMIT 1`
+    )
+    .get(idempotencyKey);
+  return !!row;
+}
+
+/** 即时推送日配额分子：自某时刻起成功推送数（不含 daily_report——日报不占即时配额）。 */
+export function countNotifyPushedSince(sinceIso: string): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM audit_logs
+       WHERE action='notify_pushed' AND created_at >= ?
+         AND COALESCE(json_extract(payload_json,'$.kind'),'') != 'daily_report'`
+    )
+    .get(sinceIso) as { n: number } | undefined;
+  return row?.n ?? 0;
+}
+
+/** 日报素材①：近窗口内 AI 自主办结的事项（排除用户手动标记）。reason 即办结依据，直接可读。 */
+export function listAiResolvedMattersSince(
+  sinceIso: string,
+  limit = 8
+): Array<{ title: string; reason: string; createdAt: string }> {
+  return db
+    .prepare(
+      `SELECT m.title AS title, t.reason AS reason, t.created_at AS createdAt
+       FROM matter_transitions t JOIN matters m ON m.id = t.matter_id
+       WHERE t.to_status='resolved' AND t.created_at >= ? AND t.reason NOT LIKE '用户标记%'
+       ORDER BY t.created_at DESC LIMIT ?`
+    )
+    .all(sinceIso, limit) as Array<{ title: string; reason: string; createdAt: string }>;
+}
+
+/** 日报素材②/③：按 input_hash 前缀取 proposal 卡。sinceIso 给了取"窗口内新升的"（不限状态），不给则取当前 live。 */
+export function listProposalItemsByPrefixes(
+  prefixes: string[],
+  opts: { sinceIso?: string; limit?: number } = {}
+): Array<{ inputHash: string; title: string; why: string; status: string; createdAt: string }> {
+  if (prefixes.length === 0) return [];
+  const likeClauses = prefixes.map(() => `input_hash LIKE ?`).join(' OR ');
+  const likeArgs = prefixes.map((p) => `${p}%`);
+  const timeClause = opts.sinceIso ? `AND created_at >= ?` : `AND status='live'`;
+  const args: unknown[] = opts.sinceIso ? [...likeArgs, opts.sinceIso] : likeArgs;
+  return db
+    .prepare(
+      `SELECT input_hash AS inputHash, title, why, status, created_at AS createdAt
+       FROM attention_items
+       WHERE (${likeClauses}) ${timeClause}
+       ORDER BY created_at DESC LIMIT ?`
+    )
+    .all(...args, opts.limit ?? 10) as Array<{
+    inputHash: string;
+    title: string;
+    why: string;
+    status: string;
+    createdAt: string;
+  }>;
+}
+
 // -------- entity_aliases (MVP10) --------
 
 export type EntityAliasRow = {
@@ -3427,7 +3493,8 @@ export function markAttentionItemsExpired(
       `UPDATE attention_items
          SET status = 'expired', updated_at = ?
        WHERE status = 'live' AND (
-         (created_at < ? AND input_hash NOT LIKE 'proposal:matter-artifact:%' AND input_hash NOT LIKE 'proposal:matter-reco:%')
+         (created_at < ? AND input_hash NOT LIKE 'proposal:matter-artifact:%' AND input_hash NOT LIKE 'proposal:matter-reco:%'
+            AND input_hash NOT LIKE 'proposal:matter-needhelp:%' AND input_hash NOT LIKE 'proposal:matter-dangling:%')
          OR (expires_at IS NOT NULL AND expires_at <= ?)
        )`
     )
