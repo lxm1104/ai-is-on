@@ -1,0 +1,21 @@
+docs/MVP77-把结果送到你面前-飞书推送闭环.md
+  s_bbeda2637ec16a::t_1fa8b5178eece3 1-44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "f6938302dd9d0b55913ea28278f500e17c76dbfa",
+  "prompts": {},
+  "sessions": {
+    "s_bbeda2637ec16a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7abb4f83-f128-48e7-9dcf-68f5a4842fd9",
+        "model": "unknown"
+      },
+      "human_author": "Liu Xinming <liuxinming.ai@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
