@@ -1,0 +1,21 @@
+docs/MVP78-回复闭环与积压大扫除.md
+  s_bbeda2637ec16a::t_645b8606f93fef 1-39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "6047187a15f687e45196166777c5731b23e50932",
+  "prompts": {},
+  "sessions": {
+    "s_bbeda2637ec16a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7abb4f83-f128-48e7-9dcf-68f5a4842fd9",
+        "model": "unknown"
+      },
+      "human_author": "Liu Xinming <liuxinming.ai@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
