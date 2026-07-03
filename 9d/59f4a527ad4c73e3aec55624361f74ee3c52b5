@@ -1,0 +1,25 @@
+apps/server/src/lark/botReplyLoop.ts
+  s_bbeda2637ec16a::t_8d30f84099ba4f 28,101,103,106-116,167-173,177,188,194,201
+apps/server/src/lark/larkNotifyService.ts
+  s_bbeda2637ec16a::t_f2a017ef7d2ec6 19,88-99,122-123,125,145,154,161,190-191
+apps/server/test/mvp78-reply-sweep.test.ts
+  s_bbeda2637ec16a::t_46775a4346d6cb 319-377
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "9d59f4a527ad4c73e3aec55624361f74ee3c52b5",
+  "prompts": {},
+  "sessions": {
+    "s_bbeda2637ec16a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7abb4f83-f128-48e7-9dcf-68f5a4842fd9",
+        "model": "unknown"
+      },
+      "human_author": "Liu Xinming <liuxinming.ai@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
