@@ -1,0 +1,37 @@
+apps/server/src/boundary/auditLog.ts
+  s_bbeda2637ec16a::t_a26a2e408e7242 39-43
+apps/server/src/config.ts
+  s_bbeda2637ec16a::t_d506341c763364 272-281
+apps/server/src/db.ts
+  s_bbeda2637ec16a::t_33b151dfb22dc1 2581,2587,2634-2719
+apps/server/src/index.ts
+  s_bbeda2637ec16a::t_7a9ad8dc527baf 49-50,154-156,179-184
+apps/server/src/lark/botReplyLoop.ts
+  s_bbeda2637ec16a::t_5ebb8eef3a809b 1-315
+apps/server/src/lark/larkNotifyService.ts
+  s_bbeda2637ec16a::t_bf8f5648f3854d 38-43,55,112,132-135,163,165
+apps/server/src/matter/backlogSweeper.ts
+  s_bbeda2637ec16a::t_4dd9d1d1e401f9 1-323
+apps/server/src/opencode/agents.ts
+  s_bbeda2637ec16a::t_17566773306d9c 65-66,85-100,264-270
+apps/server/test/mvp78-reply-sweep.test.ts
+  s_bbeda2637ec16a::t_b9496b65570bc2 1-325
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.5",
+  "base_commit_sha": "536023d43e7b176f0e971ca6d58786ac6958bccf",
+  "prompts": {},
+  "sessions": {
+    "s_bbeda2637ec16a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7abb4f83-f128-48e7-9dcf-68f5a4842fd9",
+        "model": "unknown"
+      },
+      "human_author": "Liu Xinming <liuxinming.ai@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
