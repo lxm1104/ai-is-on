@@ -382,3 +382,36 @@ test('MVP78 sendBotDm 成功后持久化 botChatId', async () => {
   assert.equal(await notify.sendBotDm('hi', { kind: 'reco', idempotencyKey: `k-${randomUUID()}` }), true);
   assert.equal(db.getSetting('notify:botChatId'), 'oc_test_chat');
 });
+
+// ---- MVP81：大扫除清单逐条带「直达」深链（确认清不清之前，一点直达源头核实现状）----
+test('MVP81 清单直达链接：有源头 events.url 的条目带 [直达]，无 url 条目不带', () => {
+  resetDb();
+  const nowIso = new Date().toISOString();
+  const url = 'https://applink.feishu.cn/client/chat/open?openChatId=oc_sweep_link&position=3';
+  const evId = 'ev-' + randomUUID();
+  db.tryInsertEvent({
+    id: evId, source: 'im_message', source_id: `sid-${evId}`, kind: 'im_message',
+    occurred_at: nowIso, title: null, text: '原话', actor: null,
+    url, raw_json: '{}', content_hash: `h-${evId}`, processed_at: null, created_at: nowIso,
+  });
+  const unit = cs.upsertContextUnit({
+    kind: 'commitment', title: '带链接的陈旧事项', content: '内容',
+    scope: 'work', origin: { kind: 'event', refId: evId }, silent: true,
+  }).unit;
+  const mWith = ms.createMatter({
+    scope: 'work', type: 'follow_up', title: '审批已通过（带链接）',
+    canonicalKey: `k-${randomUUID()}`, createdFromContextUnitId: unit.id, ownerEntityId: SELF,
+    currentSummary: '', nextAction: '跟进',
+  });
+  const mWithout = mkMatter({ title: '直播定档6月23日（无链接）' });
+  const md = sweeper.composeSweepListMessage({
+    id: 'b1', createdAt: nowIso, scanned: 2,
+    items: [
+      { matterId: mWith.id, title: mWith.title, verdict: 'likely_done', because: '标题即完成态' },
+      { matterId: mWithout.id, title: mWithout.title, verdict: 'event_passed', because: '时间点已过' },
+    ],
+  });
+  assert.ok(md.includes(`[直达](${url})`), md);
+  const lineWithout = md.split('\n').find((l) => l.includes('直播定档'))!;
+  assert.ok(!lineWithout.includes('[直达]'), lineWithout);
+});

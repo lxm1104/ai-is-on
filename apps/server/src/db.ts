@@ -2671,7 +2671,7 @@ export function listAiResolvedMattersSince(
 export function listProposalItemsByPrefixes(
   prefixes: string[],
   opts: { sinceIso?: string; limit?: number } = {}
-): Array<{ inputHash: string; title: string; why: string; status: string; createdAt: string }> {
+): Array<{ inputHash: string; title: string; why: string; status: string; createdAt: string; matterId: string | null }> {
   if (prefixes.length === 0) return [];
   const likeClauses = prefixes.map(() => `input_hash LIKE ?`).join(' OR ');
   const likeArgs = prefixes.map((p) => `${p}%`);
@@ -2679,7 +2679,7 @@ export function listProposalItemsByPrefixes(
   const args: unknown[] = opts.sinceIso ? [...likeArgs, opts.sinceIso] : likeArgs;
   return db
     .prepare(
-      `SELECT input_hash AS inputHash, title, why, status, created_at AS createdAt
+      `SELECT input_hash AS inputHash, title, why, status, created_at AS createdAt, matter_id AS matterId
        FROM attention_items
        WHERE (${likeClauses}) ${timeClause}
        ORDER BY created_at DESC LIMIT ?`
@@ -2690,6 +2690,7 @@ export function listProposalItemsByPrefixes(
     why: string;
     status: string;
     createdAt: string;
+    matterId: string | null;
   }>;
 }
 
@@ -3526,6 +3527,26 @@ export function getMatterOriginHint(matterId: string): string | null {
     text ? `最初内容：${text}` : '',
   ].filter(Boolean);
   return parts.length ? parts.join('｜') : null;
+}
+
+/**
+ * 这件事原始出处的**可点深链**（用户手指用，区别于 getMatterOriginHint 的 AI 排查用文字指令）：
+ * IM 消息是 applink.feishu.cn 会话/thread 深链（imCollector 落 events.url），
+ * 日历/飞书任务/会议纪要/文档是各自的 app_link/url。飞书消息里带上它，用户一点直达需要处理的地方。
+ */
+export function getMatterOriginUrl(matterId: string): string | null {
+  const row = db
+    .prepare(
+      `SELECT e.url AS url
+       FROM matters m
+       JOIN context_units cu ON cu.id = m.created_from_context_unit_id
+       LEFT JOIN events e ON e.id = cu.origin_ref_id
+       WHERE m.id = ?`
+    )
+    .get(matterId) as { url?: string | null } | undefined;
+  const url = row?.url?.trim();
+  // 只放行 http(s)：markdown 链接语法里塞非 URL（或含空格/括号的脏值）会把整条消息渲染搞坏
+  return url && /^https?:\/\/\S+$/i.test(url) && !url.includes(')') ? url : null;
 }
 
 /**

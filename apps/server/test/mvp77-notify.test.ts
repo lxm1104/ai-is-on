@@ -231,3 +231,52 @@ test('MVP77 日报：三段组稿（办结/成品/需要你），用户手动办
   assert.equal(await notify.sendDailyWorkReportNow(otherDay), 'empty');
   assert.equal(sent.length, instantCount + 1);
 });
+
+// ---- MVP81：消息带「直达原始位置」深链（用户原话：能用链接定位就直接把链接发给我）----
+const ORIGIN_LINK = 'https://applink.feishu.cn/client/chat/open?openChatId=oc_link_test&position=42';
+function mkMatterWithOriginUrl(url: string, opts: { title?: string } = {}) {
+  n += 1;
+  const nowIso = new Date().toISOString();
+  const evId = `ev-${randomUUID()}`;
+  db.tryInsertEvent({
+    id: evId, source: 'im_message', source_id: `sid-${evId}`, kind: 'im_message',
+    occurred_at: nowIso, title: null, text: `原话 ${n}`, actor: null,
+    url, raw_json: '{}', content_hash: `h-${evId}`, processed_at: null, created_at: nowIso,
+  });
+  const unit = cs.upsertContextUnit({
+    kind: 'commitment', title: `事项${n}`, content: `内容 ${n}`,
+    scope: 'work', origin: { kind: 'event', refId: evId }, silent: true,
+  }).unit;
+  return ms.createMatter({
+    scope: 'work', type: 'follow_up', title: opts.title ?? `测试事项${n}`,
+    canonicalKey: `k-${randomUUID()}`, createdFromContextUnitId: unit.id, ownerEntityId: SELF,
+    currentSummary: '', nextAction: '跟进',
+  });
+}
+
+test('MVP81 直达深链：有源头 events.url → 即时推送与日报逐条带可点链接；无 url 不硬塞', async () => {
+  resetDb();
+  const sent = arm();
+  assert.equal(db.getMatterOriginUrl(randomUUID()), null, '不存在的 matter 返回 null');
+  const m1 = mkMatterWithOriginUrl(ORIGIN_LINK, { title: '带深链的事项' });
+  assert.equal(db.getMatterOriginUrl(m1.id), ORIGIN_LINK);
+  assert.equal(raiseMatterNeedHelpProposal(m1, { needFromUser: NEED }), true);
+  const m2 = mkMatter(); // manual 源头，无 events.url
+  assert.equal(raiseMatterArtifactProposal(m2, { artifact: ARTIFACT, evidence: ['ev'] }), true);
+  await flush();
+  assert.equal(sent.length, 2);
+  const mdOf = (s: Sent) => s.args[s.args.indexOf('--markdown') + 1];
+  assert.ok(mdOf(sent[0]).includes(`📍 [直达原始位置](${ORIGIN_LINK})`), mdOf(sent[0]));
+  assert.ok(!mdOf(sent[1]).includes('直达原始位置'), '无源头链接不出现空链接行');
+  // 日报「需要你」段逐条带 [直达]
+  const report = notify.composeDailyWorkReport()!;
+  assert.ok(report.includes(`[直达](${ORIGIN_LINK})`), report);
+});
+
+test('MVP81 深链卫生：非 http(s) 或含 ) 的脏 url 一律不产出（防 markdown 链接被搞坏）', () => {
+  resetDb();
+  const dirty1 = mkMatterWithOriginUrl('lark://client/chat/open?x=1');
+  assert.equal(db.getMatterOriginUrl(dirty1.id), null);
+  const dirty2 = mkMatterWithOriginUrl('https://applink.feishu.cn/a)b');
+  assert.equal(db.getMatterOriginUrl(dirty2.id), null);
+});

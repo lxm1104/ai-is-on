@@ -23,6 +23,7 @@ import {
   countAuditActionSince,
   getContextEntityById,
   getMatterOriginHint,
+  getMatterOriginUrl,
   wasNotifyPushed,
 } from '../db.js';
 import { getMatterById, listMatterEntities, attachMatterContextLink } from './matterStore.js';
@@ -76,10 +77,12 @@ export async function maybeConsultOnMatterCreated(matter: Matter): Promise<boole
     if (countAuditActionSince('consult_asked', startOfTodayIso()) >= config.consultDailyMax) return false;
     const names = requesters.map((r) => r.name).join('、');
     const origin = getMatterOriginHint(matter.id);
+    const originUrl = getMatterOriginUrl(matter.id); // 用户原话：能用链接定位就直接发链接
     const md = [
       `**🤝 有人找你：${names} 请你处理一件事**`,
       `「${clip(matter.title, 60)}」`,
       origin ? `来源：${clip(origin, 260)}` : '',
+      originUrl ? `📍 [直达原会话](${originUrl})` : '',
       matter.currentSummary ? `我已了解到：${clip(matter.currentSummary, 200)}` : '',
       '',
       '怎么处理？直接回复：',
@@ -169,8 +172,10 @@ export async function draftReplyForMatter(
     const shot = await oneShot(directive, { agentName: 'aiisn-push', lane: 'investigation', timeoutMs: 240_000 });
     const body = (shot.text ?? '').trim();
     if (!body) return false;
+    // 草稿要用户自己去原会话发——把直达链接一并给他，省去翻找会话这步
+    const originUrl = getMatterOriginUrl(matter.id);
     return await sendBotDm(
-      `**📝 回复草稿**——「${clip(matter.title, 40)}」（复制后你来发，我不代发）：\n\n${body.slice(0, 2500)}`,
+      `**📝 回复草稿**——「${clip(matter.title, 40)}」（复制后你来发，我不代发）：\n\n${body.slice(0, 2500)}${originUrl ? `\n\n📍 [直达原会话去发送](${originUrl})` : ''}`,
       {
         kind: 'consult',
         refId: matter.id,

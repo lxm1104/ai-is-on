@@ -23,6 +23,7 @@ import { getMyOpenId } from '../util/identity.js';
 import { writeAudit } from '../boundary/auditLog.js';
 import {
   countNotifyPushedSince,
+  getMatterOriginUrl,
   getSetting,
   listAiResolvedMattersSince,
   listProposalItemsByPrefixes,
@@ -177,10 +178,13 @@ export function notifyProposalRaised(input: {
 }): void {
   const kind = KIND_BY_PREFIX[input.prefix];
   if (!kind || !(kind in HEADLINE)) return;
+  // 用户原话（2026-07-04）："如果能用链接定位到需要我处理的地方，就直接把链接发给我"——有源头深链必带。
+  const originUrl = getMatterOriginUrl(input.matterId);
   const md = [
     `**${HEADLINE[kind as keyof typeof HEADLINE]}**`,
     input.title,
     clip(input.why, 600),
+    originUrl ? `📍 [直达原始位置](${originUrl})` : '',
     `👉 打开 AI is ON 处理：${config.webOrigin}`,
   ]
     .filter((l) => l && l.trim().length > 0)
@@ -221,7 +225,10 @@ export function composeDailyWorkReport(now = new Date()): string | null {
   }
   if (needYou.length) {
     lines.push('', `**🙋 需要你 ${needYou.length} 件**（补一手 AI 就能接着办）`);
-    for (const p of needYou) lines.push(`· ${clip(p.title, 40)}——${clip(firstLine(p.why), 70)}`);
+    for (const p of needYou) {
+      const u = p.matterId ? getMatterOriginUrl(p.matterId) : null;
+      lines.push(`· ${clip(p.title, 40)}——${clip(firstLine(p.why), 70)}${u ? ` [直达](${u})` : ''}`);
+    }
   }
   lines.push('', `👉 打开处理：${config.webOrigin}`);
   return lines.join('\n');

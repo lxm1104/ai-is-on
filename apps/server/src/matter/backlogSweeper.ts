@@ -18,6 +18,7 @@ import { writeAudit } from '../boundary/auditLog.js';
 import { runOneShot } from '../triage/backgroundRuntime.js';
 import { sendBotDm } from '../lark/larkNotifyService.js';
 import {
+  getMatterOriginUrl,
   getSetting,
   listRecentlySweptMatters,
   listStaleOpenMatters,
@@ -128,7 +129,11 @@ export function composeSweepListMessage(batch: SweepBatch): string {
     `这 ${batch.items.length} 件看起来可以清了：`,
   ];
   batch.items.forEach((it, idx) => {
-    lines.push(`${idx + 1}. [${VERDICT_LABEL[it.verdict]}] ${clip(it.title, 44)}${it.because ? `——${clip(it.because, 60)}` : ''}`);
+    // 带上源头深链：确认清不清之前，一点直达原会话/原文档核实现状
+    const u = getMatterOriginUrl(it.matterId);
+    lines.push(
+      `${idx + 1}. [${VERDICT_LABEL[it.verdict]}] ${clip(it.title, 44)}${it.because ? `——${clip(it.because, 60)}` : ''}${u ? ` [直达](${u})` : ''}`
+    );
   });
   lines.push(
     ``,

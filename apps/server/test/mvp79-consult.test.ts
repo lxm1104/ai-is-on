@@ -215,3 +215,33 @@ test('MVP79 路由：裸「1」→最近未答复征询；引用征询→choice�
   db.db.exec(`DELETE FROM audit_logs`);
   assert.equal(await loop.handleUserReply(userMsg({ content: '1' }) as never, deps), 'guidance');
 });
+
+// ---- MVP81：征询/草稿带「直达原会话」深链（用户原话：能用链接定位就直接把链接发给我）----
+test('MVP81 征询带直达链接：有源头 events.url → 🤝 消息与回复草稿都带可点深链', async () => {
+  resetDb();
+  const sent = armSender();
+  const wang = mkPerson('王爽');
+  const url = 'https://applink.feishu.cn/client/chat/open?openChatId=oc_consult_link&position=7';
+  const evId = 'ev-' + randomUUID();
+  db.tryInsertEvent({
+    id: evId, source: 'im_message', source_id: `sid-${evId}`, kind: 'im_message',
+    occurred_at: now, title: null, text: '王爽：这个查询结果不准，帮忙看下？', actor: null,
+    url, raw_json: '{}', content_hash: `h-${evId}`, processed_at: null, created_at: now,
+  });
+  const unit = cs.upsertContextUnit({
+    kind: 'commitment', title: '带链接征询事项', content: '王爽在群里请刘昕明排查',
+    scope: 'work', origin: { kind: 'event', refId: evId }, silent: true,
+  }).unit;
+  const m = ms.createMatter({
+    scope: 'work', type: 'follow_up', title: '帮王爽排查带链接问题',
+    canonicalKey: `k-${randomUUID()}`, createdFromContextUnitId: unit.id,
+    ownerEntityId: SELF, currentSummary: '王爽反馈查询结果不准', nextAction: '跟进',
+    entities: [{ entityId: wang, role: 'requester' }, { entityId: SELF, role: 'executor' }] as never,
+  });
+  assert.equal(await consult.maybeConsultOnMatterCreated(m), true);
+  const mdOf = (i: number) => sent[i].args[sent[i].args.indexOf('--markdown') + 1];
+  assert.ok(mdOf(0).includes(`📍 [直达原会话](${url})`), mdOf(0));
+  // 选 1 起草：草稿 DM 带「直达原会话去发送」——用户复制完一点就能到该发的地方
+  assert.equal(await consult.draftReplyForMatter(m, { oneShot: async () => ({ text: '草稿正文' }) }), true);
+  assert.ok(mdOf(1).includes(`📍 [直达原会话去发送](${url})`), mdOf(1));
+});
