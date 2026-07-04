@@ -15,16 +15,28 @@
  *  2 先查清楚 → 指示落为 card_action 证据 + kickInvestigation（KEYSTONE 路径）；
  *  3 不用管   → userDropMatter（可用「恢复 <关键词>」找回）；
  *  自由文本   → 作为你的处理指示回填，AI 照办。每次选择都落 consult_choice 审计——习惯学习的原料。
+ *
+ * MVP81 习惯学习（记录 → 会用）：
+ *  - 同类事（playbook 中粒度 taskTypeKey×请求人两层作用域）连续 N 次同一**安全**选择（draft/investigate）
+ *    → 惯例成立，不再问，照惯例直接办 + ⚡DM 通告（回「先问我」永久刹车，只提示不代办）；
+ *  - 不够自动时征询带「猜你会选 N」提示，回「好」即兑现；
+ *  - 决策纯函数在 habit/consultHabitEngine.ts（零项目依赖，可泛化到其他用户/业务场景）。
  */
 import { randomUUID } from 'node:crypto';
 import { config } from '../config.js';
 import { writeAudit } from '../boundary/auditLog.js';
 import {
   countAuditActionSince,
+  getConsultAskedHint,
   getContextEntityById,
   getMatterOriginHint,
+  getSetting,
+  listConsultChoiceHistory,
+  setSetting,
   wasNotifyPushed,
 } from '../db.js';
+import { decideConsultHabit, type HabitDecision } from '../habit/consultHabitEngine.js';
+import { deriveTaskTypeKey } from '../playbook/PlaybookTypes.js';
 import { getMatterById, listMatterEntities, attachMatterContextLink } from './matterStore.js';
 import { userDropMatter } from './matterActions.js';
 import { getSelfEntityIds, isSelf, isNamedOtherPerson } from '../investigation/needHelpClassifier.js';
@@ -62,6 +74,101 @@ export function consultRequestersFor(matter: Matter): Array<{ id: string; name: 
   return requesters;
 }
 
+// ---------- MVP81 征询习惯学习：记录 → 会用 ----------
+
+const HABIT_PAUSED_SETTING = 'consult:habitPausedKeys';
+/** 只有这两个动作可自动照惯例执行：起草只给草稿不代发、排查只读，都可逆。ignore/instruct 永远要问。 */
+const HABIT_AUTO_SAFE = ['draft', 'investigate'] as const;
+const CHOICE_OPTION_NO: Record<string, string> = { draft: '1（起草回复）', investigate: '2（先查清楚）', ignore: '3（不用管）' };
+
+export function listPausedHabitKeys(): string[] {
+  try {
+    const raw = getSetting(HABIT_PAUSED_SETTING);
+    const arr = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(arr) ? arr.filter((k): k is string => typeof k === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 用户说「先问我」→ 暂停该类事的自动惯例（只提示不代办）。幂等。 */
+export function pauseConsultHabit(habitKey: string, reason: string): void {
+  const keys = listPausedHabitKeys();
+  if (!keys.includes(habitKey)) setSetting(HABIT_PAUSED_SETTING, JSON.stringify([...keys, habitKey]));
+  writeAudit({ action: 'consult_habit_paused', reason, payload: { habitKey } });
+}
+
+function requestersSubjectId(requesters: Array<{ id: string }>): string {
+  return requesters
+    .map((r) => r.id)
+    .sort()
+    .join(',');
+}
+
+/** 用历史 consult_choice 算这次的决策：照惯例直接办 or 问（可带「猜你会选」提示）。 */
+export function computeConsultHabitDecision(
+  matter: Pick<Matter, 'type' | 'nextAction' | 'title'>,
+  requesters: Array<{ id: string }>
+): HabitDecision {
+  const events = listConsultChoiceHistory(200).map((r) => ({
+    key: deriveTaskTypeKey({ type: r.matterType ?? '', nextAction: r.nextAction, title: r.title ?? '' }),
+    subjectId: r.requesterIds,
+    choice: r.choice,
+    at: r.createdAt,
+  }));
+  return decideConsultHabit(
+    events,
+    { key: deriveTaskTypeKey(matter), subjectId: requestersSubjectId(requesters) || null },
+    {
+      autoMinStreak: config.consultHabitAutoMin,
+      autoSafeChoices: HABIT_AUTO_SAFE,
+      pausedKeys: listPausedHabitKeys(),
+      now: new Date().toISOString(),
+    }
+  );
+}
+
+/**
+ * 惯例成立 → 不再问，照你一贯的选择直接办 + DM 通告（可回「先问我」刹车）。
+ * 这是「知道什么时候不需要确认」的机制化：证据 = 同类事连续 N 次同一选择，且动作在安全白名单内。
+ */
+async function autoHandleByHabit(
+  matter: Matter,
+  requesters: Array<{ id: string; name: string }>,
+  decision: Extract<HabitDecision, { mode: 'auto' }>,
+  idempotencyKey: string
+): Promise<boolean> {
+  const names = requesters.map((r) => r.name).join('、');
+  const doing =
+    decision.choice === 'draft'
+      ? '我已直接去起草回复，草稿一会儿发你（你确认后自己发，我不代发）'
+      : '我已直接去查，有结论来汇报';
+  if (decision.choice === 'investigate') {
+    backfillInstruction(matter, `按你的惯例（同类事你连续 ${decision.evidenceCount} 次选「先查清楚」）：先查清楚再汇报。`);
+  }
+  writeAudit({
+    action: 'consult_auto_handled',
+    reason: `${names} 请你处理「${clip(matter.title, 50)}」：同类事你连续 ${decision.evidenceCount} 次选「${decision.choice === 'draft' ? '起草回复' : '先查清楚'}」，这次照惯例直接办了`,
+    payload: {
+      matterId: matter.id,
+      choice: decision.choice,
+      habitKey: decision.habitKey,
+      evidenceCount: decision.evidenceCount,
+      followedYourHabit: 1,
+    },
+  });
+  const md = [
+    `**⚡ 照你的惯例，这次没再问你**`,
+    `${names} 请你处理「${clip(matter.title, 60)}」。`,
+    `同类事你已连续 ${decision.evidenceCount} 次选「${decision.choice === 'draft' ? '起草回复' : '先查清楚'}」，${doing}。`,
+    '',
+    '想改主意直接说；以后这类事想先问你，回「先问我」。',
+  ].join('\n');
+  const ok = await sendBotDm(md, { kind: 'consult', refId: matter.id, idempotencyKey });
+  if (decision.choice === 'draft') void draftReplyForMatter(matter).catch(() => {});
+  return ok;
+}
+
 /**
  * 新 matter 创建后调用（fire-and-forget）：过三闸 → 收集必要信息 → 飞书征询。
  * 永不 throw（征询失败绝不影响 matter 创建主链路）。
@@ -73,9 +180,21 @@ export async function maybeConsultOnMatterCreated(matter: Matter): Promise<boole
     if (!requesters) return false;
     const idempotencyKey = makeIdempotencyKey('aiisn', 'consult', matter.id); // 不带日期=终身一次
     if (wasNotifyPushed(idempotencyKey)) return false;
+    // MVP81：先看惯例——同类事连续 N 次同一安全选择 → 不再问，照惯例直接办（自有日配额，不占征询配额）。
+    const decision = computeConsultHabitDecision(matter, requesters);
+    if (
+      decision.mode === 'auto' &&
+      config.consultHabitAutoEnabled &&
+      countAuditActionSince('consult_auto_handled', startOfTodayIso()) < config.consultAutoDailyMax
+    ) {
+      return await autoHandleByHabit(matter, requesters, decision, idempotencyKey);
+    }
     if (countAuditActionSince('consult_asked', startOfTodayIso()) >= config.consultDailyMax) return false;
     const names = requesters.map((r) => r.name).join('、');
     const origin = getMatterOriginHint(matter.id);
+    // auto 被拦（配额/开关/暂停闸）时降级为带提示的征询——惯例证据不浪费。
+    const hintedRaw = decision.mode === 'ask' ? decision.hintedChoice : decision.choice;
+    const hinted = hintedRaw && CHOICE_OPTION_NO[hintedRaw] ? hintedRaw : null;
     const md = [
       `**🤝 有人找你：${names} 请你处理一件事**`,
       `「${clip(matter.title, 60)}」`,
@@ -87,6 +206,9 @@ export async function maybeConsultOnMatterCreated(matter: Matter): Promise<boole
       '2 先替你查清楚再汇报',
       '3 不用管（归档，可恢复）',
       '或直接说你的想法，我照办。',
+      hinted
+        ? `按你过去 ${decision.evidenceCount} 次同类事的选择，我猜你会选 ${CHOICE_OPTION_NO[hinted]}——回「好」我就照这个办。`
+        : '',
     ]
       .filter((l) => l !== '')
       .join('\n')
@@ -96,7 +218,11 @@ export async function maybeConsultOnMatterCreated(matter: Matter): Promise<boole
       writeAudit({
         action: 'consult_asked',
         reason: `${names} 请你处理「${clip(matter.title, 50)}」，已收集来源信息并发飞书征询`,
-        payload: { matterId: matter.id, requesters: requesters.map((r) => r.name) },
+        payload: {
+          matterId: matter.id,
+          requesters: requesters.map((r) => r.name),
+          ...(hinted ? { hintedChoice: hinted } : {}),
+        },
       });
     }
     return ok;
@@ -194,17 +320,37 @@ export async function handleConsultChoice(
   rawText: string,
   ack: (md: string) => Promise<void>,
   deps: { oneShot?: OneShotFn } = {}
-): Promise<ConsultChoice | 'gone'> {
+): Promise<ConsultChoice | 'gone' | 'paused'> {
   const matter = getMatterById(matterId);
   if (!matter || matter.status === 'resolved' || matter.status === 'dropped') {
     await ack('这件事已办结/归档，不用处理了。');
     return 'gone';
   }
-  const choice = classifyConsultChoice(rawText);
+  const t = rawText.trim();
+  // MVP81 刹车：「先问我」→ 暂停该类事的自动惯例（宽刹车：整个任务类型层，宁可多问）。
+  if (/先问我|以后.*问我|别自动|不要自动/.test(t)) {
+    pauseConsultHabit(
+      deriveTaskTypeKey(matter),
+      `你对「${clip(matter.title, 40)}」这类事说了「先问我」，自动惯例已暂停`
+    );
+    await ack('好，这类事以后我都先问你再动。');
+    return 'paused';
+  }
+  let choice = classifyConsultChoice(rawText);
+  let viaHint = false;
+  // MVP81 提示兑现：征询里给过「猜你会选 N」，你回「好」= 照那个选项办。
+  if (choice === 'instruct' && /^(好|好的|嗯|可以|行|ok|okay|就这么办)$/i.test(t)) {
+    const hinted = getConsultAskedHint(matterId);
+    if (hinted === 'draft' || hinted === 'investigate' || hinted === 'ignore') {
+      choice = hinted;
+      viaHint = true;
+    }
+  }
   writeAudit({
     action: 'consult_choice',
     reason: `你对「${clip(matter.title, 40)}」的处理选择：${choice}`,
-    payload: { matterId, choice, text: clip(rawText, 80) }, // 习惯学习原料：谁请办的什么事→你怎么处理
+    // 习惯学习原料：谁请办的什么事→你怎么处理
+    payload: { matterId, choice, text: clip(rawText, 80), ...(viaHint ? { viaHint: 1 } : {}) },
   });
   if (choice === 'draft') {
     await ack(`收到，正在给「${clip(matter.title, 30)}」起草回复草稿，弄好发你（你确认后自己发，我不代发）。`);

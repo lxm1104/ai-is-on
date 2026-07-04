@@ -284,6 +284,11 @@ export const config = {
   // 每 matter 终身一次 + 日配额。拿不准怎么办的事必须问你，绝不静默代办（用户原话铁律）。
   consultEnabled: envBool('CONSULT_ENABLED', true),
   consultDailyMax: envInt('CONSULT_DAILY_MAX', 3),
+  // MVP81 征询习惯学习：同类事你连续 N 次同一选择（且是安全动作 draft/investigate）→ 不再问，
+  // 照惯例直接办（DM 通告 + 回「先问我」可刹车）。"知道什么时候不需要确认"的机制化。
+  consultHabitAutoEnabled: envBool('CONSULT_HABIT_AUTO', true),
+  consultHabitAutoMin: envInt('CONSULT_HABIT_AUTO_MIN', 3),
+  consultAutoDailyMax: envInt('CONSULT_AUTO_DAILY_MAX', 3),
   matterVerifyEnabled: envBool('MATTER_VERIFY_ENABLED', true),
   // mark_done → 核实的延迟。≥ IM collector 一轮（imIntervalMs 默认 3min），
   // 让"刚回的消息"先经 collector → Reducer 挂到 matter_context_links，核实 agent 才看得到。

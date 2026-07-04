@@ -2450,6 +2450,8 @@ export type AiActivityRow = {
   /** MVP80「学习照做也是结果」：该结果是按你教的做法（playbook）/用了你补的信息（backfill）得来的。 */
   followedYourPlaybook?: number | null;
   usedYourBackfill?: number | null;
+  /** MVP81：该结果是照你的惯例（同类事连续同一选择）自动办的。 */
+  followedYourHabit?: number | null;
 };
 // MVP80「助理工作日志」——用户实锤反馈"这里都是没用的信息"，实测四大噪声：
 // ①meeting/digest/reminder 行 payload 无 title → 全空行；②同一事项的建议/产出按 audit 流水直铺（同事项 4 条重复行）；
@@ -2461,6 +2463,7 @@ const AI_ACTIVITY_RESULT_ACTIONS = [
   'chat_conclusion_written_back', // 💬 AI 从对话里替你更新事项
   'lark_task_created', // ☑️ AI 替你建了飞书任务
   'lark_doc_created', // 📄 AI 替你建了飞书文档
+  'consult_auto_handled', // ⚡ MVP81：照你的惯例（同类事连续同一选择）没再问、直接办了——结果观④
 ] as const;
 const AI_ACTIVITY_DEDUPE_ACTIONS = [
   'investigation_recommended', // 💡 直接建议——同事项多轮重发只留最新一条（带次数）
@@ -2483,7 +2486,8 @@ export function listAiActivity(limit = 60): AiActivityRow[] {
               json_extract(a.payload_json,'$.matterId') AS matterId,
               NULL AS verdict, NULL AS confidence, m.title AS matterTitle, 1 AS repeatCount,
               json_extract(a.payload_json,'$.followedYourPlaybook') AS followedYourPlaybook,
-              json_extract(a.payload_json,'$.usedYourBackfill') AS usedYourBackfill
+              json_extract(a.payload_json,'$.usedYourBackfill') AS usedYourBackfill,
+              json_extract(a.payload_json,'$.followedYourHabit') AS followedYourHabit
        FROM audit_logs a
        LEFT JOIN matters m ON m.id = json_extract(a.payload_json,'$.matterId')
        WHERE (a.action IN (${resultPlace}))
@@ -2571,6 +2575,7 @@ export function getAiActivityTally(): {
   pendingCount: number;
   answeredCount: number;
   sweptCount: number;
+  habitAutoCount: number;
 } {
   const since = new Date(Date.now() - 7 * 86_400_000).toISOString();
   const one = (sql: string, ...args: unknown[]): number => ((db.prepare(sql).get(...args) as { n: number } | undefined)?.n ?? 0);
@@ -2624,6 +2629,11 @@ export function getAiActivityTally(): {
     ),
     // MVP80 🧹：近 7d 你在飞书确认后批量清理的陈旧事项数（AI 甄别 + 你一句话确认 = 协作完成）
     sweptCount: one(`SELECT COUNT(*) AS n FROM audit_logs WHERE action='backlog_swept' AND created_at > ?`, since),
+    // MVP81 ⚡：近 7d 照你的惯例（同类事连续同一选择）没再问、直接办的 distinct matter 数
+    habitAutoCount: one(
+      `SELECT COUNT(DISTINCT json_extract(payload_json,'$.matterId')) AS n FROM audit_logs
+       WHERE action='consult_auto_handled' AND created_at > ?`, since
+    ),
   };
 }
 
@@ -2806,6 +2816,50 @@ export function getLastOpenConsultMatterId(now = new Date()): string | null {
     )
     .get(sinceIso) as { mid: string | null } | undefined;
   return row?.mid ?? null;
+}
+
+// -------- MVP81 征询习惯学习 --------
+
+export type ConsultChoiceHistoryRow = {
+  matterId: string;
+  choice: string;
+  createdAt: string;
+  matterType: string | null;
+  nextAction: string | null;
+  title: string | null;
+  /** 该 matter 的 requester 实体 id（排序后逗号拼接）——习惯引擎的具体对象键。 */
+  requesterIds: string | null;
+};
+
+/** MVP81：征询选择历史（consult_choice 审计 join matter 的类型/动作/请求人）——习惯引擎的输入。 */
+export function listConsultChoiceHistory(limit = 200): ConsultChoiceHistoryRow[] {
+  return db
+    .prepare(
+      `SELECT json_extract(a.payload_json,'$.matterId') AS matterId,
+              json_extract(a.payload_json,'$.choice')   AS choice,
+              a.created_at AS createdAt,
+              m.type AS matterType, m.next_action AS nextAction, m.title AS title,
+              (SELECT GROUP_CONCAT(e.entity_id)
+                 FROM (SELECT entity_id FROM matter_entities
+                        WHERE matter_id = m.id AND role = 'requester' ORDER BY entity_id) e) AS requesterIds
+       FROM audit_logs a
+       JOIN matters m ON m.id = json_extract(a.payload_json,'$.matterId')
+       WHERE a.action = 'consult_choice'
+       ORDER BY a.created_at DESC LIMIT ?`
+    )
+    .all(limit) as ConsultChoiceHistoryRow[];
+}
+
+/** MVP81：某 matter 最近一次征询里给过的「猜你会选」提示（用户回「好」时兑现用）。 */
+export function getConsultAskedHint(matterId: string): string | null {
+  const row = db
+    .prepare(
+      `SELECT json_extract(payload_json,'$.hintedChoice') AS h FROM audit_logs
+       WHERE action='consult_asked' AND json_extract(payload_json,'$.matterId') = ?
+       ORDER BY created_at DESC LIMIT 1`
+    )
+    .get(matterId) as { h: string | null } | undefined;
+  return row?.h ?? null;
 }
 
 // -------- entity_aliases (MVP10) --------

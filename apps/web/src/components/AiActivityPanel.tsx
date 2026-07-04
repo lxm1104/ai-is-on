@@ -23,6 +23,8 @@ function actionMeta(a: AiActivity): ActionMeta | null {
       return { icon: '🤝', label: '你拍板，我照办', isResult: true }; // MVP79 征询后你的选择
     case 'consult_asked':
       return { icon: '🤝', label: '有人找你，我来征询你怎么办', isResult: true }; // 等你拍板也是结果（用户定义）
+    case 'consult_auto_handled':
+      return { icon: '⚡', label: '照你的惯例，没再问直接办了', isResult: true }; // MVP81：结果观④照你做法办成
     case 'asked_for_help':
       return { icon: '🙋', label: '我需要你帮一手（已发你飞书）', isResult: true }; // 需要你帮忙也是结果
     case 'asked_confirm':
@@ -140,6 +142,9 @@ export function AiActivityPanel() {
               {(tally.sweptCount ?? 0) > 0 && (
                 <span title="近 7 天你在飞书确认后批量清理的陈旧事项数（AI 甄别 + 你一句话确认）">🧹 清理 <b>{tally.sweptCount}</b></span>
               )}
+              {(tally.habitAutoCount ?? 0) > 0 && (
+                <span title="近 7 天照你的惯例（同类事连续同一选择）没再问、直接办的事项数">⚡ 照惯例 <b>{tally.habitAutoCount}</b></span>
+              )}
               <span title="当前需要你补一手才能接着办的事项数" style={{ color: tally.pendingCount > 0 ? '#b45309' : undefined }}>🙋 待你 <b>{tally.pendingCount}</b></span>
               <span title="近 7 天你已应答的求助/待办卡（人机协作转化）">🤝 已应答 <b>{tally.answeredCount}</b></span>
               <span style={{ opacity: 0.6 }}>（近 7 天）</span>
@@ -192,6 +197,10 @@ export function AiActivityPanel() {
                       )}
                       {!!a.usedYourBackfill && (
                         <span title="用上了你补充的信息（求助卡/飞书回复）" style={{ fontSize: 11, color: '#0d9488' }}>🧩 用了你补的信息</span>
+                      )}
+                      {/* MVP81：惯例成立（同类事连续同一选择）→ 没再问、照惯例直接办 */}
+                      {!!a.followedYourHabit && (
+                        <span title="同类事你连续多次同一选择，这次照你的惯例直接办了（飞书回「先问我」可关掉）" style={{ fontSize: 11, color: '#9333ea' }}>⚡ 按你的惯例</span>
                       )}
                       <span className="ai-activity__time">{shortTime(a.createdAt)}</span>
                     </div>
