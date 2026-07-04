@@ -968,6 +968,23 @@ export function noteChatFetchOk(
   streaks.delete(chatId);
 }
 
+// per-chat 截断（has_more）时的「本轮该群是否向前推进了」判定。纯函数，便于单测。
+// 真正向前推进 = 截断点（最后一条 −60s）严格晚于 since。否则（截断点 ≤ since，
+// 或一条都没抓到 → lastMs=NaN）本轮该群零进展，调用方必须走失败 streak：有界重试后
+// 降级为该群窗口数据损失，绝不能永久把全局水位钉在 since。
+// 实测坑（2026-06-22）：高密群「内测群」窗口起点即截断（has_more + 空页 / 起点 burst），
+// 旧逻辑 clampCover(lastMs−60s) 被 clampCover 内的 Math.max 抬回 since、且每轮 noteChatFetchOk
+// 清零 streak → 永不降级 → 全局水位冻 6 天 → dropBeyondWatermark 把所有 chat（含黄剑成单聊）
+// 的新消息全部丢弃，IM 源彻底失明。
+export function perChatTruncationDecision(
+  lastMs: number,
+  sinceMs: number
+): { kind: 'progress'; coverMs: number } | { kind: 'no_progress' } {
+  const coverMs = lastMs - 60_000;
+  if (Number.isFinite(coverMs) && coverMs > sinceMs) return { kind: 'progress', coverMs };
+  return { kind: 'no_progress' };
+}
+
 // ---------- main collector ----------
 
 export const imCollector: Collector = {
@@ -1105,16 +1122,19 @@ export const imCollector: Collector = {
       if (peerHit?.hasMore) {
         const last = peerMsgsRaw[peerMsgsRaw.length - 1];
         const lastMs = last ? Date.parse(parseCreateTime(last.create_time)) : NaN;
-        if (Number.isFinite(lastMs)) {
-          clampCover(lastMs - 60_000, `群 ${peerHit.chat.name ?? chatId} per-chat 截断`);
+        const dec = perChatTruncationDecision(lastMs, sinceMs);
+        if (dec.kind === 'progress') {
+          clampCover(dec.coverMs, `群 ${peerHit.chat.name ?? chatId} per-chat 截断`);
           noteChatFetchOk(chatId);
         } else {
+          // 零进展（截断点 ≤ since 或一条没抓到）：走失败 streak，有界重试后降级，
+          // 不再永久把全局水位钉在 since（2026-06-22 内测群冻源事故）。
           const d = chatFailureClampDecision(chatId);
           if (d.shouldClamp) {
-            clampCover(sinceMs, `群 ${peerHit.chat.name ?? chatId} 抓取失败（连续第 ${d.streak} 次，重试中）`);
+            clampCover(sinceMs, `群 ${peerHit.chat.name ?? chatId} 截断零进展（连续第 ${d.streak} 次，重试中）`);
           } else {
             console.error(
-              `[im] 群 ${peerHit.chat.name ?? chatId} 连续 ${d.streak} 次抓取失败，降级为该群窗口数据损失（不再阻塞全局水位）`
+              `[im] 群 ${peerHit.chat.name ?? chatId} 连续 ${d.streak} 次截断零进展，降级为该群窗口数据损失（不再阻塞全局水位）`
             );
           }
         }
@@ -1200,16 +1220,18 @@ export const imCollector: Collector = {
               const r = await listMessagesInChat(chat.chat_id, sinceIso, hardEnd.toISOString());
               const last = r.msgs[r.msgs.length - 1];
               const lastMs = last ? Date.parse(parseCreateTime(last.create_time)) : NaN;
-              if (r.hasMore && Number.isFinite(lastMs)) {
-                clampCover(lastMs - 60_000, `外部单聊 ${chat.name ?? chat.chat_id} per-chat 截断`);
+              const dec = r.hasMore ? perChatTruncationDecision(lastMs, sinceMs) : null;
+              if (dec?.kind === 'progress') {
+                clampCover(dec.coverMs, `外部单聊 ${chat.name ?? chat.chat_id} per-chat 截断`);
                 noteChatFetchOk(chat.chat_id);
-              } else if (r.hasMore) {
+              } else if (dec) {
+                // 零进展：走失败 streak，有界重试后降级（与群路径一致，2026-06-22 冻源修复）。
                 const d = chatFailureClampDecision(chat.chat_id);
                 if (d.shouldClamp) {
-                  clampCover(sinceMs, `外部单聊 ${chat.name ?? chat.chat_id} 抓取失败（连续第 ${d.streak} 次，重试中）`);
+                  clampCover(sinceMs, `外部单聊 ${chat.name ?? chat.chat_id} 截断零进展（连续第 ${d.streak} 次，重试中）`);
                 } else {
                   console.error(
-                    `[im] 外部单聊 ${chat.name ?? chat.chat_id} 连续 ${d.streak} 次抓取失败，降级为该聊窗口数据损失`
+                    `[im] 外部单聊 ${chat.name ?? chat.chat_id} 连续 ${d.streak} 次截断零进展，降级为该聊窗口数据损失`
                   );
                 }
               } else {

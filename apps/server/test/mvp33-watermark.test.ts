@@ -17,7 +17,7 @@ process.env.COLLECTOR_ENABLED = 'false';
 
 const { upsertCollectorState, getCollectorState } = await import('../src/db.js');
 const { evaluateWatermarkLag } = await import('../src/collectors/freshnessWatchdog.js');
-const { coverNewestAnchoredWindow, dropBeyondWatermark, chatFailureClampDecision, noteChatFetchOk } =
+const { coverNewestAnchoredWindow, dropBeyondWatermark, chatFailureClampDecision, noteChatFetchOk, perChatTruncationDecision } =
   await import('../src/collectors/imCollector.js');
 import type { ImMessage } from '../src/collectors/imCollector.js';
 
@@ -205,6 +205,31 @@ test('chatFailureClampDecision：前 2 次失败 clamp 重试，第 3 次起降�
   // 成功一次清零 → 重新获得重试窗口
   noteChatFetchOk('oc_bad', streaks);
   assert.deepEqual(chatFailureClampDecision('oc_bad', 2, streaks), { shouldClamp: true, streak: 1 });
+});
+
+// ---- per-chat 截断零进展：不得永久钉死全局水位（2026-06-22 内测群冻源事故） ----
+
+test('perChatTruncationDecision：截断点 > since 算进展；≤ since 或 NaN 算零进展', () => {
+  const since = Date.parse('2026-06-16T07:04:00.000Z');
+  // 真正推进：最后一条 −60s 晚于 since
+  const d1 = perChatTruncationDecision(since + 30 * 60_000, since);
+  assert.deepEqual(d1, { kind: 'progress', coverMs: since + 30 * 60_000 - 60_000 });
+  // 窗口起点即截断（最后一条 ≤ since+60s）→ 零进展（旧逻辑会被 Math.max 抬回 since 钉死）
+  assert.deepEqual(perChatTruncationDecision(since + 30_000, since), { kind: 'no_progress' });
+  assert.deepEqual(perChatTruncationDecision(since, since), { kind: 'no_progress' });
+  // 一条没抓到（NaN）→ 零进展
+  assert.deepEqual(perChatTruncationDecision(NaN, since), { kind: 'no_progress' });
+});
+
+test('零进展群走 streak：有界重试后降级，不再永久阻塞全局水位', () => {
+  const streaks = new Map<string, number>();
+  const since = Date.parse('2026-06-16T07:04:00.000Z');
+  // 每轮都是「截断在 since」→ 零进展 → 应通过 streak 决策，2 轮后降级（不再 clamp 到 since）
+  const noProgress = perChatTruncationDecision(since, since);
+  assert.equal(noProgress.kind, 'no_progress');
+  assert.equal(chatFailureClampDecision('oc_burst', 2, streaks).shouldClamp, true);
+  assert.equal(chatFailureClampDecision('oc_burst', 2, streaks).shouldClamp, true);
+  assert.equal(chatFailureClampDecision('oc_burst', 2, streaks).shouldClamp, false); // 降级
 });
 
 // ---- 验收通例：停摆回灌零丢失（2026-06-12 专利事故的形态化） ----
