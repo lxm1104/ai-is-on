@@ -880,6 +880,7 @@ export type AiActivity = {
   repeatCount?: number; // MVP80：同事项该动作累计次数（>1 显示"第 N 次跟进"）；清理批次=件数
   followedYourPlaybook?: number | null; // MVP80：按你教的做法得来的结果
   usedYourBackfill?: number | null; // MVP80：用了你补的信息得来的结果
+  followedYourHabit?: number | null; // MVP81：照你的惯例（同类事连续同一选择）自动办的结果
 };
 // MVP71 支柱D：「AI 帮你完成了多少」近 7 天完成度量盘。
 export type AiActivityTally = {
@@ -891,6 +892,7 @@ export type AiActivityTally = {
   pendingCount: number;
   answeredCount: number;
   sweptCount: number; // MVP80：你在飞书确认后批量清理的陈旧事项数
+  habitAutoCount?: number; // MVP81：照你的惯例没再问、直接办的事项数
 };
 export async function fetchAiActivity(limit = 60): Promise<{ items: AiActivity[]; tally: AiActivityTally | null }> {
   const r = await fetch(`/api/ai-activity?limit=${limit}`);

@@ -42,7 +42,10 @@ export type AuditAction =
   | 'backlog_swept'                      // MVP78：用户确认后批量清理的单件记录（matterId+verdict 可审可恢复）
   | 'backlog_sweep_restored'             // MVP78：用户「恢复 <关键词>」找回误清事项
   | 'consult_asked'                      // MVP79：有人 IM 请你做事 → AI 已收集信息发飞书征询你怎么办
-  | 'consult_choice';                    // MVP79：你的处理选择（起草/先查/忽略/自由指示）——习惯学习的原料
+  | 'consult_choice'                     // MVP79：你的处理选择（起草/先查/忽略/自由指示）——习惯学习的原料
+  | 'consult_auto_handled'               // MVP81：惯例成立（连续 N 次同选择）→ AI 照你的惯例直接办了（DM 通告+可刹车）
+  | 'consult_habit_paused'               // MVP81：你说「先问我」→ 该类事的自动惯例被暂停（只提示不代办）
+  | 'learning_pack_imported';            // MVP81：导入可迁移学习包（playbook 进 distilled 草稿，等你批准）
 
 export function writeAudit(input: {
   action: AuditAction;
